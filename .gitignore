@@ -73,6 +73,18 @@ fastlane/test_output
 out/
 .fleet/
 
+# Generated Xcode project (REQUIREMENTS.md §9.1)
+#
+# project.yml is the source of truth; the .xcodeproj is a build artifact
+# produced by `make generate` and must never be committed.
+*.xcodeproj
+*.xcworkspace
+
+# Local signing / build overrides (REQUIREMENTS.md §9.3)
+#
+# Holds DEVELOPMENT_TEAM and per-machine settings. Never commit.
+Local.xcconfig
+
 # Xcode build output
 build/
 DerivedData/
