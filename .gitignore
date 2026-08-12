@@ -123,3 +123,4 @@ Icon?
 # Misc
 *.log
 .netrc
+tmp/
