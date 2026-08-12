@@ -1,12 +1,13 @@
 # REQUIREMENTS.md — Steno
 
-**Status:** Draft v1.7
+**Status:** Draft v1.8
 **Date:** 2026-08-11
 **Audience:** Engineering agents in future sessions. This document is the source of truth for task generation and implementation.
 
 > **Steno** — a stenographer records what was said, verbatim, without editorializing. That is the product in one word: an accurate record of what you did, lightly organized, never embellished.
 
 **Changelog**
+- *v1.8* — The task model's Swift type is named **`TaskItem`**, not `Task`, to avoid shadowing `_Concurrency.Task` (§3.2). Domain vocabulary is unchanged: prose, UI copy, and the export key `"tasks"` all still say "task". Updated §3, §3.2, and §10.1.
 - *v1.7* — Resolved nine internal contradictions and gaps found on first full read. First-run `windowStart` is now unambiguously 24h (§3.5 corrected to match FR-4). Undo (FR-4.1) and the note grace window (FR-2) are both defined as *redaction*, so the append-only invariant holds with no exceptions. `modifiedAt` added to `Project` and `Task` (§3.1, §3.2) as §10.1 already required. `SourceRef` promoted to a first-class model with `id` and an export array (§3.4, §10.1, §10.2). §7.3 gains a second output schema for `periodic` cadence. Stale threshold clarified as global default + per-project override (FR-6). Project facts fixed in §9.1 (bundle ID `com.lgabrielgr.steno`, macOS 14.0 floor). Vestigial CloudKit purge clause removed from §8.
 - *v1.6* — Added §9.5 Version Control Workflow (branch-per-task, PR required, never commit to `main`) and §9.6 mechanical enforcement via branch protection. Added the rule to §13 and to M0.
 - *v1.5* — Cancelled M7 (iOS + CloudKit sync). D1 now macOS-only. MCP simplified to stdio-only. Added §14 recording what was cancelled, what was retained, and the revisit trigger. Auto-export now defaults ON.
@@ -86,8 +87,8 @@ Do not build these. Reject tasks that propose them.
 The central architectural idea: **everything that happens to a task is an immutable event appended to a stream.** Task state is derived; history is never mutated. This is what makes the stand-up report trivially correct and the AI prompt reliable.
 
 ```
-Project (1) ──< Task (1) ──< Event
-                    (1) ──< SourceRef
+Project (1) ──< TaskItem (1) ──< Event
+                        (1) ──< SourceRef
 Project (1) ──< StandupReport
 ```
 
@@ -110,7 +111,17 @@ Represents a project *or* a non-project activity (e.g. "Hiring", "1:1s", "Perfor
 
 > **Note on `lastStandupAt`:** The user attends *multiple different DSUs*. Each project therefore tracks its own last-reported timestamp independently. A report for Project A must not advance the clock for Project B.
 
-### 3.2 Task
+### 3.2 TaskItem
+
+> **The Swift type is `TaskItem`, not `Task`.** In Swift, a type named `Task` shadows
+> `_Concurrency.Task`, so in any file that can see the model, `Task { … }` resolves to the
+> SwiftData class instead of the concurrency primitive. This app runs async integration fetches
+> from M4 onward, so the collision is guaranteed rather than theoretical, and the workaround —
+> writing `_Concurrency.Task { }` at every async call site, forever — is worse than a rename.
+>
+> **Only the Swift identifier changes.** The domain vocabulary is untouched: this document, the
+> UI, and the export key `"tasks"` (§10.2) all still say "task". Field names referring to it
+> stay as specified — `taskID`, not `taskItemID`.
 
 | Field | Type | Notes |
 |---|---|---|
@@ -667,9 +678,9 @@ A separate, explicitly-labeled **Replace** mode wipes the local store first. It 
 
 | Field | Rule | Why |
 |---|---|---|
-| `Task.status` | Derive from the newest `statusChanged` event across both sets | The event log is the truth; the field is a cache |
+| `TaskItem.status` | Derive from the newest `statusChanged` event across both sets | The event log is the truth; the field is a cache |
 | `Project.lastStandupAt` | Take the **later** timestamp | Reporting is a historical fact. Taking the earlier one would re-report work already spoken aloud |
-| `Task.title`, `Project.name` | Later `modifiedAt` wins | `modifiedAt` exists on both models for this purpose (§3.1, §3.2) |
+| `TaskItem.title`, `Project.name` | Later `modifiedAt` wins | `modifiedAt` exists on both models for this purpose (§3.1, §3.2) |
 | `SourceRef.lastFetchedAt`, `.cachedSummary` | Later `lastFetchedAt` wins | Both describe the same external truth at different moments; the newer observation is simply better. `nil` loses to any value |
 
 > Deriving `status` from events rather than merging the field is what makes the whole scheme robust. Any mutable field that can be recomputed from the log, should be.
@@ -762,6 +773,8 @@ Each milestone must be independently usable. The user should be able to stop at 
 Resolve with the user before the milestone that depends on each.
 
 **Resolved (v1.4):** Atlassian deployment → D19 Cloud. Task volume → D18 under 20. DSU-to-project mapping → D16, no schema change required.
+
+**Resolved (v1.8):** task model's Swift type name → `TaskItem` (§3.2).
 
 **Resolved (v1.7):** first-run `windowStart` → 24h (§3.5). Undo semantics → redaction (FR-4.1). Note grace window → redact-and-reappend (FR-2). `modifiedAt` → on both mutable models (§3.1, §3.2). `SourceRef` → first-class model with `id`, own export array (§3.4, §10.2). Periodic output schema → §7.3. Stale threshold precedence → FR-5. Bundle ID / deployment target → §9.1.
 

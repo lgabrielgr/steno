@@ -39,7 +39,7 @@ a keyboard shortcut and UI in every surface that shows a task.
 ## Notes for the spec/plan phase
 
 - **The event is not optional.** §3.3 and §13 make the append-only log the source of truth;
-  M2.5-02 goes further and *derives* `Task.status` from the newest `statusChanged` event during
+  M2.5-02 goes further and *derives* `TaskItem.status` from the newest `statusChanged` event during
   a merge, treating the stored field as a cache. A transition that skips its event will
   silently revert after an import — a bug that will look inexplicable months later.
 - Making `blockedReason` mandatory would add friction to the moment the user is most frustrated.
