@@ -49,15 +49,11 @@ its own review gate for that reason alone.
 
 ## Notes for the spec/plan phase
 
-- **Open decision — the task model's Swift name.** §3.2 calls it `Task`, but in Swift that
-  shadows `_Concurrency.Task`: in any file that can see the model, `Task { … }` resolves to the
-  SwiftData class, not the concurrency primitive. This app does async integration fetches from
-  M4 onward, so the collision is guaranteed to bite.
-  **Recommendation: `TaskItem`.** UI copy, the export JSON key (`"tasks"`), and REQUIREMENTS.md
-  prose all keep saying "task" — only the Swift identifier changes. Alternatives are `WorkItem`
-  (cleaner, further from spec vocabulary) or keeping `Task` and writing `_Concurrency.Task { }`
-  at every async call site forever. **Resolve this before writing code, and amend §3.2 with the
-  decision and its reason in the same PR.**
+- **The task model's Swift type is `TaskItem`** — settled in §3.2 as of v1.8, because a type
+  named `Task` shadows `_Concurrency.Task` in every file that can see it, and this app runs
+  async integration fetches from M4 onward. Only the Swift identifier changed: prose, UI copy,
+  the export key `"tasks"`, and the `taskID` field name all stay as written. Use `TaskItem`
+  consistently from this task forward — every later task file's `taskID` references assume it.
 - **Do not strip the CloudKit constraint** because sync is cancelled. §6 anticipates exactly
   this and forbids it: the constraint costs nothing, is independently required by M2.5's merge,
   and is the difference between enabling sync as a config change versus a data migration.
