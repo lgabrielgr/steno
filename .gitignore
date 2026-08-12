@@ -60,3 +60,66 @@ fastlane/report.xml
 fastlane/Preview.html
 fastlane/screenshots/**/*.png
 fastlane/test_output
+
+# JetBrains IDEs (IntelliJ IDEA, AppCode, Fleet, etc.)
+#
+# The whole .idea/ directory is per-developer/per-machine state here, since the
+# project of record is the Xcode project. If you ever want to share run
+# configurations or code style, un-ignore just those files explicitly.
+.idea/
+*.iml
+*.ipr
+*.iws
+out/
+.fleet/
+
+# Xcode build output
+build/
+DerivedData/
+*.xcuserstate
+*.xcscmblueprint
+*.xccheckout
+*.pbxuser
+*.mode1v3
+*.mode2v3
+*.perspectivev3
+!default.pbxuser
+!default.mode1v3
+!default.mode2v3
+!default.perspectivev3
+*.moved-aside
+
+# Swift Package Manager local state
+.swiftpm/
+Packages/
+
+# Accio / SwiftLint / SwiftFormat caches
+.accio/
+.swiftlint-cache/
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+Icon?
+._*
+.Spotlight-V100
+.Trashes
+
+# Other editors
+.vscode/
+*.swp
+*.swo
+*~
+
+# Secrets & local config
+.env
+.env.*
+!.env.example
+*.p12
+*.mobileprovision
+*.certSigningRequest
+
+# Misc
+*.log
+.netrc
