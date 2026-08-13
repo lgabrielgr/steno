@@ -59,7 +59,7 @@ out — in `git log` rather than only on GitHub, as §9.5 asks of commit message
 intermediate history worth keeping.
 
 ### D-003 — Task model is named `TaskItem`
-**2026-08-11** · pre-M0 · **Status:** accepted — **see [REQUIREMENTS.md §3.2](REQUIREMENTS.md)**
+**2026-08-11** · pre-M0 · **Status:** accepted — **see [REQUIREMENTS.md §3.2](REQUIREMENTS.md#32-taskitem)**
 
 Pointer only; the decision and its reasoning live in the spec (v1.8), because every implementer
 reads §3.2 and would not necessarily read this file.
@@ -104,7 +104,7 @@ its PR body, and adds an entry above.
 
 ## Product questions — not for agents to decide
 
-[`REQUIREMENTS.md §12`](REQUIREMENTS.md) holds four open questions that are the user's call, not
+[`REQUIREMENTS.md §12`](REQUIREMENTS.md#12-open-questions) holds four open questions that are the user's call, not
 an implementer's: Jira-driven auto-transition (Q(M4)), report history retention (Q(M3)), EM task
 templates (Q(M1)), and whether auto-export is sufficient in practice (Q(M2) — a "no" reopens
 §14). Raise them; do not resolve them.

@@ -1,7 +1,7 @@
 # Steno — Task Index
 
 One file per task. Each is scoped to be a single branch and a single pull request per
-[REQUIREMENTS.md §9.5](../REQUIREMENTS.md), and small enough that an agent with no prior
+[REQUIREMENTS.md §9.5](../REQUIREMENTS.md#95-version-control-workflow), and small enough that an agent with no prior
 context can pick it up, spec it, plan it, and implement it in one session.
 
 **Source of truth is [REQUIREMENTS.md](../REQUIREMENTS.md).** These files do not restate it —
@@ -20,7 +20,10 @@ New here? Start with [`CLAUDE.md`](../../CLAUDE.md), then
 5. Open the PR. **Do not merge it.**
 6. Once it merges, tick the box below in a later PR — status is tracked here, not elsewhere.
 
-**Status legend:** `[ ]` not started · `[~]` in progress (PR open) · `[x]` merged.
+**Status legend:** `[ ]` not started · `[x]` merged. While a task's PR is open, append ` — PR #N`
+to its line rather than inventing a third marker: GitHub task lists recognize only `[ ]` and
+`[x]`, and anything else stops the line rendering as a checkbox and drops it from the progress
+count.
 
 ## Task boundaries
 
