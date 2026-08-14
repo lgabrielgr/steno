@@ -46,7 +46,7 @@ something better than paper. **M2 is the true MVP; M6 is the finish line.**
 ### M0 — Skeleton
 > Exit: create projects and tasks, data survives relaunch, `make build/test` green.
 
-- [ ] [M0-01](M0-01-build-system.md) — XcodeGen project, Makefile, stable signing; `make build` green
+- [ ] [M0-01](M0-01-build-system.md) — XcodeGen project, Makefile, stable signing; `make build` green — PR #5
 - [ ] [M0-02](M0-02-test-lint-harness.md) — headless test target and SwiftLint; `make test`/`make lint` green
 - [ ] [M0-03](M0-03-domain-models.md) — the five SwiftData models, CloudKit-compatible
 - [ ] [M0-04](M0-04-persistence-container.md) — local store wiring; data survives relaunch
