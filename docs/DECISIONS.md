@@ -85,6 +85,66 @@ sections instead of copying their content. `AGENTS.md` is a pointer to `CLAUDE.m
 because an agent follows it confidently.
 **Alternatives:** self-contained harness files, which would need syncing on every spec change.
 
+### D-006 — Source layout is `Steno/<Area>/`, closing O-2
+**2026-08-13** · M0-01 · **Status:** accepted
+
+Sources live under `Steno/`, split by responsibility as
+[`ARCHITECTURE.md` §5](ARCHITECTURE.md) proposes, starting with `Steno/App/`.
+XcodeGen takes the whole directory as one source group, so a new area is a new
+folder and needs no manifest change.
+
+**Why:** things that change together live together, and `sources: [Steno]` means
+M0-03 through M6 add directories without touching `project.yml` — one less
+merge-conflict surface across 35 remaining task branches.
+**Alternatives:** one XcodeGen source entry per area, which would make every
+later task edit the manifest for no benefit.
+
+### D-007 — Automatic signing without `-allowProvisioningUpdates`
+**2026-08-13** · M0-01 · **Status:** accepted
+
+`CODE_SIGN_STYLE = Automatic` with `CODE_SIGN_IDENTITY = Apple Development`
+and no `-allowProvisioningUpdates` flag on the xcodebuild invocations.
+
+**Why:** a macOS app whose only entitlement disables the sandbox needs no
+provisioning profile, so the flag was unnecessary. It is the documented escape
+hatch if a later task adds an entitlement that does require a profile.
+**Alternatives:** passing the flag pre-emptively, which can trigger Apple ID
+network round-trips during an otherwise offline build.
+
+### D-008 — `pipefail` lives on `SHELL`, not `.SHELLFLAGS`, plus a regression guard
+**2026-08-13** · M0-01 · **Status:** accepted
+
+Shell flags are set on `SHELL` itself (`SHELL := /bin/bash -o pipefail -e -u`)
+rather than via `.SHELLFLAGS`, plus a regression guard as the first recipe
+line of `preflight`.
+
+**Why:** macOS ships GNU Make 3.81, which predates `.SHELLFLAGS` (GNU Make
+4.0) and **silently ignores it**. The plan originally specified
+`.SHELLFLAGS`, so `pipefail`, `-e`, and `-u` were all inert — a failed
+`xcodebuild | xcbeautify` exited 0 and the gate every §9.5 and CI check
+depends on was decorative. Caught only by the deliberate-failure test. The
+guard exists so it cannot silently regress.
+**Alternatives:** inline `set -euo pipefail;` per recipe (a later task adding
+a piped recipe would forget it); requiring Homebrew GNU Make 4 and `gmake`
+(every doc and CI invocation says `make`, and plain `make` would still run
+silently unguarded).
+
+### D-009 — Swift 6 language mode is set explicitly in `project.yml`
+**2026-08-13** · M0-01 · **Status:** accepted
+
+`SWIFT_VERSION: "6.0"` is set explicitly in `project.yml` rather than left unset.
+
+**Why:** REQUIREMENTS.md §9.1 deliberately does not pin the toolchain, but Xcode 26's default is
+already Swift 6, so leaving the setting unset would make the effective language mode — and its
+strict-concurrency-by-default behavior — depend on whichever Xcode happens to be installed. A
+build that behaves differently on a different machine is exactly what §9's "verify, don't assert"
+exists to prevent. The ~40-line app compiles cleanly under it today. M0-03 owns revisiting this if
+SwiftData `@Model` plus actor isolation proves to be real friction, since that is the known place
+strict concurrency and SwiftData collide.
+**Alternatives:** leaving it unset (implicit and toolchain-dependent — the risk above); pinning to
+Swift 5 (defers strict-concurrency work to M0-03 but starts the project on a language mode Apple
+is already deprecating).
+
 ---
 
 ## Open — decided by the task that owns them
@@ -95,7 +155,6 @@ its PR body, and adds an entry above.
 | # | Question | Owning task |
 |---|---|---|
 | O-1 | Swift Testing or XCTest? Swift Testing ships with the Xcode 16 floor §9.1 already requires, and suits the table-driven tests in M1-01 and M2.5-02 | `M0-02` |
-| O-2 | Final source directory layout — §5 of ARCHITECTURE.md is a proposal until this lands | `M0-01` |
 | O-3 | Where the SwiftData store file lives — needed by M2.5-03's Replace mode and §8's "delete my data" | `M0-04` |
 | O-4 | What updates `modifiedAt`, exactly — M2.5-02's conflict resolution inherits any ambiguity | `M0-03` |
 | O-5 | Where "last-used project" is stored, and its behavior on first ever launch | `M1-02` |

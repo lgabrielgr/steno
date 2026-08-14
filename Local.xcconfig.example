@@ -1,0 +1,20 @@
+// Local.xcconfig.example — copy to Local.xcconfig and fill in:
+//
+//   cp Local.xcconfig.example Local.xcconfig
+//
+// Local.xcconfig is gitignored (REQUIREMENTS.md §9.3). No team IDs,
+// credentials, or tokens are ever committed.
+//
+// DEVELOPMENT_TEAM is your free Personal Team ID — no paid Apple Developer
+// membership is needed or wanted (§6.1). Add your Apple ID in
+// Xcode -> Settings -> Accounts first, then read the Team ID out of the
+// certificate's OU field:
+//
+//   security find-certificate -c "Apple Development" -p \
+//     | openssl x509 -noout -subject | tr ',' '\n' | grep OU=
+//
+// A stable identity is what makes the macOS Accessibility grant survive
+// rebuilds. Ad-hoc signing mints a new identity per build, so M1-03's global
+// hotkey would re-prompt for permission on every launch (§9.3).
+
+DEVELOPMENT_TEAM =
