@@ -131,11 +131,13 @@ the AI path is unavailable — because §7.4 makes producing *some* report a P0 
 
 ## 5. Where code lives
 
-Proposed layout, to be confirmed by M0-01 and amended here if it changes:
+Landed by M0-01 (D-006, closing O-2). `App/` exists; the rest are
+forward-looking, listed with the task that adds them:
 
 ```
 Steno/
-  App/            app entry, window scenes, menu bar
+  App/            StenoApp.swift, ContentView.swift, Logging.swift
+  Steno.entitlements
   Models/         SwiftData models, enums          (M0-03)
   Persistence/    container, store config           (M0-04)
   Capture/        capture core, ref extraction      (M1-01, M1-02)
