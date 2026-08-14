@@ -19,7 +19,7 @@ XCCONFIG := Local.xcconfig
 TOOLS    := xcodegen xcbeautify swiftlint
 
 .DEFAULT_GOAL := help
-.PHONY: help bootstrap preflight clean generate
+.PHONY: help bootstrap preflight clean generate build run release
 
 help: ## Show this help
 	@echo "Steno — make targets:"
@@ -88,3 +88,19 @@ $(PBXPROJ): project.yml | preflight
 
 generate: preflight ## Regenerate Steno.xcodeproj from project.yml
 	xcodegen generate
+
+APP := $(DERIVED)/Build/Products/Debug/Steno.app
+BIN := $(APP)/Contents/MacOS/Steno
+XCB := xcodebuild -project $(PROJECT) -scheme $(SCHEME) -derivedDataPath $(DERIVED)
+
+build: preflight $(PBXPROJ) ## Debug build into .build/
+	$(XCB) -configuration Debug build | xcbeautify
+
+release: preflight $(PBXPROJ) ## Release build of the .app bundle
+	$(XCB) -configuration Release build | xcbeautify
+
+# exec the binary directly rather than via `open`, so stdout/stderr stream to
+# this terminal (§9.2).
+run: build ## Kill any running instance, build, and launch
+	pkill -x Steno || true
+	$(BIN)
