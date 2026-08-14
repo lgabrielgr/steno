@@ -15,7 +15,7 @@ XCCONFIG := Local.xcconfig
 TOOLS    := xcodegen xcbeautify swiftlint
 
 .DEFAULT_GOAL := help
-.PHONY: help bootstrap preflight clean
+.PHONY: help bootstrap preflight clean generate
 
 help: ## Show this help
 	@echo "Steno — make targets:"
@@ -72,3 +72,14 @@ preflight:
 	@test -f $(XCCONFIG) || { printf '%s\n' "$$MSG_NO_XCCONFIG"; exit 1; }
 	@grep -qE '^[[:space:]]*DEVELOPMENT_TEAM[[:space:]]*=[[:space:]]*[^[:space:]/]' $(XCCONFIG) \
 	  || { printf '%s\n' "$$MSG_NO_TEAM"; exit 1; }
+
+# `build` depends on this FILE, which depends on project.yml: edit the manifest
+# and the project regenerates; leave it alone and generation is skipped. This is
+# what makes building a stale configuration structurally impossible.
+# preflight is order-only (|) — a phony prerequisite always counts as newer,
+# which would regenerate on every single build and defeat the point.
+$(PBXPROJ): project.yml | preflight
+	xcodegen generate
+
+generate: preflight ## Regenerate Steno.xcodeproj from project.yml
+	xcodegen generate

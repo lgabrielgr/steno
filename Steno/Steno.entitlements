@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!-- Deliberately unsandboxed, and explicitly so rather than by omission.
+	     Steno is never distributed (REQUIREMENTS.md §6.1) — no App Store, no
+	     notarization — so the sandbox protects nobody here, and a sandboxed
+	     app's claim on Accessibility trust is unreliable, which M1-03's global
+	     hotkey depends on (§9.3). Do not flip this to true. -->
+	<key>com.apple.security.app-sandbox</key>
+	<false/>
+</dict>
+</plist>
