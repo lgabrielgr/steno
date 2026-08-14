@@ -16,6 +16,7 @@ does.
 | [`docs/tasks/`](docs/tasks/README.md) | 36 sequenced task files, one per branch/PR | To find what you're building and what's out of scope |
 | [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) | Layer map, dependency rules, invariants and where they're enforced | Before writing code that spans layers |
 | [`docs/DECISIONS.md`](docs/DECISIONS.md) | Implementation decisions made during the build | When something in the code looks arbitrary |
+| [`docs/superpowers/specs/`](docs/superpowers/specs/), [`docs/superpowers/plans/`](docs/superpowers/plans/) | Per-task design and implementation records | Historical only — superseded by `DECISIONS.md` where the two disagree |
 
 **These files point at REQUIREMENTS.md rather than restating it.** If you find a harness file
 duplicating a requirement, that duplicate is a drift risk — fix it by replacing the copy with a

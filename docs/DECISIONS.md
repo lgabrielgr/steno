@@ -129,6 +129,22 @@ a piped recipe would forget it); requiring Homebrew GNU Make 4 and `gmake`
 (every doc and CI invocation says `make`, and plain `make` would still run
 silently unguarded).
 
+### D-009 — Swift 6 language mode is set explicitly in `project.yml`
+**2026-08-13** · M0-01 · **Status:** accepted
+
+`SWIFT_VERSION: "6.0"` is set explicitly in `project.yml` rather than left unset.
+
+**Why:** REQUIREMENTS.md §9.1 deliberately does not pin the toolchain, but Xcode 26's default is
+already Swift 6, so leaving the setting unset would make the effective language mode — and its
+strict-concurrency-by-default behavior — depend on whichever Xcode happens to be installed. A
+build that behaves differently on a different machine is exactly what §9's "verify, don't assert"
+exists to prevent. The ~40-line app compiles cleanly under it today. M0-03 owns revisiting this if
+SwiftData `@Model` plus actor isolation proves to be real friction, since that is the known place
+strict concurrency and SwiftData collide.
+**Alternatives:** leaving it unset (implicit and toolchain-dependent — the risk above); pinning to
+Swift 5 (defers strict-concurrency work to M0-03 but starts the project on a language mode Apple
+is already deprecating).
+
 ---
 
 ## Open — decided by the task that owns them

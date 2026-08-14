@@ -131,13 +131,14 @@ the AI path is unavailable — because §7.4 makes producing *some* report a P0 
 
 ## 5. Where code lives
 
-Landed by M0-01 (D-006, closing O-2). `App/` exists; the rest are
-forward-looking, listed with the task that adds them:
+Landed by M0-01 (D-006, closing O-2): `Steno/App/`, `Steno/Steno.entitlements`, `project.yml`, and
+`Makefile` all exist. The remaining `Steno/` subdirectories are forward-looking, listed with the
+task that adds them:
 
 ```
 Steno/
-  App/            StenoApp.swift, ContentView.swift, Logging.swift
-  Steno.entitlements
+  App/            StenoApp.swift, ContentView.swift, Logging.swift  (exists)
+  Steno.entitlements                                                (exists)
   Models/         SwiftData models, enums          (M0-03)
   Persistence/    container, store config           (M0-04)
   Capture/        capture core, ref extraction      (M1-01, M1-02)
@@ -147,8 +148,8 @@ Steno/
   Sources/        SourceConnector, Jira, Confluence, MCP  (M4, M5)
   Features/       views + view models, by feature
 Tests/            mirrors the above; headless, no network
-project.yml       XcodeGen manifest — the .xcodeproj is generated and gitignored (§9.1)
-Makefile          the only entry point you need (§9.2)
+project.yml       XcodeGen manifest — the .xcodeproj is generated and gitignored (§9.1)  (exists)
+Makefile          the only entry point you need (§9.2)                                   (exists)
 ```
 
 Split by responsibility rather than by technical layer: things that change together live

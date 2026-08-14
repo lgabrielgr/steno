@@ -25,7 +25,11 @@ help: ## Show this help
 	@echo "Steno — make targets:"
 	@grep -hE '^[a-zA-Z_-]+:.*## ' $(MAKEFILE_LIST) \
 	  | sort \
-	  | awk 'BEGIN {FS = ":.*## "}; {printf "  %-10s %s\n", $$1, $$2}'
+	  | awk 'BEGIN {FS = ":.*## "}; {printf "  %-10s %s\n", $$1, $$2}' \
+	  || true
+	@# `|| true` guards against pipefail: if a future edit ever leaves zero
+	@# targets carrying a `## ` marker, grep exits 1 and would otherwise take
+	@# down `help` — which is .DEFAULT_GOAL, so a bare `make` would break.
 
 bootstrap: ## Install toolchain deps via Homebrew (idempotent)
 	@command -v brew >/dev/null || { \

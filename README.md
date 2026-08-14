@@ -33,6 +33,8 @@ paid Apple Developer membership is involved (§6.1, §9.3):
 
    ```bash
    cp Local.xcconfig.example Local.xcconfig
+   # then edit Local.xcconfig, setting:
+   #   DEVELOPMENT_TEAM = XXXXXXXXXX
    ```
 
 `Local.xcconfig` is gitignored and never committed.

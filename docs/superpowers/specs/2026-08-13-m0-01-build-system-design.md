@@ -181,6 +181,9 @@ Three non-obvious choices:
 ```make
 SHELL := /bin/bash
 .SHELLFLAGS := -eu -o pipefail -c
+# Superseded during implementation: .SHELLFLAGS is inert on macOS's GNU Make
+# 3.81 — the shipped Makefile sets these flags on SHELL itself instead. See
+# docs/DECISIONS.md D-008.
 ```
 
 Without `pipefail`, `xcodebuild ... | xcbeautify` reports **xcbeautify's** exit status: a failed

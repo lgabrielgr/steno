@@ -23,6 +23,7 @@ Copied verbatim from REQUIREMENTS.md §9.1/§9.2/§9.3/§6.1 and the spec. Every
 - Signing: **stable Personal Team**, never ad-hoc (`-`). `DEVELOPMENT_TEAM` lives only in a gitignored `Local.xcconfig`
 - Sandbox: **off**, explicitly (`com.apple.security.app-sandbox = false`). Hardened runtime: **off**
 - **Every make target exits non-zero on failure.** This requires `SHELL := /bin/bash` and `.SHELLFLAGS := -eu -o pipefail -c` — without `pipefail`, `xcodebuild | xcbeautify` reports xcbeautify's status and a failed build exits 0
+  - **Superseded during implementation.** `.SHELLFLAGS` is inert on macOS's GNU Make 3.81 — the shipped Makefile sets these flags on `SHELL` itself. See `docs/DECISIONS.md` D-008.
 - **Never commit** `Steno.xcodeproj` or `Local.xcconfig`. `git status` must be clean after a full build
 - **Never commit to `main`.** This branch gets one PR, which the agent does not merge (§9.5)
 - Out of scope, do not add: `make test`, `make lint`, `make format`, test targets (→ M0-02); domain models, persistence (→ M0-03, M0-04); CI (→ M1-07); `LSUIElement` (→ M1-04); notarization or anything needing paid membership (→ never, §6.1)
@@ -94,6 +95,9 @@ DEVELOPMENT_TEAM =
 # that depends on it (§9.5 step 4, M1-07's CI) would silently stop working.
 SHELL := /bin/bash
 .SHELLFLAGS := -eu -o pipefail -c
+# Superseded during implementation: .SHELLFLAGS is inert on macOS's GNU Make
+# 3.81 — the shipped Makefile sets these flags on SHELL itself instead. See
+# docs/DECISIONS.md D-008.
 
 DERIVED  := .build
 PROJECT  := Steno.xcodeproj
@@ -188,7 +192,7 @@ The `grep` requires a first value character that is neither whitespace nor `/`, 
 make preflight; echo "exit=$?"
 ```
 
-Expected: the `MSG_NO_XCCONFIG` block, `exit=1`. If you get `exit=0`, the gate is decorative — stop and fix it.
+Expected: the `MSG_NO_XCCONFIG` block, `exit=2` (GNU Make wraps a recipe's `exit 1` in its own recipe-error code). If you get `exit=0`, the gate is decorative — stop and fix it.
 
 - [ ] **Step 6: Verify the empty-team branch**
 
@@ -197,7 +201,7 @@ cp Local.xcconfig.example Local.xcconfig
 make preflight; echo "exit=$?"
 ```
 
-Expected: the `MSG_NO_TEAM` block, `exit=1` — the example ships with `DEVELOPMENT_TEAM =` empty.
+Expected: the `MSG_NO_TEAM` block, `exit=2` (GNU Make wraps a recipe's `exit 1` in its own recipe-error code) — the example ships with `DEVELOPMENT_TEAM =` empty.
 
 - [ ] **Step 7: Install the toolchain and verify idempotency**
 
@@ -505,9 +509,9 @@ make build; echo "exit=$?"
 git checkout Steno/App/ContentView.swift
 ```
 
-Expected: a compile error and **`exit=1`**.
+Expected: a compile error and a **non-zero exit**. GNU Make wraps a recipe's `exit 1` in its own recipe-error code, so the actual value is `exit=2`, not `exit=1`.
 
-**If `exit=0`, `pipefail` is not in effect.** Every gate in this repo depends on this one result: §9.5 step 4, M0-02's `make test`, M1-07's CI. Do not continue until it exits non-zero.
+**If `exit=0`, `pipefail` is not in effect.** Every gate in this repo depends on this one result: §9.5 step 4, M0-02's `make test`, M1-07's CI. Do not continue until it exits non-zero — `exit=2` is the expected pass, not a discrepancy to chase.
 
 - [ ] **Step 4: Verify the incremental-generation contract**
 
@@ -692,7 +696,7 @@ gh pr create --title "Add the XcodeGen project, Makefile, and stable signing" --
 The body follows `.github/pull_request_template.md`. It must contain:
 
 - **Requirement IDs:** §9.1, §9.2, §9.3, §6.1 · Task: M0-01 · Milestone: M0 — Skeleton
-- **How it was verified:** pasted output from Step 4, plus the Task 3 Step 3 failure result (`exit=1` on a broken source file) and the Task 3 Step 7 `codesign` output proving a non-ad-hoc signature. `make test` and `make lint` do not exist yet — say so rather than leaving the template checkboxes ambiguous.
+- **How it was verified:** pasted output from Step 4, plus the Task 3 Step 3 failure result (`exit=2` on a broken source file — GNU Make wraps the recipe's `exit 1`) and the Task 3 Step 7 `codesign` output proving a non-ad-hoc signature. `make test` and `make lint` do not exist yet — say so rather than leaving the template checkboxes ambiguous.
 - **Findings:** that `make bootstrap` cannot create the signing identity, so the Apple ID step is a documented manual prerequisite; that O-2 is closed by D-006.
 - **Deliberately left out:** the M0-02 targets, models, persistence, CI, `LSUIElement`.
 
