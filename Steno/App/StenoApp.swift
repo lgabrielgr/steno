@@ -1,3 +1,4 @@
+import Darwin  // fflush/stdout — explicit rather than transitively via SwiftUI
 import SwiftUI
 
 @main

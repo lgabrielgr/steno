@@ -78,6 +78,18 @@ preflight:
 	  command -v $$t >/dev/null || { \
 	    echo "error: $$t not found. Run: make bootstrap"; exit 1; }; \
 	done
+	@# A file test, not `xcodebuild -version`, so this stays instant on the path
+	@# that gates every build. Command Line Tools ship an xcodebuild shim that is
+	@# on PATH but cannot build an .app bundle, so `command -v` would pass and the
+	@# real failure would surface later as an opaque xcode-select error.
+	@test -x "$$(xcode-select -p 2>/dev/null)/usr/bin/xcodebuild" || { \
+	  echo "error: no full Xcode toolchain found."; \
+	  echo "  xcode-select points at: $$(xcode-select -p 2>/dev/null || echo '(nothing)')"; \
+	  echo "  Xcode 16+ is required (REQUIREMENTS.md §9.1); Command Line Tools alone"; \
+	  echo "  cannot build an .app bundle, and 'make bootstrap' cannot install Xcode."; \
+	  echo "  With Xcode installed, point the tools at it:"; \
+	  echo "    sudo xcode-select -s /Applications/Xcode.app/Contents/Developer"; \
+	  exit 1; }
 	@test -f $(XCCONFIG) || { printf '%s\n' "$$MSG_NO_XCCONFIG"; exit 1; }
 	@grep -qE '^[[:space:]]*DEVELOPMENT_TEAM[[:space:]]*=[[:space:]]*[^[:space:]/]' $(XCCONFIG) \
 	  || { printf '%s\n' "$$MSG_NO_TEAM"; exit 1; }

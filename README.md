@@ -44,7 +44,9 @@ make run                                    # build and launch
 make                                        # list every target
 ```
 
-To watch logs from a detached run:
+`make run` prints a launch line to the terminal, but that is a plain `print` —
+everything logged through `os.Log` goes to the unified logging system and never
+to stdout, `make run` or not. To watch it, run this in another terminal:
 
 ```bash
 log stream --predicate 'subsystem == "com.lgabrielgr.steno"'
