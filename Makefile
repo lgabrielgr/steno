@@ -4,8 +4,12 @@
 # pipefail is load-bearing: `xcodebuild | xcbeautify` otherwise reports
 # xcbeautify's exit status, so a failed build would exit 0 and every gate
 # that depends on it (§9.5 step 4, M1-07's CI) would silently stop working.
-SHELL := /bin/bash
-.SHELLFLAGS := -eu -o pipefail -c
+#
+# Apple ships GNU Make 3.81, which predates .SHELLFLAGS (GNU Make 4.0) and
+# silently ignores it — so flags set that way never take effect and a failed
+# build piped through xcbeautify exits 0. Setting them on SHELL itself is
+# honoured by 3.81 and by 4.x. Do not move them back to .SHELLFLAGS.
+SHELL := /bin/bash -o pipefail -e -u
 
 DERIVED  := .build
 PROJECT  := Steno.xcodeproj
@@ -65,6 +69,7 @@ export MSG_NO_TEAM
 
 # Gates everything that generates or compiles. Silent on success.
 preflight:
+	@! (false | cat) || { echo "error: pipefail is not in effect — check SHELL in this Makefile"; exit 1; }
 	@for t in xcodegen xcbeautify; do \
 	  command -v $$t >/dev/null || { \
 	    echo "error: $$t not found. Run: make bootstrap"; exit 1; }; \
