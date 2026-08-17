@@ -94,12 +94,28 @@ preflight:
 	@grep -qE '^[[:space:]]*DEVELOPMENT_TEAM[[:space:]]*=[[:space:]]*[^[:space:]/]' $(XCCONFIG) \
 	  || { printf '%s\n' "$$MSG_NO_TEAM"; exit 1; }
 
-# `build` depends on this FILE, which depends on project.yml: edit the manifest
-# and the project regenerates; leave it alone and generation is skipped. This is
-# what makes building a stale configuration structurally impossible.
+# XcodeGen enumerates the source directories at generation time and writes every
+# file into the .pbxproj, so a newly added .swift file is invisible to xcodebuild
+# until the project is regenerated. Depending only on project.yml meant `make test`
+# passed green while never compiling a new test file — the decorative-gate failure
+# D-008 exists to prevent.
+#
+# Known limits, accepted: a *deleted* source file does not trigger regeneration,
+# but the stale .pbxproj reference then fails the build loudly, which is the safe
+# direction; a source path containing a space would split this prerequisite list;
+# non-Swift sources (resources, asset catalogs) are not covered — add them here
+# when the project grows any; and Make compares whole seconds, so a file created
+# in the same second as the last generation is still missed until it is touched
+# again.
+SOURCES := $(shell find Steno StenoKit StenoTests -name '*.swift' 2>/dev/null)
+
+# `build` depends on this FILE, which depends on the manifest and the sources:
+# change either and the project regenerates; leave them alone and generation is
+# skipped. This is what makes building a stale configuration structurally
+# impossible.
 # preflight is order-only (|) — a phony prerequisite always counts as newer,
 # which would regenerate on every single build and defeat the point.
-$(PBXPROJ): project.yml | preflight
+$(PBXPROJ): project.yml $(SOURCES) | preflight
 	xcodegen generate
 
 generate: preflight ## Regenerate Steno.xcodeproj from project.yml
