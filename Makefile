@@ -19,7 +19,7 @@ XCCONFIG := Local.xcconfig
 TOOLS    := xcodegen xcbeautify swiftlint
 
 .DEFAULT_GOAL := help
-.PHONY: help bootstrap preflight clean generate build run release
+.PHONY: help bootstrap preflight clean generate build run release test
 
 help: ## Show this help
 	@echo "Steno — make targets:"
@@ -108,6 +108,7 @@ generate: preflight ## Regenerate Steno.xcodeproj from project.yml
 APP := $(DERIVED)/Build/Products/Debug/Steno.app
 BIN := $(APP)/Contents/MacOS/Steno
 XCB := xcodebuild -project $(PROJECT) -scheme $(SCHEME) -derivedDataPath $(DERIVED)
+DEST := -destination 'platform=macOS'
 
 build: preflight $(PBXPROJ) ## Debug build into .build/
 	$(XCB) -configuration Debug build | xcbeautify
@@ -120,3 +121,6 @@ release: preflight $(PBXPROJ) ## Release build of the .app bundle
 run: build ## Kill any running instance, build, and launch
 	pkill -x Steno || true
 	$(BIN)
+
+test: preflight $(PBXPROJ) ## Unit tests, headless
+	$(XCB) -configuration Debug $(DEST) test | xcbeautify

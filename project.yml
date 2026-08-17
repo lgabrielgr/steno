@@ -69,6 +69,26 @@ targets:
         MARKETING_VERSION: "0.1.0"
         CURRENT_PROJECT_VERSION: "1"
 
+  # No TEST_HOST, deliberately: an unhosted bundle runs under the xctest
+  # runner with no NSApplication and no window server, which is what lets
+  # `make test` pass over SSH (§9.4). Do not add a host app.
+  StenoTests:
+    type: bundle.unit-test
+    platform: macOS
+    sources:
+      - path: StenoTests
+    dependencies:
+      - target: StenoKit
+        embed: true
+        codeSign: true
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.lgabrielgr.steno.tests
+        GENERATE_INFOPLIST_FILE: YES
+        LD_RUNPATH_SEARCH_PATHS:
+          - $(inherited)
+          - "@loader_path/../Frameworks"
+
 # Declared explicitly, not left to Xcode's autocreate: `xcodebuild -scheme`
 # needs a *shared* scheme on disk, and an autocreated one lands in xcuserdata/,
 # which is gitignored — a clean checkout would fail in exactly the way this
@@ -78,5 +98,10 @@ schemes:
     build:
       targets:
         Steno: all
+        StenoTests: [test]
     run:
       config: Debug
+    test:
+      config: Debug
+      targets:
+        - StenoTests
