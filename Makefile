@@ -109,6 +109,7 @@ APP := $(DERIVED)/Build/Products/Debug/Steno.app
 BIN := $(APP)/Contents/MacOS/Steno
 XCB := xcodebuild -project $(PROJECT) -scheme $(SCHEME) -derivedDataPath $(DERIVED)
 DEST := -destination 'platform=macOS'
+SANDBOX := Scripts/test-sandbox.sb
 
 build: preflight $(PBXPROJ) ## Debug build into .build/
 	$(XCB) -configuration Debug build | xcbeautify
@@ -122,5 +123,15 @@ run: build ## Kill any running instance, build, and launch
 	pkill -x Steno || true
 	$(BIN)
 
-test: preflight $(PBXPROJ) ## Unit tests, headless
-	$(XCB) -configuration Debug $(DEST) test | xcbeautify
+# Two phases on purpose. The build is not sandboxed: it needs no network
+# either — D-007 declined `-allowProvisioningUpdates` precisely to avoid Apple
+# ID round-trips — but confining the build system too would produce failures
+# that are hard to attribute, and the build is not what §9.4 is about.
+#
+# This IS `make test`, not an opt-in `make test-offline`. D-008's lesson was
+# that a gate agents can skip is a gate agents skip; §9.5 step 4 says
+# `make test`.
+test: preflight $(PBXPROJ) ## Unit tests — headless, network denied
+	$(XCB) -configuration Debug $(DEST) build-for-testing | xcbeautify
+	sandbox-exec -f $(SANDBOX) \
+	  $(XCB) -configuration Debug $(DEST) test-without-building | xcbeautify
