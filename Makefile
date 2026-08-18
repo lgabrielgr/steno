@@ -19,7 +19,7 @@ XCCONFIG := Local.xcconfig
 TOOLS    := xcodegen xcbeautify swiftlint
 
 .DEFAULT_GOAL := help
-.PHONY: help bootstrap preflight clean generate build run release test
+.PHONY: help bootstrap preflight clean generate build run release test lint
 
 help: ## Show this help
 	@echo "Steno — make targets:"
@@ -160,3 +160,16 @@ test: preflight generate ## Unit tests — headless, network denied
 	$(XCB) -configuration Debug $(DEST) build-for-testing | xcbeautify
 	sandbox-exec -f $(SANDBOX) \
 	  $(XCB) -configuration Debug $(DEST) test-without-building | xcbeautify
+
+# The swiftlint check lives here rather than in `preflight`, which gates
+# build/run/release — none of which should start requiring a linter.
+#
+# --strict promotes warnings to errors. Without it, `make lint` passes on code
+# carrying accumulated warnings and §9.5 step 4 stops meaning anything. The
+# cost is that a genuine false positive needs an explicit
+# `// swiftlint:disable:next <rule>` — which shows up in the diff, where a
+# reviewer sees it. That is intended.
+lint: ## SwiftLint — warnings are errors
+	@command -v swiftlint >/dev/null || { \
+	  echo "error: swiftlint not found. Run: make bootstrap"; exit 1; }
+	swiftlint --strict
