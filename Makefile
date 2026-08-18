@@ -100,13 +100,16 @@ preflight:
 # passed green while never compiling a new test file — the decorative-gate failure
 # D-008 exists to prevent.
 #
-# Known limits, accepted: a *deleted* source file does not trigger regeneration,
-# but the stale .pbxproj reference then fails the build loudly, which is the safe
-# direction; a source path containing a space would split this prerequisite list;
-# non-Swift sources (resources, asset catalogs) are not covered — add them here
-# when the project grows any; and Make compares whole seconds, so a file created
-# in the same second as the last generation is still missed until it is touched
-# again.
+# This mtime rule serves `build` and `release` only. `test` regenerates
+# unconditionally instead (see that target) — Make compares whole seconds, so a
+# file created in the same second as the last generation slips through this rule,
+# and for the gate a slip is a silent green.
+#
+# Known limits of this rule, accepted for `build`: a *deleted* source file does
+# not trigger regeneration, but the stale .pbxproj reference then fails the build
+# loudly, which is the safe direction; a source path containing a space would
+# split this prerequisite list; non-Swift sources (resources, asset catalogs) are
+# not covered — add them here when the project grows any.
 SOURCES := $(shell find Steno StenoKit StenoTests -name '*.swift' 2>/dev/null)
 
 # `build` depends on this FILE, which depends on the manifest and the sources:
@@ -147,7 +150,13 @@ run: build ## Kill any running instance, build, and launch
 # This IS `make test`, not an opt-in `make test-offline`. D-008's lesson was
 # that a gate agents can skip is a gate agents skip; §9.5 step 4 says
 # `make test`.
-test: preflight $(PBXPROJ) ## Unit tests — headless, network denied
+#
+# Depends on the phony `generate`, not on $(PBXPROJ), so the gate can never run
+# against a stale project: build and test carry asymmetric risk. A source file
+# missing from a *build* fails loudly at compile time; a test file missing from a
+# *test run* passes green having never run — the failure class this milestone
+# exists to eliminate. The price is one xcodegen pass (~0.1s) per `make test`.
+test: preflight generate ## Unit tests — headless, network denied
 	$(XCB) -configuration Debug $(DEST) build-for-testing | xcbeautify
 	sandbox-exec -f $(SANDBOX) \
 	  $(XCB) -configuration Debug $(DEST) test-without-building | xcbeautify
