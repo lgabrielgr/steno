@@ -19,7 +19,7 @@ XCCONFIG := Local.xcconfig
 TOOLS    := xcodegen xcbeautify swiftlint
 
 .DEFAULT_GOAL := help
-.PHONY: help bootstrap preflight clean generate build run release test lint
+.PHONY: help bootstrap preflight clean generate build run release test lint format
 
 help: ## Show this help
 	@echo "Steno — make targets:"
@@ -173,3 +173,10 @@ lint: ## SwiftLint — warnings are errors
 	@command -v swiftlint >/dev/null || { \
 	  echo "error: swiftlint not found. Run: make bootstrap"; exit 1; }
 	swiftlint --strict
+
+# swift-format ships inside the Xcode toolchain, so this adds no dependency to
+# `make bootstrap` and its version tracks the compiler §9.1 already pins.
+format: ## swift-format, in place
+	@xcrun --find swift-format >/dev/null 2>&1 || { \
+	  echo "error: swift-format not found in the Xcode toolchain."; exit 1; }
+	xcrun swift-format --in-place --recursive Steno StenoKit StenoTests
