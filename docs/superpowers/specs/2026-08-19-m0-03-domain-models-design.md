@@ -369,6 +369,15 @@ with.
 
 ## 9. Risks, with responses decided in advance
 
+> **All three were settled empirically while writing the implementation plan** — see its
+> "Environment as verified" table. `public private(set)` compiles under `@Model` and the setter is
+> genuinely unreachable from another file in the same module, so the `internal(set)` fallback
+> below is not needed and enforcement is stronger than this section assumed; `Schema.Attribute`
+> exposes everything test 1 needs, with `defaultValue` populated from a property initialiser; and
+> Swift 6 mode showed no friction for this shape. The responses below stand as the rule if any of
+> it changes. One gotcha the probes turned up and the plan carries: enum property defaults inside
+> `@Model` must be fully qualified — `EventKind.note`, never `.note`.
+
 | Risk | Response |
 |---|---|
 | **`private(set)` under the `@Model` macro.** The macro rewrites persisted properties into computed accessors, and every invariant here rests on this compiling | **Built first**, before any model is fleshed out. If it does not hold, fall back to `internal(set)` with public mutators — weaker, since StenoKit-internal code could bypass it — and record it as a decision, never as a silent downgrade |
