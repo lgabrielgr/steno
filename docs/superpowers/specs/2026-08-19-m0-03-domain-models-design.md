@@ -308,6 +308,12 @@ names itself. Tests needing a live context build an `isStoredInMemoryOnly` `Mode
 that is a test fixture, and **M0-04 still owns the application's real store configuration** — the
 fixture carries a comment saying so.
 
+Tests 1 and 2 need the list of the five model types to build a `Schema`. Since the shipped list
+belongs to M0-04 (§8), **the test bundle declares its own** and there is nothing in `StenoKit`
+for it to import. The consequence is worth naming because M0-04 inherits it: a model type absent
+from *M0-04's* list is not caught by anything here, so M0-04's own tests have to assert that the
+schema it ships covers every model.
+
 | # | Asserts | Substrate |
 |---|---|---|
 | 1 | **§6 CloudKit conformance:** for every attribute of every entity, `!isUnique` and (`isOptional` or a default exists) — no attribute is unique, `id` included | `Schema` reflection, parameterized per entity |
@@ -346,16 +352,18 @@ StenoKit/Models/
   EventKind.swift
   SourceRefKind.swift
   ReportCadence.swift
-  StenoSchema.swift        // static let models: [any PersistentModel.Type]
 StenoTests/Models/         // one test file per model, plus SchemaConformanceTests
 ```
 
 Matches ARCHITECTURE §5's `StenoKit/Models/` slot and D-006's rule that XcodeGen takes the
 directory whole — no `project.yml` change.
 
-`StenoSchema.models` is the list of model types, which is the schema rather than the container, so
-it belongs to this task; **M0-04 consumes it** when it builds the real store. Flagged in the PR
-body as a boundary call, since a reviewer could reasonably have expected it in M0-04.
+**This task ships model types and nothing that enumerates them.** There is no `StenoSchema`, no
+`static let models: [any PersistentModel.Type]`: the list of model types is what a `ModelContainer`
+is built from, so it goes with the container in M0-04. The cost lands in §7 — this task's tests
+declare their own list — and it is the right side of the line to pay it on, because a list living
+here would be a second declaration of the schema that M0-04's container could silently disagree
+with.
 
 ---
 
@@ -375,6 +383,7 @@ Per the task file, and repeated because each is a plausible thing to drift into:
 
 - **The model container and store** — M0-04. The in-memory container in §7 is a test fixture, not
   a store configuration.
+- **Any shipped enumeration of the model types** — M0-04, with the container it feeds (§8).
 - **Any UI** — M0-05.
 - **Event creation on user actions** — M1-05, M1-06. This task defines the types and their
   invariants, not the flows that produce them.
@@ -387,4 +396,5 @@ Per the task file, and repeated because each is a plausible thing to drift into:
 - **DECISIONS.md:** an entry closing **O-4** (§4), and an entry recording the dual
   `taskID` + relationship shape (§1.1) so a later reviewer does not "fix" it.
 - **PR body:** the redundant-`setStatus` no-op as a §3.2 gap (§5.1); the UUID-foreign-key
-  reasoning the task file asks be recorded; `StenoSchema` as a boundary call (§8).
+  reasoning the task file asks be recorded; the note that M0-04 owns both the model-type list and
+  the test asserting its container covers every model (§7, §8).
