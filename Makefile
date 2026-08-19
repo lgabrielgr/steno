@@ -153,10 +153,13 @@ run: build ## Kill any running instance, build, and launch
 #
 # Depends on the phony `generate`, not on $(PBXPROJ), so the gate can never run
 # against a stale project: build and test carry asymmetric risk. A source file
-# missing from a *build* fails loudly at compile time; a test file missing from a
-# *test run* passes green having never run — the failure class this milestone
-# exists to eliminate. The price is one xcodegen pass, measured at ~0.06s on a
-# ~2.2s `make test`. Rationale and the rejected alternatives: D-014.
+# missing from a *build* fails at compile time, but only once something
+# references it; a test file missing from a *test run* passes green having never
+# run, and nothing surfaces that ever. Regenerating here covers both — the scheme
+# marks the app buildForTesting, so `make test` rebuilds all three targets, and
+# the §9.5 triad as a whole cannot skip a file even where `build` alone could.
+# The price is one xcodegen pass, measured at ~0.06s on a ~2.2s `make test`.
+# Rationale and the rejected alternatives: D-014.
 test: preflight generate ## Unit tests — headless, network denied
 	$(XCB) -configuration Debug $(DEST) build-for-testing | xcbeautify
 	sandbox-exec -f $(SANDBOX) \
@@ -177,6 +180,10 @@ lint: ## SwiftLint — warnings are errors
 
 # swift-format ships inside the Xcode toolchain, so this adds no dependency to
 # `make bootstrap` and its version tracks the compiler §9.1 already pins.
+#
+# The directory list below is the same one `.swiftlint.yml` carries in
+# `included:` — add a new top-level source directory to both, or it goes
+# unformatted or unlinted with nothing saying so.
 format: ## swift-format, in place
 	@xcrun --find swift-format >/dev/null 2>&1 || { \
 	  echo "error: swift-format not found in the Xcode toolchain."; exit 1; }

@@ -199,8 +199,13 @@ held locally. The verification probe first *passed* under the sandbox, in 0.007s
 xctest runner's `URLCache` (`~/Library/Caches/com.apple.dt.xctest.tool`) had been warmed by the
 earlier unsandboxed run; clearing that cache and re-running, with no change to the profile or the
 Makefile, produced the expected clean failure. So a cacheable GET served from a warm cache will
-not trip this gate. It catches the connection an M4 connector opens, which is the case it exists
-for; do not read a green `make test` as proof that no code path *wanted* the network.
+not trip this gate. The profile's reach is bounded the same way in a second respect: it binds
+this process tree, so work handed to a system daemon outside it — a background-configuration
+`URLSession`, brokered by `nsurlsessiond` — is not something `(deny network-outbound …)` is in a
+position to stop. That is a statement about what the mechanism covers by construction, not an
+observed leak; no probe has been run against it. Net: the gate catches the connection an M4
+connector opens, which is the case it exists for, but do not read a green `make test` as proof
+that no code path *wanted* the network.
 
 **Alternatives:** a `URLProtocol` tripwire inside the bundle (misses sessions with custom
 `protocolClasses`, and raw sockets — it enforces a convention, not a boundary); architectural
@@ -239,9 +244,12 @@ The fix came in two parts: source files became prerequisites of the `.pbxproj` r
 `test` was moved onto the phony `generate` target, because GNU Make 3.81 compares whole seconds,
 so a source file created in the same second as the last generation counts as up to date. That
 was not theoretical — it produced a false green on the first post-fix run. The asymmetry with
-`build` is the point rather than an inconsistency: a source file missing from a *build* fails
-loudly at compile time, whereas a test file missing from a *test run* passes green having never
-run. The measured price is ~0.06s on a ~2.2s `make test` (~3%). The named side effect is that
+`build` is the point rather than an inconsistency. A source file missing from a *build* fails at
+compile time — but only once something references it, so a new file nothing calls yet would build
+green there too; what closes that gap is the triad rather than `build` alone, because the
+generated scheme marks the app `buildForTesting` and `make test` therefore rebuilds all three
+targets. A test file missing from a *test run* has no equivalent backstop: it passes green having
+never run. The measured price is ~0.06s on a ~2.2s `make test` (~3%). The named side effect is that
 `make test` rewrites `Steno.xcodeproj` on every run, which can disturb an open Xcode GUI session
 — accepted because §9.2 makes the GUI optional, never required. A side benefit: deleting a test
 file no longer needs a manual `make generate` first.

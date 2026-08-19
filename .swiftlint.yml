@@ -6,6 +6,10 @@
 # clean diff, and still failing `make lint` with no indication which tool to
 # believe. See DECISIONS.md D-013.
 
+# Hand-kept in sync with the directory list in the Makefile's `format` target.
+# Drift here is quiet: swiftlint only complains when *every* entry is stale, so
+# a new top-level source directory that reaches one list and not the other is
+# silently unlinted or unformatted.
 included:
   - Steno
   - StenoKit
