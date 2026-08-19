@@ -44,6 +44,29 @@ make run                                    # build and launch
 make                                        # list every target
 ```
 
+## Tests, lint, and formatting
+
+```bash
+make test      # headless, with outbound networking denied
+make lint      # SwiftLint; warnings are errors
+make format    # swift-format, in place
+```
+
+`make test` runs in two phases: an ordinary build, then the test run confined by
+`Scripts/test-sandbox.sb`, which blocks IP traffic. That is deliberate — §9.4
+requires proof the suite makes no network calls, and running with Wi-Fi off only
+proves it survives without one. A test that needs the network is a boundary in
+the wrong place (D-012).
+
+The suite is unhosted: it never launches the app, so it needs no window server —
+code that does belongs in the `Steno` target, which the tests do not link
+(D-010). Running `make test` over SSH works, but needs two things that are
+properties of the session rather than of the suite: the Homebrew tools on `PATH`
+(a non-interactive shell drops `/opt/homebrew/bin`, and `preflight` then reports
+a missing `xcodegen`), and an unlocked login keychain for signing — a Background
+session leaves it locked, so `codesign` fails with `errSecInternalComponent`
+unless you pass `CODE_SIGN_IDENTITY=-` to sign ad-hoc.
+
 `make run` prints a launch line to the terminal, but that is a plain `print` —
 everything logged through `os.Log` goes to the unified logging system and never
 to stdout, `make run` or not. To watch it, run this in another terminal:

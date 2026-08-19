@@ -97,8 +97,8 @@ preflight:
 # XcodeGen enumerates the source directories at generation time and writes every
 # file into the .pbxproj, so a newly added .swift file is invisible to xcodebuild
 # until the project is regenerated. Depending only on project.yml meant `make test`
-# passed green while never compiling a new test file — the decorative-gate failure
-# D-008 exists to prevent.
+# passed green while never compiling a new test file — the same class of
+# decorative-gate failure as D-008, by a different mechanism (see D-014).
 #
 # This mtime rule serves `build` and `release` only. `test` regenerates
 # unconditionally instead (see that target) — Make compares whole seconds, so a
@@ -155,7 +155,8 @@ run: build ## Kill any running instance, build, and launch
 # against a stale project: build and test carry asymmetric risk. A source file
 # missing from a *build* fails loudly at compile time; a test file missing from a
 # *test run* passes green having never run — the failure class this milestone
-# exists to eliminate. The price is one xcodegen pass (~0.1s) per `make test`.
+# exists to eliminate. The price is one xcodegen pass, measured at ~0.06s on a
+# ~2.2s `make test`. Rationale and the rejected alternatives: D-014.
 test: preflight generate ## Unit tests — headless, network denied
 	$(XCB) -configuration Debug $(DEST) build-for-testing | xcbeautify
 	sandbox-exec -f $(SANDBOX) \

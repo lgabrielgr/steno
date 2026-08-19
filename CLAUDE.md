@@ -77,8 +77,9 @@ make clean       # remove .build/ and the generated project
 make release     # release build of the .app bundle
 ```
 
-> **Until `M0-01` merges, these do not exist yet.** That task creates them, and `M0-02` adds
-> `test`, `lint`, and `format`.
+> All of these exist as of `M0-02`. `make test` runs headless with outbound networking denied by
+> a `sandbox-exec` profile (§9.4, D-012) — if a change makes it need the network, that is the
+> finding, not the obstacle.
 
 Never commit `Steno.xcodeproj` (generated per §9.1) or `Local.xcconfig` (§9.3). Both are
 gitignored; if either appears in `git status`, something is wrong.

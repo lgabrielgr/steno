@@ -86,7 +86,7 @@ because an agent follows it confidently.
 **Alternatives:** self-contained harness files, which would need syncing on every spec change.
 
 ### D-006 — Source layout is `Steno/<Area>/`, closing O-2
-**2026-08-13** · M0-01 · **Status:** accepted
+**2026-08-13** · M0-01 · **Status:** accepted — layout amended by D-010
 
 Sources live under `Steno/`, split by responsibility as
 [`ARCHITECTURE.md` §5](ARCHITECTURE.md) proposes, starting with `Steno/App/`.
@@ -145,6 +145,109 @@ strict concurrency and SwiftData collide.
 Swift 5 (defers strict-concurrency work to M0-03 but starts the project on a language mode Apple
 is already deprecating).
 
+### D-010 — Testable code lives in a `StenoKit` framework
+**2026-08-14** · M0-02 · **Status:** accepted — amends the layout in D-006
+
+Three targets: `StenoKit` (framework, all logic), `Steno` (application, SwiftUI views and
+`@main` only), `StenoTests` (unhosted unit-test bundle linking `StenoKit`). The rule for later
+tasks: **if it cannot be tested without a window server, it does not belong in `Steno/`.**
+
+**Why:** §9.4 requires `make test` to pass with the GUI session inactive. A hosted test bundle
+launches the app under test, and `NSApplication` needs a window server — so the conventional
+setup fails exactly the condition the requirement exists to enforce. An unhosted bundle avoids
+that but cannot link an application target, which leaves a framework as the only place both the
+app and the tests can link. The cost is real: a framework extraction at M0-02, before any domain
+code exists to justify it.
+**Alternatives:** a hosted bundle (would need a §9.4 amendment, and M1-07's CI runner is headless
+too); compiling the app's sources a second time into the test bundle (headless, but the test
+binary then diverges from the shipping one — tests pass against code the app does not run).
+Deferring to M0-03 was rejected because it means moving SwiftData `@Model` types across a target
+boundary under more pressure.
+
+### D-011 — Swift Testing, with XCTest kept for `measure`
+**2026-08-14** · M0-02 · **Status:** accepted — closes O-1
+
+Swift Testing (`@Test`/`#expect`) is the convention. XCTest stays linkable for performance
+assertions only; a PR introducing an XCTest case says why in its body.
+
+**Why:** Swift Testing ships with the Xcode 16 floor §9.1 already requires, and its
+parameterized cases suit the table-driven tests in M1-01 and M2.5-02 — a failing row names
+itself instead of collapsing into one aggregate assertion failure. The exception exists because
+Swift Testing has no equivalent of `measure { }`, and §1.1's capture-latency budget is a
+non-negotiable that must be measured rather than assumed. Both frameworks run in one `xcodebuild
+test` invocation, so the exception costs nothing structurally.
+**Alternatives:** XCTest throughout (verbose table-driven tests); Swift Testing with no exception
+(hand-rolled `ContinuousClock` timing, decided later under time pressure by a task that is not
+about testing).
+
+### D-012 — `make test` denies outbound network via `sandbox-exec`
+**2026-08-14** · M0-02 · **Status:** accepted
+
+`make test` runs `build-for-testing` unsandboxed, then `test-without-building` under
+`Scripts/test-sandbox.sb`, which denies IP traffic while leaving unix-domain sockets alone.
+
+**Why:** §9.4 asks for proof the suite makes no network calls, which running offline does not
+provide. Nothing calls the network yet, so the mechanism's entire value is catching the M4
+connector task that adds a live call later — it has to outlive this PR. It is `make test` itself
+rather than an opt-in `make test-offline` because D-008 already showed what an unenforced gate is
+worth, and §9.5 step 4 says `make test`.
+**Alternatives:** a `URLProtocol` tripwire inside the bundle (misses sessions with custom
+`protocolClasses`, and raw sockets — it enforces a convention, not a boundary); architectural
+enforcement plus one manual check (the criterion becomes a claim in a PR body rather than a gate
+that keeps working).
+
+**The limit, found while proving it works:** the deny is genuine at the OS level — under
+`sandbox-exec`, `curl` cannot connect — but it stops connections, not reads of an answer already
+held locally. The verification probe first *passed* under the sandbox, in 0.007s, because the
+xctest runner's `URLCache` (`~/Library/Caches/com.apple.dt.xctest.tool`) had been warmed by the
+earlier unsandboxed run; clearing that cache and re-running, with no change to the profile or the
+Makefile, produced the expected clean failure. So a cacheable GET served from a warm cache will
+not trip this gate. It catches the connection an M4 connector opens, which is the case it exists
+for; do not read a green `make test` as proof that no code path *wanted* the network.
+
+### D-013 — swift-format owns layout, SwiftLint owns semantics
+**2026-08-14** · M0-02 · **Status:** accepted
+
+`make lint` runs `swiftlint --strict`. `.swiftlint.yml` disables the rules swift-format governs.
+`make format` uses `xcrun swift-format` from the Xcode toolchain, not a Homebrew formula.
+
+**Why:** both tools have layout opinions, and two authoritative tools produce a loop where `make
+format` leaves a clean diff that `make lint` still rejects, with no indication which to believe.
+`--strict` is what makes §9.5 step 4 real — without it the gate passes on code carrying
+warnings; the cost is that a false positive needs an explicit disable comment, which a reviewer
+sees in the diff. Sourcing the formatter from `xcrun` adds no `make bootstrap` dependency and
+tracks the compiler §9.1 already constrains.
+**Alternatives:** SwiftLint authoritative with format advisory (reintroduces the loop);
+non-strict linting (acceptance criterion #3 would hold only for error-level rules, and the
+promised later tightening is exactly the task that never gets scheduled).
+
+### D-014 — `make test` regenerates the project unconditionally; `build` does not
+**2026-08-14** · M0-02 · **Status:** accepted
+
+`test` depends on the phony `generate` target, so every `make test` runs `xcodegen` first.
+`build` and `release` keep the cheaper mtime rule, where the `.pbxproj` is remade only when
+`project.yml` or a `.swift` source is newer than it.
+
+**Why:** XcodeGen writes every source file into the `.pbxproj` at generation time, so a newly
+added `.swift` file is invisible to `xcodebuild` until the project is regenerated. The original
+rule (`$(PBXPROJ): project.yml`) regenerated only when the manifest changed, which let `make
+test` pass green while never compiling a newly added test file — demonstrated by adding a test
+that asserts false and watching `make test` exit 0. The defect originated in M0-01, not M0-02.
+The fix came in two parts: source files became prerequisites of the `.pbxproj` rule, and then
+`test` was moved onto the phony `generate` target, because GNU Make 3.81 compares whole seconds,
+so a source file created in the same second as the last generation counts as up to date. That
+was not theoretical — it produced a false green on the first post-fix run. The asymmetry with
+`build` is the point rather than an inconsistency: a source file missing from a *build* fails
+loudly at compile time, whereas a test file missing from a *test run* passes green having never
+run. The measured price is ~0.06s on a ~2.2s `make test` (~3%). The named side effect is that
+`make test` rewrites `Steno.xcodeproj` on every run, which can disturb an open Xcode GUI session
+— accepted because §9.2 makes the GUI optional, never required. A side benefit: deleting a test
+file no longer needs a manual `make generate` first.
+**Alternatives:** leaving `test` on the mtime rule (cheaper, but its whole-second granularity is
+the failure mode above, and for a gate a slip is a silent green); regenerating unconditionally
+for `build` and `release` too (pays the same cost and rewrites the project on every build to
+prevent a failure that would have been loud anyway).
+
 ---
 
 ## Open — decided by the task that owns them
@@ -154,7 +257,6 @@ its PR body, and adds an entry above.
 
 | # | Question | Owning task |
 |---|---|---|
-| O-1 | Swift Testing or XCTest? Swift Testing ships with the Xcode 16 floor §9.1 already requires, and suits the table-driven tests in M1-01 and M2.5-02 | `M0-02` |
 | O-3 | Where the SwiftData store file lives — needed by M2.5-03's Replace mode and §8's "delete my data" | `M0-04` |
 | O-4 | What updates `modifiedAt`, exactly — M2.5-02's conflict resolution inherits any ambiguity | `M0-03` |
 | O-5 | Where "last-used project" is stored, and its behavior on first ever launch | `M1-02` |
