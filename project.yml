@@ -70,8 +70,9 @@ targets:
         CURRENT_PROJECT_VERSION: "1"
 
   # No TEST_HOST, deliberately: an unhosted bundle runs under the xctest
-  # runner with no NSApplication and no window server, which is what lets
-  # `make test` pass over SSH (§9.4). Do not add a host app.
+  # runner with no NSApplication and no window server, which is what §9.4's
+  # headless requirement asks for (D-010). Do not add a host app. Running the
+  # suite over SSH needs more than the bundle — see README's caveat.
   StenoTests:
     type: bundle.unit-test
     platform: macOS

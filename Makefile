@@ -147,9 +147,9 @@ run: build ## Kill any running instance, build, and launch
 # ID round-trips — but confining the build system too would produce failures
 # that are hard to attribute, and the build is not what §9.4 is about.
 #
-# This IS `make test`, not an opt-in `make test-offline`. D-008's lesson was
-# that a gate agents can skip is a gate agents skip; §9.5 step 4 says
-# `make test`.
+# This IS `make test`, not an opt-in `make test-offline`. D-008 already showed
+# what an unenforced gate is worth, and an opt-in gate is unenforced by
+# construction; §9.5 step 4 says `make test`.
 #
 # Depends on the phony `generate`, not on $(PBXPROJ), so the gate can never run
 # against a stale project: build and test carry asymmetric risk. A source file

@@ -184,17 +184,14 @@ about testing).
 **2026-08-14** · M0-02 · **Status:** accepted
 
 `make test` runs `build-for-testing` unsandboxed, then `test-without-building` under
-`Scripts/test-sandbox.sb`, which denies IP traffic while leaving unix-domain sockets alone.
+`Scripts/test-sandbox.sb`. Only the outbound rule is filtered — to `remote ip "*:*"`, so the
+runner's own unix-domain IPC keeps working; inbound and bind are denied outright.
 
 **Why:** §9.4 asks for proof the suite makes no network calls, which running offline does not
 provide. Nothing calls the network yet, so the mechanism's entire value is catching the M4
 connector task that adds a live call later — it has to outlive this PR. It is `make test` itself
 rather than an opt-in `make test-offline` because D-008 already showed what an unenforced gate is
 worth, and §9.5 step 4 says `make test`.
-**Alternatives:** a `URLProtocol` tripwire inside the bundle (misses sessions with custom
-`protocolClasses`, and raw sockets — it enforces a convention, not a boundary); architectural
-enforcement plus one manual check (the criterion becomes a claim in a PR body rather than a gate
-that keeps working).
 
 **The limit, found while proving it works:** the deny is genuine at the OS level — under
 `sandbox-exec`, `curl` cannot connect — but it stops connections, not reads of an answer already
@@ -204,6 +201,11 @@ earlier unsandboxed run; clearing that cache and re-running, with no change to t
 Makefile, produced the expected clean failure. So a cacheable GET served from a warm cache will
 not trip this gate. It catches the connection an M4 connector opens, which is the case it exists
 for; do not read a green `make test` as proof that no code path *wanted* the network.
+
+**Alternatives:** a `URLProtocol` tripwire inside the bundle (misses sessions with custom
+`protocolClasses`, and raw sockets — it enforces a convention, not a boundary); architectural
+enforcement plus one manual check (the criterion becomes a claim in a PR body rather than a gate
+that keeps working).
 
 ### D-013 — swift-format owns layout, SwiftLint owns semantics
 **2026-08-14** · M0-02 · **Status:** accepted

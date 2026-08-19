@@ -152,14 +152,16 @@ Steno/            application — SwiftUI views and @main, nothing else
 StenoTests/       unhosted unit-test bundle; headless, network denied  (exists, M0-02)
 Scripts/
   test-sandbox.sb sandbox profile used by `make test` (§9.4)  (exists, M0-02)
-project.yml       XcodeGen manifest — the .xcodeproj is generated and gitignored (§9.1)
-Makefile          the only entry point you need (§9.2)
+.swiftlint.yml    SwiftLint contract — semantics and naming (D-013)   (exists, M0-02)
+.swift-format     formatter config — layout (D-013)                   (exists, M0-02)
+project.yml       XcodeGen manifest — the .xcodeproj is generated and gitignored (§9.1)  (exists)
+Makefile          the only entry point you need (§9.2)                                   (exists)
 ```
 
 `Features/` is the one place the split is visible in daily work: a feature's **view models go in
 `StenoKit/Features/<Feature>/`** and its **views in `Steno/Features/<Feature>/`**. That is not
-tidiness — §2's rule 2 says view models mediate between views and the store *on testability
-grounds* (§9.4), and a view model in the app target is a view model no test can reach.
+tidiness — ARCHITECTURE §2's rule 2 says view models mediate between views and the store *on
+testability grounds* (§9.4), and a view model in the app target is a view model no test can reach.
 
 Split by responsibility rather than by technical layer: things that change together live
 together. Prefer smaller focused files — a file you can hold in your head at once is one you can

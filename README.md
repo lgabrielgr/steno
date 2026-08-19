@@ -64,8 +64,10 @@ code that does belongs in the `Steno` target, which the tests do not link
 properties of the session rather than of the suite: the Homebrew tools on `PATH`
 (a non-interactive shell drops `/opt/homebrew/bin`, and `preflight` then reports
 a missing `xcodegen`), and an unlocked login keychain for signing — a Background
-session leaves it locked, so `codesign` fails with `errSecInternalComponent`
-unless you pass `CODE_SIGN_IDENTITY=-` to sign ad-hoc.
+session leaves it locked, so `codesign` fails with `errSecInternalComponent`.
+`CODE_SIGN_IDENTITY=-` gets that one-off test run through, but never for
+`make build`/`make run` and never in `Local.xcconfig`: ad-hoc signing is a
+new identity every build, which costs you the Accessibility grant (§9.3).
 
 `make run` prints a launch line to the terminal, but that is a plain `print` —
 everything logged through `os.Log` goes to the unified logging system and never
