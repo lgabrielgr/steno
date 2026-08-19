@@ -1,4 +1,5 @@
 import Darwin  // fflush/stdout — explicit rather than transitively via SwiftUI
+import StenoKit
 import SwiftUI
 
 @main

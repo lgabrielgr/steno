@@ -131,30 +131,41 @@ the AI path is unavailable — because §7.4 makes producing *some* report a P0 
 
 ## 5. Where code lives
 
-Landed by M0-01 (D-006, closing O-2): `Steno/App/`, `Steno/Steno.entitlements`, `project.yml`, and
-`Makefile` all exist. The remaining `Steno/` subdirectories are forward-looking, listed with the
-task that adds them:
+Three targets, and which one a file belongs to is decided by a single test: **if it cannot be
+tested without a window server, it does not belong in `Steno/`** (D-010, amending D-006).
 
 ```
-Steno/
-  App/            StenoApp.swift, ContentView.swift, Logging.swift  (exists)
-  Steno.entitlements                                                (exists)
-  Models/         SwiftData models, enums          (M0-03)
-  Persistence/    container, store config           (M0-04)
-  Capture/        capture core, ref extraction      (M1-01, M1-02)
-  Report/         window computation, renderers     (M2-01, M2-02)
-  Portability/    export, import, merge             (M2.5)
-  AI/             AIProvider, AnthropicProvider     (M3)
-  Sources/        SourceConnector, Jira, Confluence, MCP  (M4, M5)
-  Features/       views + view models, by feature
-Tests/            mirrors the above; headless, no network
+StenoKit/         framework — everything testable
+  Support/        Logging.swift                          (exists, M0-02)
+  Models/         SwiftData models, enums                (M0-03)
+  Persistence/    container, store config                (M0-04)
+  Capture/        capture core, ref extraction           (M1-01, M1-02)
+  Report/         window computation, renderers          (M2-01, M2-02)
+  Portability/    export, import, merge                  (M2.5)
+  AI/             AIProvider, AnthropicProvider          (M3)
+  Sources/        SourceConnector, Jira, Confluence, MCP (M4, M5)
+  Features/       view models, by feature
+Steno/            application — SwiftUI views and @main, nothing else
+  App/            StenoApp.swift, ContentView.swift      (exists)
+  Features/       views, by feature — paired with StenoKit/Features/
+  Steno.entitlements                                     (exists)
+StenoTests/       unhosted unit-test bundle; headless, network denied  (exists, M0-02)
+Scripts/
+  test-sandbox.sb sandbox profile used by `make test` (§9.4)  (exists, M0-02)
+.swiftlint.yml    SwiftLint contract — semantics and naming (D-013)   (exists, M0-02)
+.swift-format     formatter config — layout (D-013)                   (exists, M0-02)
 project.yml       XcodeGen manifest — the .xcodeproj is generated and gitignored (§9.1)  (exists)
 Makefile          the only entry point you need (§9.2)                                   (exists)
 ```
 
+`Features/` is the one place the split is visible in daily work: a feature's **view models go in
+`StenoKit/Features/<Feature>/`** and its **views in `Steno/Features/<Feature>/`**. That is not
+tidiness — ARCHITECTURE §2's rule 2 says view models mediate between views and the store *on
+testability grounds* (§9.4), and a view model in the app target is a view model no test can reach.
+
 Split by responsibility rather than by technical layer: things that change together live
-together. Prefer smaller focused files — a file you can hold in your head at once is one you
-can edit reliably.
+together. Prefer smaller focused files — a file you can hold in your head at once is one you can
+edit reliably.
 
 ---
 

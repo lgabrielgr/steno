@@ -1,0 +1,33 @@
+# The lint contract for every PR after M0-02 (REQUIREMENTS.md §9.5 step 4).
+#
+# Division of labor: swift-format owns layout, SwiftLint owns semantics and
+# naming. Both tools have opinions about whitespace, and if both are
+# authoritative the failure mode is an agent running `make format`, seeing a
+# clean diff, and still failing `make lint` with no indication which tool to
+# believe. See DECISIONS.md D-013.
+
+# Hand-kept in sync with the directory list in the Makefile's `format` target.
+# Drift here is quiet: swiftlint only complains when *every* entry is stale, so
+# a new top-level source directory that reaches one list and not the other is
+# silently unlinted or unformatted.
+included:
+  - Steno
+  - StenoKit
+  - StenoTests
+
+excluded:
+  - .build
+
+# swift-format's territory — see .swift-format
+disabled_rules:
+  - line_length
+  - trailing_whitespace
+  - vertical_whitespace
+
+# Deliberately modest. Rules are cheap to add later against real code and
+# expensive to remove once 34 tasks have been written under them.
+opt_in_rules:
+  - empty_count
+  - explicit_init
+  - first_where
+  - force_unwrapping

@@ -10,8 +10,8 @@ import OSLog
 /// separate `print`. To watch it, in another terminal:
 ///
 ///     log stream --predicate 'subsystem == "com.lgabrielgr.steno"'
-enum Log {
-    static let subsystem = "com.lgabrielgr.steno"
+public enum Log {
+    public static let subsystem = "com.lgabrielgr.steno"
 
-    static let app = Logger(subsystem: subsystem, category: "app")
+    public static let app = Logger(subsystem: subsystem, category: "app")
 }

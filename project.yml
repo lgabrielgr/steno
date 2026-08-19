@@ -28,6 +28,23 @@ settings:
     SWIFT_VERSION: "6.0"
 
 targets:
+  # Everything testable lives here, not in the app target. A macOS unit-test
+  # bundle that runs headless (§9.4) cannot be hosted by an app — the host
+  # would launch NSApplication and need a window server — and an unhosted
+  # bundle cannot link an application target. A framework is what both the app
+  # and the tests can link. See DECISIONS.md D-010.
+  StenoKit:
+    type: framework
+    platform: macOS
+    sources:
+      - path: StenoKit
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.lgabrielgr.steno.kit
+        PRODUCT_NAME: StenoKit
+        GENERATE_INFOPLIST_FILE: YES
+        SKIP_INSTALL: YES
+
   Steno:
     type: application
     platform: macOS
@@ -37,6 +54,10 @@ targets:
         # XcodeGen would also copy the file into the bundle as a resource.
         excludes:
           - "**/*.entitlements"
+    dependencies:
+      - target: StenoKit
+        embed: true
+        codeSign: true
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.lgabrielgr.steno
@@ -48,6 +69,27 @@ targets:
         MARKETING_VERSION: "0.1.0"
         CURRENT_PROJECT_VERSION: "1"
 
+  # No TEST_HOST, deliberately: an unhosted bundle runs under the xctest
+  # runner with no NSApplication and no window server, which is what §9.4's
+  # headless requirement asks for (D-010). Do not add a host app. Running the
+  # suite over SSH needs more than the bundle — see README's caveat.
+  StenoTests:
+    type: bundle.unit-test
+    platform: macOS
+    sources:
+      - path: StenoTests
+    dependencies:
+      - target: StenoKit
+        embed: true
+        codeSign: true
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.lgabrielgr.steno.tests
+        GENERATE_INFOPLIST_FILE: YES
+        LD_RUNPATH_SEARCH_PATHS:
+          - $(inherited)
+          - "@loader_path/../Frameworks"
+
 # Declared explicitly, not left to Xcode's autocreate: `xcodebuild -scheme`
 # needs a *shared* scheme on disk, and an autocreated one lands in xcuserdata/,
 # which is gitignored — a clean checkout would fail in exactly the way this
@@ -57,5 +99,10 @@ schemes:
     build:
       targets:
         Steno: all
+        StenoTests: [test]
     run:
       config: Debug
+    test:
+      config: Debug
+      targets:
+        - StenoTests

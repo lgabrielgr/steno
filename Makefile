@@ -19,7 +19,7 @@ XCCONFIG := Local.xcconfig
 TOOLS    := xcodegen xcbeautify swiftlint
 
 .DEFAULT_GOAL := help
-.PHONY: help bootstrap preflight clean generate build run release
+.PHONY: help bootstrap preflight clean generate build run release test lint format
 
 help: ## Show this help
 	@echo "Steno — make targets:"
@@ -94,12 +94,31 @@ preflight:
 	@grep -qE '^[[:space:]]*DEVELOPMENT_TEAM[[:space:]]*=[[:space:]]*[^[:space:]/]' $(XCCONFIG) \
 	  || { printf '%s\n' "$$MSG_NO_TEAM"; exit 1; }
 
-# `build` depends on this FILE, which depends on project.yml: edit the manifest
-# and the project regenerates; leave it alone and generation is skipped. This is
-# what makes building a stale configuration structurally impossible.
+# XcodeGen enumerates the source directories at generation time and writes every
+# file into the .pbxproj, so a newly added .swift file is invisible to xcodebuild
+# until the project is regenerated. Depending only on project.yml meant `make test`
+# passed green while never compiling a new test file — the same class of
+# decorative-gate failure as D-008, by a different mechanism (see D-014).
+#
+# This mtime rule serves `build` and `release` only. `test` regenerates
+# unconditionally instead (see that target) — Make compares whole seconds, so a
+# file created in the same second as the last generation slips through this rule,
+# and for the gate a slip is a silent green.
+#
+# Known limits of this rule, accepted for `build`: a *deleted* source file does
+# not trigger regeneration, but the stale .pbxproj reference then fails the build
+# loudly, which is the safe direction; a source path containing a space would
+# split this prerequisite list; non-Swift sources (resources, asset catalogs) are
+# not covered — add them here when the project grows any.
+SOURCES := $(shell find Steno StenoKit StenoTests -name '*.swift' 2>/dev/null)
+
+# `build` depends on this FILE, which depends on the manifest and the sources:
+# change either and the project regenerates; leave them alone and generation is
+# skipped. This is what makes building a stale configuration structurally
+# impossible.
 # preflight is order-only (|) — a phony prerequisite always counts as newer,
 # which would regenerate on every single build and defeat the point.
-$(PBXPROJ): project.yml | preflight
+$(PBXPROJ): project.yml $(SOURCES) | preflight
 	xcodegen generate
 
 generate: preflight ## Regenerate Steno.xcodeproj from project.yml
@@ -108,6 +127,8 @@ generate: preflight ## Regenerate Steno.xcodeproj from project.yml
 APP := $(DERIVED)/Build/Products/Debug/Steno.app
 BIN := $(APP)/Contents/MacOS/Steno
 XCB := xcodebuild -project $(PROJECT) -scheme $(SCHEME) -derivedDataPath $(DERIVED)
+DEST := -destination 'platform=macOS'
+SANDBOX := Scripts/test-sandbox.sb
 
 build: preflight $(PBXPROJ) ## Debug build into .build/
 	$(XCB) -configuration Debug build | xcbeautify
@@ -120,3 +141,50 @@ release: preflight $(PBXPROJ) ## Release build of the .app bundle
 run: build ## Kill any running instance, build, and launch
 	pkill -x Steno || true
 	$(BIN)
+
+# Two phases on purpose. The build is not sandboxed: it needs no network
+# either — D-007 declined `-allowProvisioningUpdates` precisely to avoid Apple
+# ID round-trips — but confining the build system too would produce failures
+# that are hard to attribute, and the build is not what §9.4 is about.
+#
+# This IS `make test`, not an opt-in `make test-offline`. D-008 already showed
+# what an unenforced gate is worth, and an opt-in gate is unenforced by
+# construction; §9.5 step 4 says `make test`.
+#
+# Depends on the phony `generate`, not on $(PBXPROJ), so the gate can never run
+# against a stale project: build and test carry asymmetric risk. A source file
+# missing from a *build* fails at compile time, but only once something
+# references it; a test file missing from a *test run* passes green having never
+# run, and nothing surfaces that ever. Regenerating here covers both — the scheme
+# marks the app buildForTesting, so `make test` rebuilds all three targets, and
+# the §9.5 triad as a whole cannot skip a file even where `build` alone could.
+# The price is one xcodegen pass, measured at ~0.06s on a ~2.2s `make test`.
+# Rationale and the rejected alternatives: D-014.
+test: preflight generate ## Unit tests — headless, network denied
+	$(XCB) -configuration Debug $(DEST) build-for-testing | xcbeautify
+	sandbox-exec -f $(SANDBOX) \
+	  $(XCB) -configuration Debug $(DEST) test-without-building | xcbeautify
+
+# The swiftlint check lives here rather than in `preflight`, which gates
+# build/run/release — none of which should start requiring a linter.
+#
+# --strict promotes warnings to errors. Without it, `make lint` passes on code
+# carrying accumulated warnings and §9.5 step 4 stops meaning anything. The
+# cost is that a genuine false positive needs an explicit
+# `// swiftlint:disable:next <rule>` — which shows up in the diff, where a
+# reviewer sees it. That is intended.
+lint: ## SwiftLint — warnings are errors
+	@command -v swiftlint >/dev/null || { \
+	  echo "error: swiftlint not found. Run: make bootstrap"; exit 1; }
+	swiftlint --strict
+
+# swift-format ships inside the Xcode toolchain, so this adds no dependency to
+# `make bootstrap` and its version tracks the compiler §9.1 already pins.
+#
+# The directory list below is the same one `.swiftlint.yml` carries in
+# `included:` — add a new top-level source directory to both, or it goes
+# unformatted or unlinted with nothing saying so.
+format: ## swift-format, in place
+	@xcrun --find swift-format >/dev/null 2>&1 || { \
+	  echo "error: swift-format not found in the Xcode toolchain."; exit 1; }
+	xcrun swift-format --in-place --recursive Steno StenoKit StenoTests

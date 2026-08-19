@@ -1,0 +1,17 @@
+;; Confines `xcodebuild test-without-building` so a stray network call fails
+;; the run instead of passing quietly (REQUIREMENTS.md §9.4, acceptance
+;; criterion #2 of docs/tasks/M0-02-test-lint-harness.md).
+;;
+;; (allow default) then selective denial, rather than deny-by-default:
+;; xcodebuild spawns processes, reads DerivedData, and performs mach lookups,
+;; and enumerating all of that would produce a profile that breaks on the next
+;; Xcode update for reasons unrelated to networking.
+;;
+;; The `remote ip` filter is deliberate. A bare (deny network*) would also
+;; block unix-domain sockets, which the test runner's own IPC uses — the run
+;; would fail for the wrong reason and look like a working gate.
+(version 1)
+(allow default)
+(deny network-outbound (remote ip "*:*"))
+(deny network-inbound)
+(deny network-bind)
