@@ -23,6 +23,12 @@ disabled_rules:
   - line_length
   - trailing_whitespace
   - vertical_whitespace
+  # swift-format inserts a trailing comma on every multi-line collection
+  # literal it reformats (respectsExistingLineBreaks keeps the breaks; it adds
+  # the comma regardless). Left enabled, this rule reproduces the exact loop
+  # D-013 exists to prevent: `make format` reintroduces the comma that
+  # `make lint --strict` then rejects. Found in M0-03 (SourceRefTests.swift).
+  - trailing_comma
 
 # Deliberately modest. Rules are cheap to add later against real code and
 # expensive to remove once 34 tasks have been written under them.
