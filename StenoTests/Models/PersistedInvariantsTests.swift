@@ -25,12 +25,21 @@ func foreignKeyMatchesRelationship() throws {
 
     try context.save()
 
-    let fetched = try context.fetch(FetchDescriptor<SourceRef>())
+    // A fresh context, not the one that performed the insert, so the fetch
+    // below can only succeed by decoding what actually reached the store —
+    // Core Data fetches otherwise return pending in-context objects even if
+    // the save silently wrote nothing.
+    let reader = ModelContext(container)
+
+    let fetched = try reader.fetch(FetchDescriptor<SourceRef>())
     let persisted = try #require(fetched.first)
+
+    let fetchedTasks = try reader.fetch(FetchDescriptor<TaskItem>())
+    let persistedTask = try #require(fetchedTasks.first)
 
     #expect(persisted.taskID == persisted.task?.id)
     #expect(persisted.taskID == task.id)
-    #expect(task.sourceRefs?.count == 1)
+    #expect(persistedTask.sourceRefs?.count == 1)
 }
 
 @Test("§3.4: the dedup rule holds against a live context")
@@ -51,7 +60,11 @@ func dedupHoldsWithAContext() throws {
     }
     try context.save()
 
-    #expect(try context.fetch(FetchDescriptor<SourceRef>()).count == 1)
+    // The count assertion is the one that matters here, so it reads through a
+    // fresh context rather than the one that performed the inserts — see
+    // foreignKeyMatchesRelationship above for why.
+    let reader = ModelContext(container)
+    #expect(try reader.fetch(FetchDescriptor<SourceRef>()).count == 1)
 }
 
 @Test("models survive a save and fetch with their invariant fields intact")
@@ -79,12 +92,16 @@ func modelsRoundTrip() throws {
 
     try context.save()
 
-    let fetchedTask = try #require(try context.fetch(FetchDescriptor<TaskItem>()).first)
+    // A fresh context, not the one that performed the insert — see
+    // foreignKeyMatchesRelationship above for why.
+    let reader = ModelContext(container)
+
+    let fetchedTask = try #require(try reader.fetch(FetchDescriptor<TaskItem>()).first)
     #expect(fetchedTask.status == .done)
     #expect(fetchedTask.completedAt == completedAt)
     #expect(fetchedTask.statusChangedAt == completedAt)
 
-    let fetchedEvent = try #require(try context.fetch(FetchDescriptor<Event>()).first)
+    let fetchedEvent = try #require(try reader.fetch(FetchDescriptor<Event>()).first)
     #expect(fetchedEvent.isRedacted)
     #expect(fetchedEvent.body == "IN-PROGRESS → DONE")
 }
