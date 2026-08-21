@@ -36,7 +36,7 @@ func redactIsIdempotent() {
     #expect(event.isRedacted)
 }
 
-@Test("the initialiser is the only place a field but isRedacted is set")
+@Test("the initialiser is the only place any field except isRedacted is set")
 func initialiserPopulatesEveryField() {
     let id = UUID()
     let taskID = UUID()
