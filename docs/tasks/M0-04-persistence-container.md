@@ -38,6 +38,13 @@ container for tests.
   without launching the app. §9.4's headless requirement depends on this.
 - Decide and record where the store file lives — this becomes relevant at M2.5-03, whose
   Replace mode must wipe it, and at §8's "delete my data".
+- **Inherited from M0-03:** the test bundle carries two parallel hard-coded model lists —
+  `stenoModelTypes()` in `StenoTests/Models/TestContainer.swift` and `entityNames` in
+  `StenoTests/Models/SchemaConformanceTests.swift` — with nothing cross-checking them. A sixth
+  model added to the first but not the second silently skips every §6/§3 conformance gate.
+  Suggested fix, alongside this task's own check that the shipped container registers every
+  model: derive `entityNames` from `Schema(stenoModelTypes()).entities.map(\.name)` and assert
+  `Set(entityNames) == Set(expectedAttributes.keys)`.
 - Do not add a migration plan yet, but do not do anything that makes adding one hard. The
   schema is fresh as of M0-03; the first real migration risk arrives whenever a field is added
   after the user has live data.

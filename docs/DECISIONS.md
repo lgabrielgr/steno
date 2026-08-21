@@ -258,6 +258,45 @@ the failure mode above, and for a gate a slip is a silent green); regenerating u
 for `build` and `release` too (pays the same cost and rewrites the project on every build to
 prevent a failure that would have been loud anyway).
 
+### D-015 — `modifiedAt` is stamped only by the fields it arbitrates
+**2026-08-19** · M0-03 · **Status:** accepted — closes O-4
+
+`modifiedAt` is written only by mutations to fields whose §10.1 conflict rule is "later
+`modifiedAt` wins": `Project.name`, `.colorHex`, `.jiraProjectKeys`, `.isArchived`, `.sortOrder`,
+`.reportCadence`, `.staleThresholdDays`; `TaskItem.title`, `.projectID`, `.isArchived`. Fields
+with their own authority never touch it — `status`, `statusChangedAt` and `completedAt` are
+derived from the event log, and `lastStandupAt` takes the later timestamp. `Project.lastStandupAt`
+is a plain `var` rather than a `private(set)` with a mutator, so this holds by construction.
+
+**Why:** `modifiedAt` is per *record*, not per field. Under a broad rule — every mutation stamps
+it — a machine that changes only a task's status still advances the record's timestamp, and at
+merge time that later stamp wins the *title* too, silently reverting a retitle made on the other
+machine. The append-only log makes that recoverable only by hand. The narrow rule keeps the
+timestamp attached to exactly the fields it arbitrates, and matches how §3.1 and §3.2 already word
+it: "last mutation of a mutable field (`name`, `colorHex`, …)".
+**Alternatives:** stamping on every mutation (the lost update above); per-field timestamps (exact
+at merge, but it contradicts §3.1/§3.2's field tables, grows the schema, and hands M2.5-02 more
+cases rather than fewer).
+
+### D-016 — `TaskItem`↔`SourceRef` carries both a relationship and the foreign key
+**2026-08-19** · M0-03 · **Status:** accepted
+
+`TaskItem.sourceRefs: [SourceRef]?` with `@Relationship(inverse: \SourceRef.task)`, alongside
+`SourceRef.taskID`. **`taskID` is authoritative**: export, import, and M2.5-02's merge read it,
+and a test asserts `ref.taskID == ref.task?.id` holds across a save and a reload through a
+separate `ModelContext`, so the assertion can only pass if the data actually reached the store —
+not merely that the issuing context still has the objects registered in memory. Every other link
+in the domain — `Event.taskID`, `TaskItem.projectID`, `StandupReport.projectID` — is a UUID
+foreign key with no relationship.
+
+**Why:** §3.2's field table lists `sourceRefs` as a relationship while §3.4 gives `SourceRef` its
+own `taskID`, and the M0-03 task file requires UUID foreign keys because merge-by-UUID depends on
+them. Both were kept, at the user's direction, for call-site ergonomics. The cost is that one fact
+has three representations — `taskID`, the relationship, and its CloudKit-required inverse — which
+is why the coherence test exists rather than a convention.
+**Alternatives:** `taskID` alone with no stored array (one source of truth, nothing for merge to
+reconcile, but it needs a §3.2 amendment and every reader of a task's refs pays for it).
+
 ---
 
 ## Open — decided by the task that owns them
@@ -268,10 +307,10 @@ its PR body, and adds an entry above.
 | # | Question | Owning task |
 |---|---|---|
 | O-3 | Where the SwiftData store file lives — needed by M2.5-03's Replace mode and §8's "delete my data" | `M0-04` |
-| O-4 | What updates `modifiedAt`, exactly — M2.5-02's conflict resolution inherits any ambiguity | `M0-03` |
 | O-5 | Where "last-used project" is stored, and its behavior on first ever launch | `M1-02` |
 | O-6 | Does the menu bar popover show in-progress tasks across all projects, or only the selected one? FR-1.2 doesn't say | `M1-04` |
 | O-7 | Whether integration *configuration* (site URLs, MCP definitions minus secrets) is exported by M2.5-01 or added by M4-04/M5-02 | `M2.5-01` |
+| O-8 | How import merges the two mutable boolean flags, `Event.isRedacted` and `StandupReport.isUndone` — §10.1's union-by-UUID default has no rule for them and neither model carries `modifiedAt` | `M2.5-02` |
 
 ## Product questions — not for agents to decide
 

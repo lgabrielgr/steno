@@ -137,7 +137,7 @@ tested without a window server, it does not belong in `Steno/`** (D-010, amendin
 ```
 StenoKit/         framework — everything testable
   Support/        Logging.swift                          (exists, M0-02)
-  Models/         SwiftData models, enums                (M0-03)
+  Models/         SwiftData models, enums                (exists, M0-03)
   Persistence/    container, store config                (M0-04)
   Capture/        capture core, ref extraction           (M1-01, M1-02)
   Report/         window computation, renderers          (M2-01, M2-02)

@@ -1,12 +1,13 @@
 # REQUIREMENTS.md — Steno
 
-**Status:** Draft v1.8
-**Date:** 2026-08-11
+**Status:** Draft v1.9
+**Date:** 2026-08-20
 **Audience:** Engineering agents in future sessions. This document is the source of truth for task generation and implementation.
 
 > **Steno** — a stenographer records what was said, verbatim, without editorializing. That is the product in one word: an accurate record of what you did, lightly organized, never embellished.
 
 **Changelog**
+- *v1.9* — Corrected §10.1's claim that events are immutable. They are append-only, but `Event.isRedacted` and `StandupReport.isUndone` are mutable flags, so a record present on both machines can still differ and union-by-UUID alone would drop a redaction. §10.1 now names the gap and routes the actual merge rule to `DECISIONS.md` O-8 (owner: M2.5-02); the mutable-field table's row count is corrected from "three" to four. Found while implementing M0-03.
 - *v1.8* — The task model's Swift type is named **`TaskItem`**, not `Task`, to avoid shadowing `_Concurrency.Task` (§3.2). Domain vocabulary is unchanged: prose, UI copy, and the export key `"tasks"` all still say "task". Updated §3, §3.2, and §10.1.
 - *v1.7* — Resolved nine internal contradictions and gaps found on first full read. First-run `windowStart` is now unambiguously 24h (§3.5 corrected to match FR-4). Undo (FR-4.1) and the note grace window (FR-2) are both defined as *redaction*, so the append-only invariant holds with no exceptions. `modifiedAt` added to `Project` and `Task` (§3.1, §3.2) as §10.1 already required. `SourceRef` promoted to a first-class model with `id` and an export array (§3.4, §10.1, §10.2). §7.3 gains a second output schema for `periodic` cadence. Stale threshold clarified as global default + per-project override (FR-6). Project facts fixed in §9.1 (bundle ID `com.lgabrielgr.steno`, macOS 14.0 floor). Vestigial CloudKit purge clause removed from §8.
 - *v1.6* — Added §9.5 Version Control Workflow (branch-per-task, PR required, never commit to `main`) and §9.6 mechanical enforcement via branch protection. Added the rule to §13 and to M0.
@@ -664,7 +665,9 @@ This is a first-class feature and, since sync is cancelled (D1, §6.1), **the on
 
 The critical design decision, and the append-only model (§3.3) makes it nearly free.
 
-**Import defaults to a merge: union by UUID.** Every record already carries a stable `id`, and events are immutable — so an event either exists on the target machine or it doesn't. There is no such thing as a "changed event" to reconcile.
+**Import defaults to a merge: union by UUID.** Every record already carries a stable `id`, so a record either exists on the target machine or it doesn't, and the append-only log (§3.3) means an event's *content* is never rewritten — there is no such thing as an edited event body to reconcile.
+
+**But append-only is not immutable.** `Event.isRedacted` and `StandupReport.isUndone` are mutable flags on otherwise append-only records — flipped by FR-4.1's undo and by note correction (FR-2). A record present on **both** machines can therefore still differ. A merge implemented literally as "union by UUID, skip whatever is already present" would silently discard a redaction made on the other machine, and the redacted text would reappear in a stand-up summary. Neither model carries `modifiedAt`, so the "later `modifiedAt` wins" rule below does not reach them either. **How these two flags merge is an open question — see `DECISIONS.md` O-8, owned by M2.5-02.** Do not assume the union default covers them.
 
 Consequences that must hold:
 
@@ -674,7 +677,7 @@ Consequences that must hold:
 
 A separate, explicitly-labeled **Replace** mode wipes the local store first. It must require typed confirmation and must auto-export a backup beforehand. It exists for restoring a known-good snapshot, not for routine transfer.
 
-**Mutable-field conflict rules.** Three fields aren't append-only and need deterministic resolution:
+**Mutable-field conflict rules.** These four groups of fields aren't append-only and need deterministic resolution (the two boolean flags above are a fifth case, still open under O-8):
 
 | Field | Rule | Why |
 |---|---|---|
