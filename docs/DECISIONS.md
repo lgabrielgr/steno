@@ -310,6 +310,7 @@ its PR body, and adds an entry above.
 | O-5 | Where "last-used project" is stored, and its behavior on first ever launch | `M1-02` |
 | O-6 | Does the menu bar popover show in-progress tasks across all projects, or only the selected one? FR-1.2 doesn't say | `M1-04` |
 | O-7 | Whether integration *configuration* (site URLs, MCP definitions minus secrets) is exported by M2.5-01 or added by M4-04/M5-02 | `M2.5-01` |
+| O-8 | How import merges the two mutable boolean flags, `Event.isRedacted` and `StandupReport.isUndone` — §10.1's union-by-UUID default has no rule for them and neither model carries `modifiedAt` | `M2.5-02` |
 
 ## Product questions — not for agents to decide
 

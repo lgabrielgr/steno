@@ -21,6 +21,12 @@ public final class TaskItem {
     public private(set) var statusChangedAt: Date = Date.now
     public private(set) var completedAt: Date?
 
+    /// The task's external references (§3.2, D-016).
+    ///
+    /// `SourceRef.taskID` is the authoritative link — export, import, and
+    /// M2.5-02's merge read it, not this array. Appending here rewires
+    /// `ref.task` through the inverse but leaves `ref.taskID` alone, so keep
+    /// the two in step; see the coherence test in `PersistedInvariantsTests`.
     @Relationship(inverse: \SourceRef.task)
     public var sourceRefs: [SourceRef]? = []
 

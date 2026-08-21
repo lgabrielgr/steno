@@ -13,6 +13,14 @@ import SwiftData
 /// A feature that appears to need an event mutated actually needs a new event
 /// or a redaction (§13). Do not add a setter here.
 ///
+/// **This closes mutation, not deletion.** §3.3 forbids deleting an event as
+/// firmly as editing one, and nothing in this file prevents it:
+/// `ModelContext.delete(_:)` is available on any `PersistentModel`, and no
+/// amount of `private(set)` reaches it. The guard has to live where deletes are
+/// issued, so closing this seam belongs to whoever owns the context (M0-04).
+/// Until it does, a delete is a real bug that silently destroys the log every
+/// summary is derived from.
+///
 /// The link to the task is `taskID` alone — no relationship, deliberately, and
 /// asymmetrically with `SourceRef`. §3.2's field table lists `sourceRefs` and
 /// lists no `events`; see the M0-03 design doc §1.2 before "restoring

@@ -18,6 +18,14 @@ public final class SourceRef {
     /// asserting the two never disagree.
     public private(set) var taskID: UUID = UUID()
 
+    /// The same link as a SwiftData relationship, kept for call-site
+    /// ergonomics (D-016).
+    ///
+    /// `taskID` above is authoritative: set both, and never re-point this at a
+    /// task whose `id` differs. Nothing enforces that — `private(set)` could
+    /// not, because the inverse means `otherTask.sourceRefs?.append(self)`
+    /// rewires this anyway — so the coherence test ("design §1.1: taskID and
+    /// the relationship never disagree") is the only guard.
     public var task: TaskItem?
 
     public private(set) var kind: SourceRefKind = SourceRefKind.url
