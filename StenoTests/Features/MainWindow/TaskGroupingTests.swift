@@ -3,20 +3,15 @@ import Testing
 
 @testable import StenoKit
 
-// swiftlint:disable:next identifier_name
-private let t0 = Date(timeIntervalSince1970: 1_000_000)
+private let origin = Date(timeIntervalSince1970: 1_000_000)
 
-private func task(_ title: String, _ status: Status, changedAt: Date = t0) -> TaskItem {
-    let item = TaskItem(title: title, projectID: UUID(), createdAt: t0)
-    // setStatus has a guard that returns early if the status doesn't change.
-    // To ensure statusChangedAt is updated, we need to ensure a status transition.
-    // For .todo (the default), transition through another status first.
-    if status == .todo {
-        item.setStatus(.inProgress, at: changedAt)
-        item.setStatus(.todo, at: changedAt)
-    } else {
-        item.setStatus(status, at: changedAt)
-    }
+private func task(_ title: String, _ status: Status, changedAt: Date = origin) -> TaskItem {
+    // `createdAt` seeds `statusChangedAt`, and `setStatus` deliberately no-ops
+    // when the status is unchanged (§3.2) — so a `.todo` task only carries the
+    // instant we want if it is created at that instant. Passing `changedAt`
+    // here makes the helper correct for all four statuses without branching.
+    let item = TaskItem(title: title, projectID: UUID(), createdAt: changedAt)
+    item.setStatus(status, at: changedAt)
     return item
 }
 
@@ -29,14 +24,14 @@ func groupsUseFR3Order() {
         task("p", .inProgress),
     ]
 
-    let groups = TaskGrouping.groups(from: tasks, doneSince: t0.addingTimeInterval(-3600))
+    let groups = TaskGrouping.groups(from: tasks, doneSince: origin.addingTimeInterval(-3600))
 
     #expect(groups.map(\.status) == [.inProgress, .blocked, .todo, .done])
 }
 
 @Test("a status with no tasks produces no group")
 func emptyGroupsAreOmitted() {
-    let groups = TaskGrouping.groups(from: [task("t", .todo)], doneSince: t0)
+    let groups = TaskGrouping.groups(from: [task("t", .todo)], doneSince: origin)
 
     #expect(groups.count == 1)
     #expect(groups.first?.status == .todo)
@@ -44,9 +39,9 @@ func emptyGroupsAreOmitted() {
 
 @Test("DONE shows completions inside the cutoff and hides older ones")
 func doneHonoursCutoff() {
-    let cutoff = t0.addingTimeInterval(-24 * 3600)
-    let recent = task("recent", .done, changedAt: t0.addingTimeInterval(-3600))
-    let ancient = task("ancient", .done, changedAt: t0.addingTimeInterval(-30 * 3600))
+    let cutoff = origin.addingTimeInterval(-24 * 3600)
+    let recent = task("recent", .done, changedAt: origin.addingTimeInterval(-3600))
+    let ancient = task("ancient", .done, changedAt: origin.addingTimeInterval(-30 * 3600))
 
     let groups = TaskGrouping.groups(from: [recent, ancient], doneSince: cutoff)
 
@@ -60,9 +55,9 @@ func neverCompletedIsNotInDone() {
     // `completedAt` is nil for anything that has not been through
     // setStatus(.done), so the DONE filter must not admit it on the strength
     // of the cutoff alone.
-    let fresh = TaskItem(title: "fresh", projectID: UUID(), createdAt: t0)
+    let fresh = TaskItem(title: "fresh", projectID: UUID(), createdAt: origin)
 
-    let groups = TaskGrouping.groups(from: [fresh], doneSince: t0)
+    let groups = TaskGrouping.groups(from: [fresh], doneSince: origin)
 
     #expect(groups.map(\.status) == [.todo])
 }
@@ -80,10 +75,10 @@ func statusDisplayNames() {
 
 @Test("within a group, most recently touched comes first")
 func groupsSortByRecency() {
-    let older = task("older", .todo, changedAt: t0.addingTimeInterval(-7200))
-    let newer = task("newer", .todo, changedAt: t0.addingTimeInterval(-60))
+    let older = task("older", .todo, changedAt: origin.addingTimeInterval(-7200))
+    let newer = task("newer", .todo, changedAt: origin.addingTimeInterval(-60))
 
-    let groups = TaskGrouping.groups(from: [older, newer], doneSince: t0)
+    let groups = TaskGrouping.groups(from: [older, newer], doneSince: origin)
 
     #expect(groups[0].tasks.map(\.title) == ["newer", "older"])
 }
