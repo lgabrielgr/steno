@@ -297,6 +297,41 @@ is why the coherence test exists rather than a convention.
 **Alternatives:** `taskID` alone with no stored array (one source of truth, nothing for merge to
 reconcile, but it needs a §3.2 amendment and every reader of a task's refs pays for it).
 
+### D-017 — The store is `~/Library/Application Support/Steno/`, closing O-3
+**2026-08-21** · M0-04 · **Status:** accepted
+
+`StenoStore.defaultURL` is `~/Library/Application Support/Steno/Steno.store`, set through an
+explicit `ModelConfiguration(url:)`. `StenoStore.storeDirectory` — the *directory* — is public and
+is the unit M2.5-03's Replace mode and §8's "delete my data" remove. `live(at:)` creates that
+directory itself before opening the store.
+
+**Why:** an implicit default is a path both M2.5-03 and §8 would have to re-derive, and one Apple
+is free to change between releases. The directory rather than the file, because a SwiftData store
+is three files — `Steno.store`, `Steno.store-shm`, `Steno.store-wal` — and deleting the first
+alone strands the write-ahead log. The `createDirectory` call looks redundant and is not: Core
+Data *does* recover from a missing parent, but only after logging roughly 200 lines to stderr,
+including `Sandbox access to file-write-create denied` and `NSCocoaErrorDomain (512)`, which is
+what first launch would look like under `make run` (§9.2). No test can catch its removal — the
+container opens either way — so this entry is the guard.
+**Alternatives:** SwiftData's default location (less code; leaves two later features re-deriving
+an implicit path).
+
+### D-018 — A store that will not open shows a failure scene, not a crash or a fallback
+**2026-08-21** · M0-04 · **Status:** accepted
+
+`StenoApp` builds the container into a `Result` and switches the root scene: success gets
+`ContentView`, failure gets `StoreFailureView`, which names the store path and the underlying
+error and offers Quit.
+
+**Why:** Apple's `.modelContainer(for:)` traps, which reads as a crash to anyone not watching
+stderr — and a store that cannot open is the situation where the reason matters most. Falling back
+to an in-memory container was rejected outright: for a capture tool, accepting writes that
+evaporate at quit is worse than refusing to launch (§1.1), because the loss surfaces at the next
+stand-up. §13's "degradation ships with the feature" is scoped to network-dependent features
+(§7.4); it does not ask for a store that pretends to persist.
+**Alternatives:** `fatalError` with a logged reason (cheapest; invisible unless stderr is being
+watched). M0-05 inherits a root scene conditional on container construction, which is deliberate.
+
 ---
 
 ## Open — decided by the task that owns them
@@ -306,7 +341,6 @@ its PR body, and adds an entry above.
 
 | # | Question | Owning task |
 |---|---|---|
-| O-3 | Where the SwiftData store file lives — needed by M2.5-03's Replace mode and §8's "delete my data" | `M0-04` |
 | O-5 | Where "last-used project" is stored, and its behavior on first ever launch | `M1-02` |
 | O-6 | Does the menu bar popover show in-progress tasks across all projects, or only the selected one? FR-1.2 doesn't say | `M1-04` |
 | O-7 | Whether integration *configuration* (site URLs, MCP definitions minus secrets) is exported by M2.5-01 or added by M4-04/M5-02 | `M2.5-01` |
