@@ -86,11 +86,14 @@ public final class MainWindowModel: MainWindowActions {
     public func archive(projectID: UUID) {
         guard let project = projects.first(where: { $0.id == projectID }) else { return }
 
-        // Moved before the save so the window reloads once, not twice.
-        if selection == .project(projectID) { selection = .all }
-
         let stamp = now()
-        perform("archive the project") { project.setArchived(true, at: stamp) }
+        let saved = perform("archive the project") { project.setArchived(true, at: stamp) }
+
+        // Only after the save is known to have succeeded. `rollback()` can undo
+        // the `isArchived` mutation, but it cannot undo a selection change — so
+        // moving the selection first would leave a failed archive showing "All"
+        // while the project is still in the sidebar.
+        if saved, selection == .project(projectID) { selection = .all }
     }
 
     // MARK: - MainWindowActions
@@ -128,8 +131,13 @@ public final class MainWindowModel: MainWindowActions {
     ///
     /// `what` is an infinitive phrase — it is interpolated into both the log
     /// line and the user-facing message.
-    private func perform(_ what: String, _ mutation: () -> Void) {
+    ///
+    /// Returns whether the save succeeded, so callers can make follow-up state
+    /// changes conditional on it — `rollback()` restores the store, not the UI.
+    @discardableResult
+    private func perform(_ what: String, _ mutation: () -> Void) -> Bool {
         mutation()
+        var saved = true
         do {
             try context.save()
             lastError = nil
@@ -140,7 +148,9 @@ public final class MainWindowModel: MainWindowActions {
                 "could not \(what, privacy: .public): \(String(describing: error), privacy: .public)"
             )
             lastError = "Could not \(what). Your change was not saved."
+            saved = false
         }
         reload()
+        return saved
     }
 }
