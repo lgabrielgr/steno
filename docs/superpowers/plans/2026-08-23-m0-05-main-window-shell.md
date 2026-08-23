@@ -22,6 +22,7 @@
 - **The event log is append-only** (§3.3). This plan only ever *inserts* `Event` rows. Never mutate or delete one.
 - **No pagination, virtualization, search, or filter chips** (D18, FR-3). Under 20 live tasks. If you find yourself adding any of these, stop — they are excluded permanently, not deferred.
 - **This task displays status; it never mutates it.** Status changes are M1-05. The detail pane's status is a label, not a control.
+- **Tests must obtain their `ModelContext` via `ModelContext(container)`, never `container.mainContext`.** A `ModelContext` created from a container retains it; `mainContext` does not, so handing `mainContext` out of a helper leaves a dangling context and the next insert traps inside SwiftData. Production code is different and correct as written: `StenoApp` holds the container for the app's lifetime, so `MainWindowView` passing `container.mainContext` is safe.
 - New source directories are picked up automatically: XcodeGen's `sources:` entries are directory-recursive, and `.swiftlint.yml` already includes `Steno`, `StenoKit`, `StenoTests`. No manifest edit is needed for the new `Features/` folders.
 
 ## Verification status of the code in this plan
@@ -472,7 +473,13 @@ private let origin = Date(timeIntervalSince1970: 1_000_000)
 @MainActor
 private func makeModel() throws -> (MainWindowModel, ModelContext) {
     let container = try StenoStore.inMemory()
-    return (MainWindowModel(context: container.mainContext, now: { origin }), container.mainContext)
+    // `ModelContext(container)` retains its container. `container.mainContext`
+    // does NOT — so returning the main context from a helper leaves it
+    // dangling the moment the container goes out of scope, and the next
+    // insert/save traps inside SwiftData with EXC_BREAKPOINT. Every other
+    // test in this repo already uses this form; match it.
+    let context = ModelContext(container)
+    return (MainWindowModel(context: context, now: { origin }), context)
 }
 
 @MainActor
@@ -822,7 +829,13 @@ private let origin = Date(timeIntervalSince1970: 1_000_000)
 @MainActor
 private func makeModel() throws -> (MainWindowModel, ModelContext) {
     let container = try StenoStore.inMemory()
-    return (MainWindowModel(context: container.mainContext, now: { origin }), container.mainContext)
+    // `ModelContext(container)` retains its container. `container.mainContext`
+    // does NOT — so returning the main context from a helper leaves it
+    // dangling the moment the container goes out of scope, and the next
+    // insert/save traps inside SwiftData with EXC_BREAKPOINT. Every other
+    // test in this repo already uses this form; match it.
+    let context = ModelContext(container)
+    return (MainWindowModel(context: context, now: { origin }), context)
 }
 
 @MainActor
