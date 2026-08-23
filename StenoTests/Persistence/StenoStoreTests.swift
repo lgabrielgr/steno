@@ -74,8 +74,24 @@ private struct TemporaryStore {
         directory = nested ? root.appendingPathComponent("Steno", isDirectory: true) : root
     }
 
+    /// Deletes the directory, then asserts nothing survived.
+    ///
+    /// AC-2 says tests leave no artifacts on disk, so a cleanup that quietly
+    /// fails has to fail the test rather than pass it. `#expect` is what makes
+    /// that possible here: an error cannot escape a `defer` body, but a
+    /// recorded expectation does not need to escape anything.
+    ///
+    /// It asserts the outcome rather than the removal on purpose. A test that
+    /// fails before `live(at:)` runs never creates the directory, and asserting
+    /// on `removeItem` would then throw "no such file" — a second, spurious
+    /// failure masking the real one. "Nothing is left behind" is both what the
+    /// criterion actually says and true in that case.
     func remove() {
         try? FileManager.default.removeItem(at: root)
+        #expect(
+            !FileManager.default.fileExists(atPath: root.path),
+            "temp store artifact survived cleanup: \(root.path)"
+        )
     }
 }
 
