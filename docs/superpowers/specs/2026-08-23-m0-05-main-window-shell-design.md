@@ -79,9 +79,14 @@ testable with no setup at all:
 |---|---|---|
 | `ProjectSelection` | `enum`, `Hashable` | `.all` or `.project(UUID)` — the sidebar's selection type |
 | `TaskGrouping` | pure functions | `[TaskItem]` + a cutoff → `[TaskGroup]` in FR-3 order |
-| `ProjectPalette` | pure functions | `colorHex(forIndex:)` — a fixed palette that cycles |
+| `ProjectPalette` | pure functions | `hex(forIndex:)` — a fixed palette that cycles |
+| `Status+Display` | pure | `displayName` — FR-3's spelling of the four statuses |
 | `MainWindowActions` | `@MainActor` protocol | the actions the menu bar can invoke |
 | `MainWindowModel` | `@Observable @MainActor` | owns the context, the selection, and every mutation |
+
+`displayName` lives in `StenoKit` rather than in a view so the strings are assertable, and so
+M1-04's popover and M1-05's status control cannot invent a second spelling of the same four
+statuses.
 
 `TaskGrouping` and `ProjectPalette` are deliberately not methods on the model. The FR-3 ordering
 rule and the DONE cutoff are the two pieces of logic here worth testing exhaustively, and as free
@@ -109,6 +114,8 @@ public final class MainWindowModel: MainWindowActions {
     public var selection: ProjectSelection { didSet { reload() } }
     public var selectedTaskID: UUID?
     public var isPresentingNewProject: Bool
+    public var isPresentingNewTask: Bool
+    public var canCreateTask: Bool { get }        // false with no projects
 
     public init(context: ModelContext, now: @escaping () -> Date = Date.init)
 
@@ -116,8 +123,19 @@ public final class MainWindowModel: MainWindowActions {
     public func createTask(titled title: String)
     public func archive(projectID: UUID)
     public func reload()
+    public func dismissError()
+
+    // Lookups the views need, so no view has to query anything itself.
+    public func project(withID id: UUID) -> Project?
+    public func task(withID id: UUID) -> TaskItem?
+    public func events(forTaskID id: UUID) -> [Event]   // newest first, non-redacted
 }
 ```
+
+**How a title is typed**, which this document previously left open: ⌘N and ⌘⇧N both raise a small
+sheet — one focused field, Return commits, Esc cancels — sharing a single `TextEntrySheet`. That
+is §3.3's contract applied to both, rather than two spellings of the same interaction. M1-02
+replaces the task side when quick capture lands. The `isPresenting…` flags exist for that.
 
 `archive(projectID:)` is a model method and **not** a protocol action: it is invoked from a
 specific sidebar row's context menu rather than from the current selection, and FR-3's list of
@@ -297,18 +315,21 @@ StenoKit/Features/MainWindow/
   ProjectSelection.swift
   TaskGrouping.swift           TaskGroup + the pure grouping/ordering/cutoff logic
   ProjectPalette.swift
+  Status+Display.swift
   MainWindowActions.swift
   MainWindowModel.swift
 
 Steno/Features/MainWindow/
-  MainWindowView.swift         NavigationSplitView, .focusedSceneValue
+  MainWindowView.swift         NavigationSplitView, .focusedSceneValue, sheets
   SidebarView.swift            "All" + projects, context-menu Archive
   TaskListView.swift           grouped List, DONE in a collapsed DisclosureGroup
   TaskDetailView.swift         title, status label, timeline
-  NewProjectSheet.swift
+  TextEntrySheet.swift         shared by new-project and new-task
+  ProjectColor.swift           Color(projectHex:)
 
 Steno/App/
   MainWindowCommands.swift     new
+  FocusedValues+MainWindow.swift  new — the focused-value key
   StenoApp.swift               modified — builds the model, attaches .commands,
                                drops .modelContainer
   ContentView.swift            DELETED
