@@ -126,15 +126,27 @@ func doneHonoursCutoff() {
     #expect(groups[0].tasks.map(\.title) == ["recent"])
 }
 
-@Test("a DONE task with no completedAt is not shown")
-func doneWithoutCompletedAtIsHidden() {
-    // Reachable only through an import (§10.1) or a future bug; the filter
-    // must not crash or leak it into the window.
-    let orphan = TaskItem(title: "orphan", projectID: UUID(), createdAt: t0)
+@Test("a task that was never completed never appears in DONE")
+func neverCompletedIsNotInDone() {
+    // `completedAt` is nil for anything that has not been through
+    // setStatus(.done), so the DONE filter must not admit it on the strength
+    // of the cutoff alone.
+    let fresh = TaskItem(title: "fresh", projectID: UUID(), createdAt: t0)
 
-    let groups = TaskGrouping.groups(from: [orphan], doneSince: t0)
+    let groups = TaskGrouping.groups(from: [fresh], doneSince: t0)
 
     #expect(groups.map(\.status) == [.todo])
+}
+
+@Test("the four statuses render with FR-3's spelling")
+func statusDisplayNames() {
+    #expect(Status.inProgress.displayName == "IN-PROGRESS")
+    #expect(Status.blocked.displayName == "BLOCKED")
+    #expect(Status.todo.displayName == "TODO")
+    #expect(Status.done.displayName == "DONE")
+    // Every case is covered, so adding a fifth status breaks this test rather
+    // than silently rendering an unlabelled group. D11 says there is no fifth.
+    #expect(Status.allCases.count == 4)
 }
 
 @Test("within a group, most recently touched comes first")
