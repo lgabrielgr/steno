@@ -818,7 +818,7 @@ Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>"
 **Interfaces:**
 - Consumes: everything from Tasks 1 and 2.
 - Produces:
-  - `public private(set) var groups: [TaskGroup]` (declared in Task 2, populated here)
+  - `public private(set) var groups: [TaskGroup]` — **declared AND populated here.** Task 2 deliberately left it out, so this task adds the stored property as well as filling it.
   - `public func createTask(titled: String)`
   - `public func task(withID: UUID) -> TaskItem?`
   - `public func events(forTaskID: UUID) -> [Event]`
@@ -1004,9 +1004,15 @@ make test
 
 Expected: FAIL — `value of type 'MainWindowModel' has no member 'createTask'`.
 
-- [ ] **Step 3: Extend `reload()` to populate groups**
+- [ ] **Step 3: Declare `groups`, and extend `reload()` to populate it**
 
-In `StenoKit/Features/MainWindow/MainWindowModel.swift`, replace the `reload()` method written in Task 2 with:
+In `StenoKit/Features/MainWindow/MainWindowModel.swift`, first add the stored property alongside the existing `projects` and `lastError` declarations — Task 2 correctly did not declare it, so it does not exist yet:
+
+```swift
+    public private(set) var groups: [TaskGroup] = []
+```
+
+Then replace the `reload()` method written in Task 2 with:
 
 ```swift
     public func reload() {
