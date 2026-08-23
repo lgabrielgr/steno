@@ -20,6 +20,7 @@ import SwiftData
 @MainActor
 public final class MainWindowModel: MainWindowActions {
     public private(set) var projects: [Project] = []
+    public private(set) var groups: [TaskGroup] = []
     public private(set) var lastError: String?
 
     public var selection: ProjectSelection = .all {
@@ -48,10 +49,34 @@ public final class MainWindowModel: MainWindowActions {
 
     public func reload() {
         projects = fetchProjects()
+        groups = TaskGrouping.groups(from: fetchTasks(), doneSince: doneCutoff())
+
+        // A task that has scrolled out of the DONE window, or whose project was
+        // just archived, must not leave the detail pane showing a stale row.
+        if let id = selectedTaskID,
+            !groups.contains(where: { group in group.tasks.contains { $0.id == id } }) {
+            selectedTaskID = nil
+        }
     }
 
     public func project(withID id: UUID) -> Project? {
         projects.first { $0.id == id }
+    }
+
+    public func task(withID id: UUID) -> TaskItem? {
+        groups.lazy.flatMap(\.tasks).first { $0.id == id }
+    }
+
+    /// The task's timeline, newest first, excluding redacted events (§3.3).
+    ///
+    /// The exclusion is a property of this query rather than of each caller,
+    /// so M1-06's redaction cannot be forgotten by one of them.
+    public func events(forTaskID id: UUID) -> [Event] {
+        let descriptor = FetchDescriptor<Event>(
+            predicate: #Predicate { $0.taskID == id && !$0.isRedacted },
+            sortBy: [SortDescriptor(\.timestamp, order: .reverse)]
+        )
+        return (try? context.fetch(descriptor)) ?? []
     }
 
     private func fetchProjects() -> [Project] {
@@ -60,6 +85,40 @@ public final class MainWindowModel: MainWindowActions {
             sortBy: [SortDescriptor(\.sortOrder), SortDescriptor(\.name)]
         )
         return (try? context.fetch(descriptor)) ?? []
+    }
+
+    // Named placeholder, not stale debt; see M0-05 task 3 brief.
+    // swiftlint:disable:next todo
+    /// TODO(M2-01): FR-3 scopes DONE to the current report window, which is
+    /// computed from `project.lastStandupAt` (D8) and does not exist until
+    /// M2-01. That field stays nil until M2-03 ships the Copy action that
+    /// advances it, and FR-4 step 2 makes the first-run window 24 hours — so
+    /// for every state reachable today this returns the same answer.
+    private func doneCutoff() -> Date {
+        now().addingTimeInterval(-24 * 60 * 60)
+    }
+
+    /// Tasks for the current selection.
+    ///
+    /// The project filter is applied in memory rather than in the `#Predicate`
+    /// because it is a set-membership test against the visible projects, and
+    /// D18 caps the whole dataset under 20 live tasks — the fetch is the cost,
+    /// not the filter.
+    private func fetchTasks() -> [TaskItem] {
+        let visible = Set(projects.map(\.id))
+        let descriptor = FetchDescriptor<TaskItem>(predicate: #Predicate { !$0.isArchived })
+        let all = (try? context.fetch(descriptor)) ?? []
+
+        switch selection {
+        case .all:
+            // Archiving a project takes its tasks with it — otherwise
+            // archiving would not actually get a finished project out of the
+            // way, which is the whole point (§3.1).
+            return all.filter { visible.contains($0.projectID) }
+        case .project(let id):
+            guard visible.contains(id) else { return [] }
+            return all.filter { $0.projectID == id }
+        }
     }
 
     // MARK: - Writing
@@ -81,6 +140,40 @@ public final class MainWindowModel: MainWindowActions {
             )
         }
     }
+
+    public func createTask(titled title: String) {
+        let trimmed = title.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty, let projectID = targetProjectID() else { return }
+
+        let stamp = now()
+        perform("create the task") {
+            let task = TaskItem(title: trimmed, projectID: projectID, createdAt: stamp)
+            self.context.insert(task)
+            // §3.3's EventKind table: `created` is written when a task is
+            // created. A task without one is a hole in the append-only log —
+            // M2-01's gathering would skip it and M2.5-02's merge would reason
+            // from it. M1-02's capture service takes over this call site.
+            self.context.insert(
+                Event(taskID: task.id, timestamp: stamp, kind: .created, body: "Task created")
+            )
+        }
+    }
+
+    // Named placeholder, not stale debt; see M0-05 task 3 brief.
+    // swiftlint:disable todo
+    /// FR-1.4: never block on project selection.
+    ///
+    /// TODO(M1-02): the specified rule is "default to the last-used project",
+    /// which M1-02 owns along with the first-launch behaviour. Until then the
+    /// first project by `sortOrder` stands in — and the task row shows its
+    /// project, so the assignment is visible rather than silent.
+    private func targetProjectID() -> UUID? {
+        switch selection {
+        case .project(let id): id
+        case .all: projects.first?.id
+        }
+    }
+    // swiftlint:enable todo
 
     /// §3.1: archived projects are hidden, never deleted. There is no delete.
     public func archive(projectID: UUID) {
