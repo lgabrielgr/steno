@@ -48,8 +48,8 @@ something better than paper. **M2 is the true MVP; M6 is the finish line.**
 
 - [x] [M0-01](M0-01-build-system.md) — XcodeGen project, Makefile, stable signing; `make build` green — PR #5
 - [x] [M0-02](M0-02-test-lint-harness.md) — headless test target and SwiftLint; `make test`/`make lint` green
-- [ ] [M0-03](M0-03-domain-models.md) — the five SwiftData models, CloudKit-compatible
-- [ ] [M0-04](M0-04-persistence-container.md) — local store wiring; data survives relaunch
+- [x] [M0-03](M0-03-domain-models.md) — the five SwiftData models, CloudKit-compatible
+- [x] [M0-04](M0-04-persistence-container.md) — local store wiring; data survives relaunch
 - [ ] [M0-05](M0-05-main-window-shell.md) — three-column shell; create and list projects and tasks
 
 ### M1 — Capture

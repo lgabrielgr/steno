@@ -4,13 +4,16 @@ import Testing
 
 @testable import StenoKit
 
-private let entityNames = ["Project", "TaskItem", "Event", "SourceRef", "StandupReport"]
+// Derived, not transcribed: the shipped schema is the only declaration of which
+// models exist (StenoStore.models()). `shippedEntitiesMatchTheSpecTables` below
+// checks this list against the §3 tables in this file.
+private let entityNames = Schema(StenoStore.models()).entities.map(\.name)
 
 private func entity(named name: String) throws -> Schema.Entity {
-    let schema = Schema(stenoModelTypes())
+    let schema = Schema(StenoStore.models())
     return try #require(
         schema.entities.first { $0.name == name },
-        "no entity named \(name) — is it missing from stenoModelTypes()?"
+        "no entity named \(name) — is it missing from StenoStore.models()?"
     )
 }
 
@@ -115,4 +118,15 @@ func relationshipsMatchTheSpec(name: String) throws {
     let entity = try entity(named: name)
     let expected = try #require(expectedRelationships[name])
     #expect(Set(entity.relationshipsByName.keys) == Set(expected))
+}
+
+// The gate M0-04 adds. Before this, `entityNames` was a second hard-coded list:
+// a model present in one list and absent from the other skipped every check in
+// this file silently. Now the names are derived from the shipped schema and
+// checked against the transcribed §3 tables, so a new model either appears in
+// both or fails here.
+@Test("§6: the shipped entities are exactly the ones §3's tables describe")
+func shippedEntitiesMatchTheSpecTables() {
+    #expect(Set(entityNames) == Set(expectedAttributes.keys))
+    #expect(Set(entityNames) == Set(expectedRelationships.keys))
 }
