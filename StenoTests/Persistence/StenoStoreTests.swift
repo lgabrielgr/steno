@@ -122,7 +122,7 @@ func liveContainerRegistersEveryModel() throws {
     let registered = Set(container.schema.entities.map(\.name))
     let declared = Set(StenoStore.models().map { String(describing: $0) })
     #expect(registered == declared)
-    #expect(registered.count == 5)
+    #expect(registered.count == StenoStore.models().count)
 }
 
 // §2 (design): Core Data recovers from a missing parent on its own, but only

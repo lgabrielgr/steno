@@ -127,7 +127,7 @@ already headless, fast, and truer than a fake would be.
   are not a stable contract. AC-4 is therefore tested one level up, against the entitlements file
   (§7 test 5), which is what the criterion actually says.
 
-`models()` returns the five types registered in one `Schema`, built through a single named
+`models()` returns the five types registered in one `Schema`, built through a single
 configuration. That shape is what keeps a future `VersionedSchema` purely additive — no migration
 plan now, nothing here that makes one awkward.
 
