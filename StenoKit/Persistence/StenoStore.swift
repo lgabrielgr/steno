@@ -47,6 +47,32 @@ public enum StenoStore {
         get throws { try storeDirectory.appendingPathComponent("Steno.store") }
     }
 
+    /// The application's store, at `defaultURL` unless a URL is given.
+    ///
+    /// `URL?` rather than `URL = defaultURL` because a default argument cannot
+    /// be a throwing expression. Tests pass a temp directory; the app passes
+    /// nothing.
+    ///
+    /// **The `createDirectory` call is not redundant.** SwiftData does open a
+    /// store whose parent directory is missing — but by way of Core Data's
+    /// error-recovery path, which first logs roughly 200 lines to stderr,
+    /// including `Sandbox access to file-write-create denied` and
+    /// `NSCocoaErrorDomain (512)`. Nothing is broken, and the app works; but
+    /// `make run` streams stderr to the terminal (§9.2), so first launch on a
+    /// clean machine would look like a catastrophic failure. Removing this call
+    /// leaves every test green. See DECISIONS.md D-017.
+    public static func live(at url: URL? = nil) throws -> ModelContainer {
+        let storeURL = try url ?? defaultURL
+        try FileManager.default.createDirectory(
+            at: storeURL.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        return try ModelContainer(
+            for: Schema(models()),
+            configurations: ModelConfiguration(url: storeURL, cloudKitDatabase: .none)
+        )
+    }
+
     /// A store that exists only for the lifetime of the container.
     ///
     /// **Tests only.** Its configuration reports `/dev/null` as its url, which
