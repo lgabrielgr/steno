@@ -136,3 +136,9 @@ Icon?
 *.log
 .netrc
 tmp/
+
+# Agent scratch — subagent-driven-development workspaces
+#
+# Per-run ledgers, task briefs, and review packages. Working state for a
+# single execution session, never part of the deliverable.
+.superpowers/
