@@ -96,6 +96,20 @@ public final class MainWindowModel: MainWindowActions {
     ///
     /// `what` is an infinitive phrase, matching `perform`'s convention.
     private func fetch<T: PersistentModel>(_ descriptor: FetchDescriptor<T>, _ what: String) -> [T] {
+        fetchOrNil(descriptor, what) ?? []
+    }
+
+    /// As `fetch`, but `nil` on failure rather than `[]`.
+    ///
+    /// Display code cannot act on the difference — an empty list renders the
+    /// same either way — but a caller deriving *new* data from a read must not
+    /// treat "the read failed" as "there is nothing there". See
+    /// `createProject(named:)`, where conflating the two mints a project whose
+    /// `sortOrder` and colour collide with one already stored.
+    private func fetchOrNil<T: PersistentModel>(
+        _ descriptor: FetchDescriptor<T>,
+        _ what: String
+    ) -> [T]? {
         do {
             return try context.fetch(descriptor)
         } catch {
@@ -103,7 +117,7 @@ public final class MainWindowModel: MainWindowActions {
                 "could not \(what, privacy: .public): \(String(describing: error), privacy: .public)"
             )
             lastError = "Could not \(what)."
-            return []
+            return nil
         }
     }
 
@@ -157,7 +171,14 @@ public final class MainWindowModel: MainWindowActions {
         // is the visible set, and if the highest-sortOrder project is
         // archived, taking the max of the visible set would let the next
         // project reuse both its order and (via ProjectPalette) its colour.
-        let allProjects = fetch(FetchDescriptor<Project>(), "load your projects")
+        //
+        // Fail closed if that read fails: `[]` would yield order 0 and mint a
+        // project colliding with a stored one, which is the write-side version
+        // of the lie `perform(_:_:)`'s rollback exists to prevent (D-018).
+        // `lastError` is already set by the fetch, so the user sees why.
+        guard let allProjects = fetchOrNil(FetchDescriptor<Project>(), "load your projects") else {
+            return
+        }
         let order = (allProjects.map(\.sortOrder).max() ?? -1) + 1
         let stamp = now()
         perform("create the project") {
