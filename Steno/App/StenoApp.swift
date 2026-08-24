@@ -53,5 +53,6 @@ struct StenoApp: App {
                 StoreFailureView(path: storePath, error: error)
             }
         }
+        .commands { MainWindowCommands() }
     }
 }

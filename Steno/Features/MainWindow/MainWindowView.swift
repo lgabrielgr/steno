@@ -21,6 +21,7 @@ struct MainWindowView: View {
             TaskDetailView(model: model, taskID: model.selectedTaskID)
         }
         .frame(minWidth: 900, minHeight: 520)
+        .focusedSceneValue(\.mainWindowActions, model)
         .safeAreaInset(edge: .top) {
             // An inline row, not an alert: a modal interruption during capture
             // is the behaviour §1.1 treats as a defect.
