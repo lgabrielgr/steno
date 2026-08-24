@@ -9,6 +9,11 @@ import SwiftUI
 struct TaskListView: View {
     @Bindable var model: MainWindowModel
 
+    /// FR-3: DONE is collapsed by default. Held explicitly rather than left to
+    /// `DisclosureGroup`'s default so the requirement holds by construction —
+    /// no test can catch this, since views need a window server (D-010).
+    @State private var isDoneExpanded = false
+
     var body: some View {
         Group {
             if model.projects.isEmpty {
@@ -27,8 +32,10 @@ struct TaskListView: View {
                 List(selection: $model.selectedTaskID) {
                     ForEach(model.groups) { group in
                         if group.status == .done {
-                            // FR-3: DONE is collapsed by default.
-                            DisclosureGroup(group.status.displayName) { rows(group) }
+                            DisclosureGroup(
+                                group.status.displayName,
+                                isExpanded: $isDoneExpanded
+                            ) { rows(group) }
                         } else {
                             Section(group.status.displayName) { rows(group) }
                         }
