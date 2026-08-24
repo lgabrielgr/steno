@@ -1054,10 +1054,6 @@ In the same file, add to the `// MARK: - Reading` section, after `project(withID
     /// until M2-01. That field stays nil until M2-03 ships the Copy action
     /// that advances it, and FR-4 step 2 makes the first-run window 24 hours —
     /// so for every state reachable today this returns the same answer.
-    ///
-    /// Deliberately not the literal `TODO` keyword: SwiftLint's `todo` rule is
-    /// on by default and `make lint` runs `--strict`, so the keyword would turn
-    /// this deliberate, traceable pointer into a build failure.
     private func doneCutoff() -> Date {
         now().addingTimeInterval(-24 * 60 * 60)
     }
