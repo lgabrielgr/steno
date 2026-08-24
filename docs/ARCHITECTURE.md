@@ -146,7 +146,7 @@ StenoKit/         framework — everything testable
   Sources/        SourceConnector, Jira, Confluence, MCP (M4, M5)
   Features/       view models, by feature — MainWindow (M0-05)
 Steno/            application — SwiftUI views and @main, nothing else
-  App/            StenoApp.swift, ContentView.swift      (exists)
+  App/            @main, store failure scene, menu commands  (exists)
   Features/       views, by feature — MainWindow (M0-05)
   Steno.entitlements                                     (exists)
 StenoTests/       unhosted unit-test bundle; headless, network denied  (exists, M0-02)
