@@ -320,7 +320,7 @@ an implicit path).
 **2026-08-21** · M0-04 · **Status:** accepted
 
 `StenoApp` builds the container into a `Result` and switches the root scene: success gets
-`ContentView`, failure gets `StoreFailureView`, which names the store path and the underlying
+`MainWindowView`, failure gets `StoreFailureView`, which names the store path and the underlying
 error and offers Quit.
 
 **Why:** Apple's `.modelContainer(for:)` traps, which reads as a crash to anyone not watching
@@ -371,6 +371,36 @@ declarations for discoverability, so both would have to be maintained).
 **Not settled here:** bare-letter shortcuts such as FR-2's suggested `N` for notes. A no-modifier
 menu shortcut risks swallowing keystrokes meant for a text field; M1-06 should decide it against
 real UI.
+
+### D-021 — M0-05's interim behaviours, and who supersedes them
+**2026-08-24** · M0-05 · **Status:** accepted
+
+Three rules in `MainWindowModel` are deliberately provisional, standing in for specs that need
+data this milestone doesn't have yet:
+
+- **DONE's cutoff is a fixed 24 hours** (`doneCutoff()`), not FR-3's actual report window.
+  Superseded by M2-01, which computes the window from `project.lastStandupAt` (D8) — a field that
+  stays nil, and so answers identically to the fixed cutoff, until M2-03 ships the Copy action that
+  advances it.
+- **Under "All", a new task's target project is the first by `sortOrder`** (`targetProjectID()`),
+  not FR-1.4's specified "last-used project". Superseded by M1-02, which owns that rule along with
+  first-launch behaviour.
+- **Archiving hides a project's tasks by an in-memory join, not a stored flag.** `archive()` sets
+  only `Project.isArchived`; `TaskItem` has no archived bit of its own. `MainWindowModel.fetchTasks()`
+  fetches every non-deleted task and filters it to the set of currently-visible project IDs after
+  the fact — "a project's tasks disappear when it archives" is an emergent property of that one
+  filter, not a fact stored anywhere.
+
+**Why:** each rule ships a real, spec-compliant behaviour for every state M0-05 can reach, while
+naming the milestone that owns the general case, so the stand-in is never mistaken for the spec.
+**Alternatives:** blocking M0-05 on the real rules landing first — rejected, since none of the
+three specs (report window, last-used project, an archived-task flag) has an owner yet and the
+main window is otherwise ready to ship.
+**The archived-task rule is the one with teeth.** It lives only in `fetchTasks()`. Any future query
+that wants "live tasks" and does not re-apply the visible-projects filter will silently include
+tasks belonging to an archived project. The two places this is likeliest to bite: M6-01's
+stale-task detection, and M2-01's event-gathering for the report window — both need "tasks
+belonging to a live project," and neither gets it for free from the store.
 
 ---
 

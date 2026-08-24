@@ -93,6 +93,7 @@ a broad refactor.
 | Secrets never persisted | Keychain only; never SwiftData, `UserDefaults`, plists, logs | Credential layer (M3-01), asserted in export tests (M2.5-01) | §8, §10.3 |
 | Reads only, permanently | No mutating request to Jira or Confluence | Connectors (M4-02, M4-03) | D5 |
 | Integrations never block | A failed fetch degrades to cache, never stops a report | Connector registry (M4-01) | §5.5, §7.4 |
+| Views never touch the store | No `@Query`, no `@Environment(\.modelContext)`; `.modelContainer` not attached to the scene | View models (M0-05) | §14, ARCH §2 rule 2 |
 
 Where a row says "asserted in tests", that is deliberate: these are the invariants whose
 violation is invisible in review and expensive in production.
