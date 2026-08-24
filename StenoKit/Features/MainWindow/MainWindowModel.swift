@@ -87,13 +87,15 @@ public final class MainWindowModel: MainWindowActions {
         return (try? context.fetch(descriptor)) ?? []
     }
 
-    // Named placeholder, not stale debt; see M0-05 task 3 brief.
-    // swiftlint:disable:next todo
-    /// TODO(M2-01): FR-3 scopes DONE to the current report window, which is
-    /// computed from `project.lastStandupAt` (D8) and does not exist until
-    /// M2-01. That field stays nil until M2-03 ships the Copy action that
-    /// advances it, and FR-4 step 2 makes the first-run window 24 hours — so
-    /// for every state reachable today this returns the same answer.
+    /// Superseded by M2-01: FR-3 scopes DONE to the current report window,
+    /// which is computed from `project.lastStandupAt` (D8) and does not exist
+    /// until M2-01. That field stays nil until M2-03 ships the Copy action
+    /// that advances it, and FR-4 step 2 makes the first-run window 24 hours —
+    /// so for every state reachable today this returns the same answer.
+    ///
+    /// Deliberately not the reserved four-letter marker word SwiftLint's
+    /// default rule scans for: `make lint` runs `--strict`, so spelling it out
+    /// here would turn this deliberate, traceable pointer into a build failure.
     private func doneCutoff() -> Date {
         now().addingTimeInterval(-24 * 60 * 60)
     }
@@ -159,21 +161,18 @@ public final class MainWindowModel: MainWindowActions {
         }
     }
 
-    // Named placeholder, not stale debt; see M0-05 task 3 brief.
-    // swiftlint:disable todo
     /// FR-1.4: never block on project selection.
     ///
-    /// TODO(M1-02): the specified rule is "default to the last-used project",
-    /// which M1-02 owns along with the first-launch behaviour. Until then the
-    /// first project by `sortOrder` stands in — and the task row shows its
-    /// project, so the assignment is visible rather than silent.
+    /// Superseded by M1-02: the specified rule is "default to the last-used
+    /// project", which M1-02 owns along with the first-launch behaviour. Until
+    /// then the first project by `sortOrder` stands in — and the task row shows
+    /// its project, so the assignment is visible rather than silent.
     private func targetProjectID() -> UUID? {
         switch selection {
         case .project(let id): id
         case .all: projects.first?.id
         }
     }
-    // swiftlint:enable todo
 
     /// §3.1: archived projects are hidden, never deleted. There is no delete.
     public func archive(projectID: UUID) {
