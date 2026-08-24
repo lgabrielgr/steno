@@ -341,10 +341,26 @@ publishes ready-to-render arrays. Views declare no `@Query` and no
 
 **Why:** ARCHITECTURE §2 rule 2 and §14 already require the separation on testability grounds
 (§9.4); this is where it becomes structural rather than advisory. Dropping the environment
-container means there is no route from a view to the store to take by accident. Every behaviour
+container means there is no route from a view to *query* the store by accident. Every behaviour
 in the main window — grouping, the DONE window, project scoping, the `created` event, archive
 filtering — is therefore covered by the headless bundle, which matters more than usual here
 because GUI automation is unavailable on this machine.
+
+**What this does NOT close, stated precisely because the obvious reading overclaims it.** This
+closes the *read* path only. The model publishes live `@Model` objects — `projects` is `[Project]`,
+and `groups` carries `[TaskItem]` — and those types expose public mutators (`rename(to:at:)`,
+`setStatus(_:at:)`, `setArchived(_:at:)`). A view therefore *holds* objects it could mutate, and
+because `save(context)` commits every pending change in the context, such a mutation would be
+persisted by the next unrelated `perform(_:_:)` — a write nobody asked for, riding along on a
+save for something else. No view does this today: the only production mutator call is
+`MainWindowModel.archive`. **The danger is M1-05's:** a view calling `setStatus` directly would
+change status *without* appending the `statusChanged` event, which ARCHITECTURE §1 names as a bug
+that surfaces much later as an inexplicable revert after an import (§10.1). M1-05 owns the status
+service and should close this by construction — reducing the domain mutators from `public` to
+`internal` compiles today (the sole production caller is inside `StenoKit`, and tests use
+`@testable import`), and is the cheapest option; mapping to value types is the thorough one.
+Deliberately not done here: it changes M0-03's domain API, which deserves its own task and review
+rather than a tail-end amendment to this one.
 **Alternatives:** `@Query` in views with view models for derived logic only — idiomatic SwiftUI
 and self-refreshing, but it puts the fetch in the view, which is the thing rule 2 forbids.
 **The cost, and who pays it:** a manual fetch does not refresh when another surface writes.
