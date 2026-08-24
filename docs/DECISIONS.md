@@ -332,6 +332,46 @@ stand-up. §13's "degradation ships with the feature" is scoped to network-depen
 **Alternatives:** `fatalError` with a logged reason (cheapest; invisible unless stderr is being
 watched). M0-05 inherits a root scene conditional on container construction, which is deliberate.
 
+### D-019 — View models own the `ModelContext`; views get no store access
+**2026-08-23** · M0-05 · **Status:** accepted
+
+An `@Observable @MainActor` view model in `StenoKit/Features/` holds the context, fetches, and
+publishes ready-to-render arrays. Views declare no `@Query` and no
+`@Environment(\.modelContext)`, and `.modelContainer(_:)` is **not** attached to the scene.
+
+**Why:** ARCHITECTURE §2 rule 2 and §14 already require the separation on testability grounds
+(§9.4); this is where it becomes structural rather than advisory. Dropping the environment
+container means there is no route from a view to the store to take by accident. Every behaviour
+in the main window — grouping, the DONE window, project scoping, the `created` event, archive
+filtering — is therefore covered by the headless bundle, which matters more than usual here
+because GUI automation is unavailable on this machine.
+**Alternatives:** `@Query` in views with view models for derived logic only — idiomatic SwiftUI
+and self-refreshing, but it puts the fetch in the view, which is the thing rule 2 forbids.
+**The cost, and who pays it:** a manual fetch does not refresh when another surface writes.
+Mutations through the model reload themselves, so M0-05 is correct; M1-03's floating window and
+M1-04's popover must add a refresh (window activation is the likely minimum) or the main window
+will silently miss tasks captured elsewhere.
+
+### D-020 — Keyboard shortcuts are menu-bar commands reached via `@FocusedValue`
+**2026-08-23** · M0-05 · **Status:** accepted
+
+`MainWindowView` publishes its model with `.focusedSceneValue(\.mainWindowActions, model)`; a
+`Commands` struct reads it with `@FocusedValue` and declares real menu items. Actions are declared
+on the `MainWindowActions` protocol.
+
+**Why:** FR-3 requires a shortcut for every primary action, and M1-05/M1-06 are instructed to
+extend one mechanism rather than invent a second. Adding a shortcut is now one protocol method and
+one `Button`, and omitting the implementation is a compile error rather than a menu item that
+silently does nothing. On macOS a shortcut that exists is expected to appear in a menu, which
+in-view `.keyboardShortcut` bindings never do.
+**Alternatives:** `.keyboardShortcut` on toolbar/context-menu buttons (undiscoverable, enumerated
+nowhere, re-declared per surface); a pure key-router in `StenoKit` with a unit-tested chord table
+(most testable, and collisions become test failures — but it still needs separate menu
+declarations for discoverability, so both would have to be maintained).
+**Not settled here:** bare-letter shortcuts such as FR-2's suggested `N` for notes. A no-modifier
+menu shortcut risks swallowing keystrokes meant for a text field; M1-06 should decide it against
+real UI.
+
 ---
 
 ## Open — decided by the task that owns them

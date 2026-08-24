@@ -144,10 +144,10 @@ StenoKit/         framework — everything testable
   Portability/    export, import, merge                  (M2.5)
   AI/             AIProvider, AnthropicProvider          (M3)
   Sources/        SourceConnector, Jira, Confluence, MCP (M4, M5)
-  Features/       view models, by feature
+  Features/       view models, by feature — MainWindow (M0-05)
 Steno/            application — SwiftUI views and @main, nothing else
   App/            StenoApp.swift, ContentView.swift      (exists)
-  Features/       views, by feature — paired with StenoKit/Features/
+  Features/       views, by feature — MainWindow (M0-05)
   Steno.entitlements                                     (exists)
 StenoTests/       unhosted unit-test bundle; headless, network denied  (exists, M0-02)
 Scripts/
