@@ -31,6 +31,12 @@ struct TaskDetailView: View {
                     Text("Timeline")
                         .font(.headline)
 
+                    // `events(forTaskID:)` is an untracked fetch — SwiftUI has
+                    // no dependency to observe here. This pane only re-renders
+                    // after a write because `task` above reads `model.groups`,
+                    // which `reload()` reassigns on every mutation. Superseded
+                    // by M1-06: once notes can be appended without changing
+                    // `groups`, this pane needs its own explicit refresh.
                     let events = model.events(forTaskID: taskID)
                     if events.isEmpty {
                         Text("No events.")

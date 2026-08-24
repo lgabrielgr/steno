@@ -20,5 +20,10 @@ func paletteEntriesAreWellFormed() {
     for hex in ProjectPalette.hexes {
         #expect(hex.count == 7)
         #expect(hex.hasPrefix("#"))
+        // The length and prefix checks alone let something like "#3B82FG"
+        // through. `Color(projectHex:)` lives in the app target and is
+        // untestable here, so this is the only guard the palette's hex
+        // strings get — it must actually parse as hex, not just look like it.
+        #expect(UInt64(hex.dropFirst(), radix: 16) != nil)
     }
 }

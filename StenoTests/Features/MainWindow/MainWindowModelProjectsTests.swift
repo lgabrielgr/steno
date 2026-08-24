@@ -116,6 +116,60 @@ func newProjectOnlyPresents() throws {
 
     model.newProject()
 
-    #expect(model.isPresentingNewProject)
+    #expect(model.activeSheet == .newProject)
     #expect(model.projects.isEmpty)
+}
+
+private struct SaveFailure: Error {}
+
+@MainActor
+@Test("a failed createProject leaves the store untouched and surfaces the error")
+func createProjectRollsBackOnSaveFailure() throws {
+    let container = try StenoStore.inMemory()
+    let context = ModelContext(container)
+    let model = MainWindowModel(
+        context: context,
+        now: { origin },
+        save: { _ in throw SaveFailure() }
+    )
+
+    model.createProject(named: "Payments")
+
+    // The rollback discarded the insert — nothing in memory, nothing on disk.
+    #expect(model.projects.isEmpty)
+    #expect(model.lastError != nil)
+    let stored = try context.fetch(FetchDescriptor<Project>())
+    #expect(stored.isEmpty)
+}
+
+@MainActor
+@Test("archiving does not move the selection when the save fails")
+func archiveDoesNotMoveSelectionOnSaveFailure() throws {
+    let container = try StenoStore.inMemory()
+
+    // Create the project with a working save first.
+    let workingContext = ModelContext(container)
+    let workingModel = MainWindowModel(context: workingContext, now: { origin })
+    workingModel.createProject(named: "Payments")
+    let id = try #require(workingModel.projects.first?.id)
+
+    // A second model over the same container, whose save always throws —
+    // a real ModelContext cannot be made to fail its save on demand, so this
+    // injected `save` is the only way to exercise the rollback path.
+    let failingContext = ModelContext(container)
+    let failingModel = MainWindowModel(
+        context: failingContext,
+        now: { origin },
+        save: { _ in throw SaveFailure() }
+    )
+    failingModel.selection = .project(id)
+
+    failingModel.archive(projectID: id)
+
+    // `perform` returned false, so the guard commit 05515b0 added must have
+    // kept the selection on the project rather than falling back to All.
+    #expect(failingModel.selection == .project(id))
+    #expect(failingModel.lastError != nil)
+    let stored = try workingContext.fetch(FetchDescriptor<Project>())
+    #expect(stored.first?.isArchived == false)
 }

@@ -17,7 +17,7 @@ struct MainWindowCommands: Commands {
         CommandGroup(replacing: .newItem) {
             Button("New Task") { actions?.newTask() }
                 .keyboardShortcut("n")
-                .disabled(actions == nil)
+                .disabled(actions?.canCreateTask != true)
 
             Button("New Project") { actions?.newProject() }
                 .keyboardShortcut("n", modifiers: [.command, .shift])

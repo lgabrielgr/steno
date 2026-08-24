@@ -36,19 +36,21 @@ struct MainWindowView: View {
                 .background(.yellow.opacity(0.25))
             }
         }
-        .sheet(isPresented: $model.isPresentingNewProject) {
-            TextEntrySheet(
-                title: "New Project",
-                placeholder: "Project name",
-                confirm: "Create"
-            ) { model.createProject(named: $0) }
-        }
-        .sheet(isPresented: $model.isPresentingNewTask) {
-            TextEntrySheet(
-                title: "New Task",
-                placeholder: "What are you working on?",
-                confirm: "Add"
-            ) { model.createTask(titled: $0) }
+        .sheet(item: $model.activeSheet) { sheet in
+            switch sheet {
+            case .newProject:
+                TextEntrySheet(
+                    title: "New Project",
+                    placeholder: "Project name",
+                    confirm: "Create"
+                ) { model.createProject(named: $0) }
+            case .newTask:
+                TextEntrySheet(
+                    title: "New Task",
+                    placeholder: "What are you working on?",
+                    confirm: "Add"
+                ) { model.createTask(titled: $0) }
+            }
         }
     }
 }

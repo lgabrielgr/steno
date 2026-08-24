@@ -28,8 +28,10 @@ public final class MainWindowModel: MainWindowActions {
     }
 
     public var selectedTaskID: UUID?
-    public var isPresentingNewProject = false
-    public var isPresentingNewTask = false
+
+    /// Which modal is on screen, if any. See `ActiveSheet` for why this is one
+    /// optional rather than a `Bool` per sheet.
+    public var activeSheet: ActiveSheet?
 
     /// FR-1.4: a task needs a project to belong to, and this window offers no
     /// way to create one implicitly.
@@ -37,11 +39,19 @@ public final class MainWindowModel: MainWindowActions {
 
     private let context: ModelContext
     private let now: () -> Date
+    private let save: (ModelContext) throws -> Void
 
     /// `now` is injected so the DONE window is testable without waiting.
-    public init(context: ModelContext, now: @escaping () -> Date = Date.init) {
+    /// `save` is injected so the rollback path in `perform(_:_:)` is testable
+    /// — a real `ModelContext` cannot be made to fail its save on demand.
+    public init(
+        context: ModelContext,
+        now: @escaping () -> Date = Date.init,
+        save: @escaping (ModelContext) throws -> Void = { try $0.save() }
+    ) {
         self.context = context
         self.now = now
+        self.save = save
         reload()
     }
 
@@ -76,7 +86,25 @@ public final class MainWindowModel: MainWindowActions {
             predicate: #Predicate { $0.taskID == id && !$0.isRedacted },
             sortBy: [SortDescriptor(\.timestamp, order: .reverse)]
         )
-        return (try? context.fetch(descriptor)) ?? []
+        return fetch(descriptor, "load the timeline")
+    }
+
+    /// Fetch, or surface the failure. A failed fetch must not look like an
+    /// empty store: for a recall tool, "you have no projects" over a store
+    /// that is full is the worst possible lie — the read-side twin of the
+    /// write-side guarantee `perform(_:_:)` makes (D-018).
+    ///
+    /// `what` is an infinitive phrase, matching `perform`'s convention.
+    private func fetch<T: PersistentModel>(_ descriptor: FetchDescriptor<T>, _ what: String) -> [T] {
+        do {
+            return try context.fetch(descriptor)
+        } catch {
+            Log.app.error(
+                "could not \(what, privacy: .public): \(String(describing: error), privacy: .public)"
+            )
+            lastError = "Could not \(what)."
+            return []
+        }
     }
 
     private func fetchProjects() -> [Project] {
@@ -84,7 +112,7 @@ public final class MainWindowModel: MainWindowActions {
             predicate: #Predicate { !$0.isArchived },
             sortBy: [SortDescriptor(\.sortOrder), SortDescriptor(\.name)]
         )
-        return (try? context.fetch(descriptor)) ?? []
+        return fetch(descriptor, "load your projects")
     }
 
     /// Superseded by M2-01: FR-3 scopes DONE to the current report window,
@@ -105,7 +133,7 @@ public final class MainWindowModel: MainWindowActions {
     private func fetchTasks() -> [TaskItem] {
         let visible = Set(projects.map(\.id))
         let descriptor = FetchDescriptor<TaskItem>(predicate: #Predicate { !$0.isArchived })
-        let all = (try? context.fetch(descriptor)) ?? []
+        let all = fetch(descriptor, "load your tasks")
 
         switch selection {
         case .all:
@@ -125,7 +153,12 @@ public final class MainWindowModel: MainWindowActions {
         let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
 
-        let order = (projects.map(\.sortOrder).max() ?? -1) + 1
+        // The max must run over *all* projects, archived included — `projects`
+        // is the visible set, and if the highest-sortOrder project is
+        // archived, taking the max of the visible set would let the next
+        // project reuse both its order and (via ProjectPalette) its colour.
+        let allProjects = fetch(FetchDescriptor<Project>(), "load your projects")
+        let order = (allProjects.map(\.sortOrder).max() ?? -1) + 1
         let stamp = now()
         perform("create the project") {
             self.context.insert(
@@ -188,11 +221,11 @@ public final class MainWindowModel: MainWindowActions {
 
     public func newTask() {
         guard canCreateTask else { return }
-        isPresentingNewTask = true
+        activeSheet = .newTask
     }
 
     public func newProject() {
-        isPresentingNewProject = true
+        activeSheet = .newProject
     }
 
     public func selectNextProject() {
@@ -227,7 +260,7 @@ public final class MainWindowModel: MainWindowActions {
         mutation()
         var saved = true
         do {
-            try context.save()
+            try save(context)
             lastError = nil
         } catch {
             context.rollback()

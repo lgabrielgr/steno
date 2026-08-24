@@ -6,7 +6,7 @@ import SwiftUI
 /// Flat by decision, not omission — D9 rules out epics and nesting, so there
 /// is no hierarchy to model here.
 struct SidebarView: View {
-    @Bindable var model: MainWindowModel
+    let model: MainWindowModel
 
     var body: some View {
         List(selection: selectionBinding) {
