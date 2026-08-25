@@ -15,6 +15,7 @@ does.
 | [`docs/REQUIREMENTS.md`](docs/REQUIREMENTS.md) | **The source of truth.** Product decisions, domain model, functional requirements, process rules | Always. Every task cites its sections |
 | [`docs/tasks/`](docs/tasks/README.md) | 36 sequenced task files, one per branch/PR | To find what you're building and what's out of scope |
 | [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) | Layer map, dependency rules, invariants and where they're enforced | Before writing code that spans layers |
+| [`docs/DESIGN.md`](docs/DESIGN.md) | How the claude.ai/design UI reference relates to the spec, and how to reach it | Before building or changing UI |
 | [`docs/DECISIONS.md`](docs/DECISIONS.md) | Implementation decisions made during the build | When something in the code looks arbitrary |
 | [`docs/superpowers/specs/`](docs/superpowers/specs/), [`docs/superpowers/plans/`](docs/superpowers/plans/) | Per-task design and implementation records | Historical only — superseded by `DECISIONS.md` where the two disagree |
 
@@ -51,7 +52,9 @@ Each is stated fully in REQUIREMENTS.md; these are the pointers.
 1. `git checkout main && git pull` — always branch from current `main`, never from another
    task branch.
 2. `git checkout -b <branch named in the task file>` (see §9.5 for the prefix table).
-3. Read the task file and the REQUIREMENTS.md sections it cites.
+3. Read the task file and the REQUIREMENTS.md sections it cites. If the task builds UI, read
+   [`docs/DESIGN.md`](docs/DESIGN.md) too — it governs how the design reference and the spec
+   rank when they disagree.
 4. Check [`docs/tasks/README.md`](docs/tasks/README.md) for rows that merged without being
    ticked, and tick them in this PR alongside your own. The README says a row is ticked "in a
    later PR" — this step is what makes that happen, because nothing else prompts it and §9.5
