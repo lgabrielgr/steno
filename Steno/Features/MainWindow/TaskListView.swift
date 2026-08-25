@@ -62,7 +62,8 @@ struct TaskListView: View {
                 // Under "All" the project is not implied by the sidebar, so
                 // show it — this is also what makes M0-05's stand-in project
                 // routing visible rather than silent (see targetProjectID).
-                if case .all = model.selection, let project = model.project(withID: task.projectID) {
+                if case .all = model.selection, let project = model.project(withID: task.projectID)
+                {
                     Text(project.name)
                         .font(.caption)
                         .foregroundStyle(.secondary)

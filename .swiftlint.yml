@@ -29,6 +29,14 @@ disabled_rules:
   # D-013 exists to prevent: `make format` reintroduces the comma that
   # `make lint --strict` then rejects. Found in M0-03 (SourceRefTests.swift).
   - trailing_comma
+  # Pure layout, which D-013 assigns to swift-format, not to SwiftLint. Its
+  # only observed effect in this repo was rejecting swift-format's own output:
+  # the formatter breaks a multi-clause `if let` or a long generic signature
+  # across lines and this rule then fails the build, forcing correct code to be
+  # restructured by hand (M0-05's files, commit 43f563d). Nothing is lost by
+  # dropping it — `make format` normalises a hand-written misplaced brace
+  # anyway. See D-023.
+  - opening_brace
 
 # Deliberately modest. Rules are cheap to add later against real code and
 # expensive to remove once 34 tasks have been written under them.

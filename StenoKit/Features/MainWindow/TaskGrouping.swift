@@ -28,7 +28,8 @@ public enum TaskGrouping {
     /// hours is the same answer until M2-01 lands.
     public static func groups(from tasks: [TaskItem], doneSince cutoff: Date) -> [TaskGroup] {
         order.compactMap { status in
-            let matching = tasks
+            let matching =
+                tasks
                 .filter { task in
                     guard task.status == status else { return false }
                     guard status == .done else { return true }

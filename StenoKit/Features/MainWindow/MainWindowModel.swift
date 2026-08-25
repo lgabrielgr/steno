@@ -88,7 +88,8 @@ public final class MainWindowModel: MainWindowActions {
         // A task that has scrolled out of the DONE window, or whose project was
         // just archived, must not leave the detail pane showing a stale row.
         if let id = selectedTaskID,
-            !groups.contains(where: { group in group.tasks.contains { $0.id == id } }) {
+            !groups.contains(where: { group in group.tasks.contains { $0.id == id } })
+        {
             selectedTaskID = nil
         }
 
@@ -138,7 +139,9 @@ public final class MainWindowModel: MainWindowActions {
     /// write-side guarantee `perform(_:_:)` makes (D-018).
     ///
     /// `what` is an infinitive phrase, matching `perform`'s convention.
-    private func fetch<T: PersistentModel>(_ descriptor: FetchDescriptor<T>, _ what: String) -> [T] {
+    private func fetch<T: PersistentModel>(
+        _ descriptor: FetchDescriptor<T>, _ what: String
+    ) -> [T] {
         fetchOrNil(descriptor, what) ?? []
     }
 
