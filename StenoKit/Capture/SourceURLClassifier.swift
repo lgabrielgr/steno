@@ -25,10 +25,18 @@ public enum SourceURLClassifier {
         return ExtractedRef(kind: .url, identifier: absolute, url: absolute)
     }
 
-    /// A non-empty all-digit string, or nil. Both Confluence forms and the PR
-    /// number funnel through this so "empty is not a number" is decided once.
+    /// A non-empty all-ASCII-digit string, or nil. Both Confluence forms and
+    /// the PR number funnel through this so "empty is not a number" is decided
+    /// once.
+    ///
+    /// ASCII is checked explicitly because `isNumber` covers the whole Unicode
+    /// Number category, and both callers reach decoded text: `pathComponents`
+    /// percent-decodes, so `/pages/%C2%BD/` yields `½`, and `queryItems`
+    /// decodes `?pageId=١٢٣`. Either would classify as a page whose ID no
+    /// connector could ever fetch.
     private static func digits(_ value: String?) -> String? {
-        guard let value, !value.isEmpty, value.allSatisfy(\.isNumber) else { return nil }
+        guard let value, !value.isEmpty else { return nil }
+        guard value.allSatisfy({ $0.isASCII && $0.isNumber }) else { return nil }
         return value
     }
 
@@ -56,6 +64,13 @@ public enum SourceURLClassifier {
     /// A page with no numeric ID (the legacy `/display/SPACE/Title` form)
     /// deliberately returns nil and falls back to `.url`: §3.4 says the
     /// identifier *is* the page ID, and M4-03 needs one to fetch.
+    ///
+    /// **Known false positives, accepted deliberately:** no host check, so any
+    /// `?pageId=<digits>` or `/pages/<digits>/` URL is claimed —
+    /// `https://example.com/pages/12/34` becomes `.confluencePage "12"`. That
+    /// is the price of classifying by shape rather than hostname, which is
+    /// what lets a self-hosted wiki work at all; the cost is one stray ref
+    /// card, and FR-1.4 routes on nothing this produces.
     private static func confluencePageID(_ link: URL, _ segments: [String]) -> String? {
         let items = URLComponents(url: link, resolvingAgainstBaseURL: false)?.queryItems ?? []
         let queryValue = items.first { $0.name == "pageId" }?.value

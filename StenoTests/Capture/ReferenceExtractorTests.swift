@@ -120,6 +120,17 @@ private let extractCases: [ExtractCase] = [
                 url: "https://github.com/acme/web/pull/421"),
         ]),
     .init(
+        name: "a second link for an already-promoted key does not replace the first",
+        text: "PAY-421 — see \(browseURL) — also https://jira.corp.net/browse/PAY-421",
+        expected: [.init(kind: .jiraIssue, identifier: "PAY-421", url: browseURL)]),
+    .init(
+        name: "a key abutting a link span is still a key",
+        text: "(https://example.com/a)PAY-421",
+        expected: [
+            .init(kind: .url, identifier: "https://example.com/a", url: "https://example.com/a"),
+            .init(kind: .jiraIssue, identifier: "PAY-421"),
+        ]),
+    .init(
         name: "a bare key followed by its link keeps the link",
         text: "PAY-421 — see \(browseURL)",
         expected: [.init(kind: .jiraIssue, identifier: "PAY-421", url: browseURL)]),

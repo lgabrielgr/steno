@@ -52,6 +52,9 @@ private let fallbackCases: [String] = [
     "https://acme.atlassian.net/display/ENG/Runbook",
     "https://acme.atlassian.net/wiki/pages/overview",
     "https://acme.atlassian.net/x?pageId=",
+    // Percent-decoding makes non-ASCII digits reachable; an identifier no
+    // connector could fetch is not a page ID
+    "https://example.com/pages/%C2%BD/x",
     // Not a PR path
     "https://github.com/acme/api/tree/PAY-421-fix",
     // Right shape, wrong host — /a/b/pull/n is too generic to claim

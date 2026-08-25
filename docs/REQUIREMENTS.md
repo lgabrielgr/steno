@@ -176,7 +176,7 @@ A reference from a task to an external system, extracted automatically from task
 | `id` | UUID | |
 | `taskID` | UUID | |
 | `kind` | enum | `jiraIssue`, `confluencePage`, `githubPR`, `url`, `mcpResource` |
-| `identifier` | String | Must be unique within its `kind`, because it is half the dedup key below. Jira: the key, `PAY-421`. Confluence: the numeric page ID. GitHub: **repo-qualified**, `acme/api#421` — a bare PR number collides across repositories |
+| `identifier` | String | Must *uniquely identify the external resource* within its `kind` — it is half the dedup key below, so an identifier two different resources could share would merge them. (Two tasks may of course reference the same resource; that is a different row each time.) Jira: the key, `PAY-421`. Confluence: the numeric page ID. GitHub: **repo-qualified**, `acme/api#421` — a bare PR number collides across repositories |
 | `url` | String? | Canonical link |
 | `lastFetchedAt` | Date? | |
 | `cachedSummary` | String? | Last known state, for offline use |

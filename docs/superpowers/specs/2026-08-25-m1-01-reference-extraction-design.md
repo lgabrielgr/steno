@@ -229,16 +229,31 @@ Plus the cases the design probes turned up, each guarding a specific decision:
 | `ABCDEFGHIJ-9` (10-char prefix) and an 11-char prefix | the regex's upper bound, matched and not matched |
 | Empty string, whitespace-only string | `[]` |
 
+And the rows review added, each pinning a behaviour nothing asserted:
+
+| Case | Guards |
+|---|---|
+| `PAY-421@example.com`, `file:///docs/PAY-421.md`, `ftp://…/PAY-421/dump` | §2.1 — a non-`http(s)` span still suppresses; no phantom ticket, and no ref either |
+| Same key with a *second* browse URL after the first | the first `url` wins; a later one is dropped |
+| `(https://example.com/a)PAY-421` | half-open ranges: touching is not overlapping, so the key is emitted |
+| `…/pages/%C2%BD/x` | the page ID must be ASCII digits — `isNumber` alone accepts `½` |
+
 **Performance.** An `XCTestCase` using `measure` — the one exception D-011 reserves, since Swift
 Testing has no equivalent and §1.1's budget must be measured rather than assumed. Its PR body
-note is D-011's required justification. Two cases, each asserting a ceiling with roughly an
-order of magnitude of headroom over the measured value, so it catches a real regression without
-flaking on a shared runner:
+note is D-011's required justification. Each case asserts against the **worst** of `measure`'s
+ten iterations rather than the last one, so the assertion covers a cold run and not just the
+warmest; each ceiling leaves roughly five times headroom over that worst value, enough to catch
+a real regression without flaking on a shared runner:
 
-| Input | Measured | Asserted ceiling |
+| Input | Measured (worst of ten) | Asserted ceiling |
 |---|---|---|
-| Realistic capture string | 91 µs | 1 ms |
-| ~7 KB note body | 1.9 ms | 20 ms |
+| Realistic capture string | 180 µs | 1 ms |
+| ~7 KB note body | 3.9 ms | 20 ms |
+| Link-dense 250 KB paste (8,000 links, 8,000 keys) | 180 ms | 1 s |
+
+The third case exists because the first two cannot tell linear cost from quadratic — which is
+how the O(keys × spans) overlap rule in §4 shipped unnoticed. On that input the original
+algorithm spent 3.6 s in the overlap phase alone, so it fails the 1 s ceiling outright.
 
 The measured numbers go in the PR body per §13, and M1-02 inherits the harness for its own
 latency claim.

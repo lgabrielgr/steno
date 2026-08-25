@@ -434,7 +434,9 @@ this branch started, with three `opening_brace` violations in M0-05 files
 and `:143`). swift-format breaks a multi-clause `if let` and a long generic signature across
 lines, and SwiftLint `--strict` then rejects its own formatter's output — latent since M0-05
 merged because no task had run `make format` since. Commit `43f563d` on this branch fixed the
-three sites by restructuring them.
+three sites by restructuring them; that commit also touched
+`StenoKit/Features/MainWindow/TaskGrouping.swift:31-32`, which was not a lint violation but
+swift-format layout the same run rewrote, folded in so the tree is format-stable.
 
 **Why:** the narrow fix is restructuring, not a disable comment, per D-013. The broader question —
 whether SwiftLint should police `opening_brace` at all, given D-013 already assigns layout to
