@@ -119,7 +119,7 @@ A literal rather than `NSRegularExpression` because `make lint --strict` opts in
 `force_unwrapping` and enables `force_try` by default, so `try!` on a known-good pattern is a
 build failure. `Regex` is **not** `Sendable` (verified — it cannot be a `static let` under Swift
 6), so the literal is a computed property, constructed per call. Measured cost of that choice:
-82 µs per extraction versus 44 µs for a cached `NSRegularExpression`. Both are noise against
+91 µs per extraction versus 44 µs for a cached `NSRegularExpression`. Both are noise against
 §1.1's three-second budget, and the literal is the one that cannot ship a malformed pattern.
 
 Any key whose range overlaps an `http(s)` span is discarded. That single rule produces every
@@ -173,8 +173,11 @@ because the regex path does not depend on the detector. Losing URL detection sho
 cost the user their ticket references. A test asserts the detector is non-nil, so a silent total
 failure cannot ship.
 
-No input length cap. A 10 KB note body is still well under a millisecond, and a cap is a silent
-data-loss rule that would need a justification this task does not have.
+No input length cap. Cost is linear in length and stays far inside the budget: measured against
+the finished implementation, a realistic capture string is **91 µs** and a ~7 KB note body is
+**1.9 ms** — three orders of magnitude under §1.1's three seconds, on the slowest input this
+product can produce. A cap is a silent data-loss rule that would need a justification this task
+does not have.
 
 ---
 
@@ -212,10 +215,19 @@ Plus the cases the design probes turned up, each guarding a specific decision:
 | `ABCDEFGHIJ-9` (10-char prefix) and an 11-char prefix | the regex's upper bound, matched and not matched |
 | Empty string, whitespace-only string | `[]` |
 
-**Performance.** 1000 iterations of a realistic capture string, asserting a mean under 1 ms
-against the measured 82 µs — roughly 12× headroom, loose enough not to flake on a shared runner
-and tight enough to catch a real regression. A ~10 KB note body gets its own case. The measured
-numbers go in the PR body per §13, and M1-02 inherits the harness for its own latency claim.
+**Performance.** An `XCTestCase` using `measure` — the one exception D-011 reserves, since Swift
+Testing has no equivalent and §1.1's budget must be measured rather than assumed. Its PR body
+note is D-011's required justification. Two cases, each asserting a ceiling with roughly an
+order of magnitude of headroom over the measured value, so it catches a real regression without
+flaking on a shared runner:
+
+| Input | Measured | Asserted ceiling |
+|---|---|---|
+| Realistic capture string | 91 µs | 1 ms |
+| ~7 KB note body | 1.9 ms | 20 ms |
+
+The measured numbers go in the PR body per §13, and M1-02 inherits the harness for its own
+latency claim.
 
 All of it runs headless with networking denied; the function makes no calls that a sandbox could
 block.
@@ -275,4 +287,4 @@ the tradeoff, not to a "while I was in there" edit in M1-01.
 |---|---|
 | `NSDataDetector` behaviour changes across macOS releases | Its behaviour is pinned by the table-driven tests, so a change surfaces as a test failure rather than as odd refs |
 | Shape-based classification misreads an unrelated site's `/browse/…` path | Produces one wrong ref kind on one task; the URL is still captured and the user can see what it points at |
-| Per-call `Regex` construction shows up in a future hot loop | Measured and asserted at 1 ms; if extraction ever moves somewhere hotter, the cached `NSRegularExpression` variant is a drop-in at 44 µs |
+| Per-call `Regex` construction shows up in a future hot loop | Measured and asserted by the `measure` test; if extraction ever moves somewhere hotter, the cached `NSRegularExpression` variant is a drop-in at 44 µs |
