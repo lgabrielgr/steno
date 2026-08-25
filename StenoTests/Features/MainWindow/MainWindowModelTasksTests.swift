@@ -208,3 +208,33 @@ func reloadRefreshesTheSelectedTimeline() throws {
     // timeline unconditionally rather than on selection change alone.
     #expect(model.selectedTaskEvents.count == 2)
 }
+
+@MainActor
+@Test("a populated timeline is not reported as failed")
+func timelineFailureFlagStaysClearOnSuccess() throws {
+    let (model, _) = try makeModel()
+    model.createProject(named: "Payments")
+    model.createTask(titled: "Fix the retry handler")
+    let taskID = try #require(model.groups.first?.tasks.first?.id)
+
+    model.selectedTaskID = taskID
+
+    #expect(model.selectedTaskEvents.count == 1)
+    #expect(!model.selectedTaskTimelineFailed)
+}
+
+@MainActor
+@Test("deselecting clears the timeline without claiming a failure")
+func deselectingClearsWithoutFailure() throws {
+    let (model, _) = try makeModel()
+    model.createProject(named: "Payments")
+    model.createTask(titled: "Fix the retry handler")
+    model.selectedTaskID = try #require(model.groups.first?.tasks.first?.id)
+
+    model.selectedTaskID = nil
+
+    // Empty because nothing is selected, not because a read failed — the pane
+    // renders different copy for each, so the distinction has to hold.
+    #expect(model.selectedTaskEvents.isEmpty)
+    #expect(!model.selectedTaskTimelineFailed)
+}

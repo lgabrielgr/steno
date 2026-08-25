@@ -43,6 +43,16 @@ public final class MainWindowModel: MainWindowActions {
     /// and wrong once M1-06 appends notes.
     public private(set) var selectedTaskEvents: [Event] = []
 
+    /// Whether the last timeline read *failed*, as opposed to finding nothing.
+    ///
+    /// Its own flag rather than a reading of `lastError`, which any failed save
+    /// also sets — that would let an unrelated write failure relabel a
+    /// genuinely empty timeline as unreadable. The pane needs to tell those
+    /// apart because, per §3.3, every task carries a `created` event: an empty
+    /// timeline is never a normal state, so rendering one as "no events" would
+    /// assert something about the task that cannot be true.
+    public private(set) var selectedTaskTimelineFailed = false
+
     /// Which modal is on screen, if any. See `ActiveSheet` for why this is one
     /// optional rather than a `Bool` per sheet.
     public var activeSheet: ActiveSheet?
@@ -88,7 +98,14 @@ public final class MainWindowModel: MainWindowActions {
     }
 
     private func reloadSelectedTaskEvents() {
-        selectedTaskEvents = selectedTaskID.map { events(forTaskID: $0) } ?? []
+        guard let id = selectedTaskID else {
+            selectedTaskEvents = []
+            selectedTaskTimelineFailed = false
+            return
+        }
+        let loaded = fetchEvents(forTaskID: id)
+        selectedTaskTimelineFailed = loaded == nil
+        selectedTaskEvents = loaded ?? []
     }
 
     public func project(withID id: UUID) -> Project? {
@@ -104,11 +121,15 @@ public final class MainWindowModel: MainWindowActions {
     /// The exclusion is a property of this query rather than of each caller,
     /// so M1-06's redaction cannot be forgotten by one of them.
     public func events(forTaskID id: UUID) -> [Event] {
+        fetchEvents(forTaskID: id) ?? []
+    }
+
+    private func fetchEvents(forTaskID id: UUID) -> [Event]? {
         let descriptor = FetchDescriptor<Event>(
             predicate: #Predicate { $0.taskID == id && !$0.isRedacted },
             sortBy: [SortDescriptor(\.timestamp, order: .reverse)]
         )
-        return fetch(descriptor, "load the timeline")
+        return fetchOrNil(descriptor, "load the timeline")
     }
 
     /// Fetch, or surface the failure. A failed fetch must not look like an

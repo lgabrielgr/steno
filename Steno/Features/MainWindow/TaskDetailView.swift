@@ -39,8 +39,17 @@ struct TaskDetailView: View {
                     // the failure would re-invalidate the view that caused it.
                     let events = model.selectedTaskEvents
                     if events.isEmpty {
-                        Text("No events.")
-                            .foregroundStyle(.secondary)
+                        // §3.3 gives every task a `created` event, so an empty
+                        // timeline is never a normal state — the read failed,
+                        // or the log is genuinely missing rows. Say which.
+                        // "No events." would present either as a fact about
+                        // the task.
+                        Text(
+                            model.selectedTaskTimelineFailed
+                                ? "The timeline could not be loaded."
+                                : "No events — every task should carry a created event, so this is unexpected."
+                        )
+                        .foregroundStyle(.secondary)
                     } else {
                         ForEach(events) { event in
                             VStack(alignment: .leading, spacing: 2) {
