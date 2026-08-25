@@ -177,21 +177,30 @@ because the regex path does not depend on the detector. Losing URL detection sho
 cost the user their ticket references. A test asserts the detector is non-nil, so a silent total
 failure cannot ship.
 
-No input length cap. Cost is **O(n log n)** in the length of the text: link detection and the key
-regex are each a single pass, the spans are sorted once, and the overlap rule is a two-pointer
-walk over them rather than a membership test per key. Measured against the fixed implementation,
-worst of `measure`'s ten iterations: a realistic capture string is **180 µs**, a ~7 KB note body
-is **3.9 ms**, and a link-dense 250 KB paste — 8,000 links, 8,000 keys — is **180 ms**. All are
-far inside §1.1's three seconds. A cap is a silent data-loss rule that would need a justification
-this task does not have.
+No input length cap. The work this function *owns* is **O(n log n)** in the length of the text:
+the key regex is one pass, the spans are sorted once, and the overlap rule is a two-pointer walk
+over them rather than a membership test per key — measured on ref-dense text, that phase grows
+6.8× for a 7.2× input, which is linear. Measured end to end, worst of `measure`'s ten iterations:
+a realistic capture string is **180 µs**, a ~7 KB note body is **3.9 ms**, and a link-dense
+250 KB paste — 8,000 links, 8,000 keys — is **180 ms**. All are far inside §1.1's three seconds.
+A cap is a silent data-loss rule that would need a justification this task does not have.
 
-That claim was false as first written, and this section was the only thing standing in for a
-cap. The original overlap rule tested each key against every span — O(keys × spans), quadratic on
-ref-dense text: the overlap phase alone cost **3.6 s** on the 250 KB paste above, and end-to-end
-extraction of a 950 KB paste took **4.9 s**, past the budget, on input FR-1.5 reaches because it
-also runs over note bodies. Found in review of this branch; fixed by `ReferenceExtractor`'s
-`SpanCursor`, which brought the same 950 KB paste to 0.46 s, and pinned by the third `measure`
-case, which no quadratic implementation can pass.
+This section previously claimed the cost was simply "linear in length", and that claim was the
+only thing standing in for a cap. It was false. The original overlap rule tested each key against
+every span — O(keys × spans), quadratic on ref-dense text: the overlap phase alone cost **3.6 s**
+on the 250 KB paste above, and end-to-end extraction of a 950 KB paste took **4.9 s**, past the
+budget, on input FR-1.5 reaches because it also runs over note bodies. Found in review of this
+branch; fixed by `ReferenceExtractor`'s `SpanCursor`, which brought the same 950 KB paste to
+0.46 s, and pinned by the third `measure` case, which no quadratic implementation can pass.
+
+**What is not linear is `NSDataDetector.matches` itself**, and that is now the dominant cost.
+Measured on the same ref-dense text: 0.22 s at 950 KB and 5.5 s at 6.9 MB — 25× for a 7.2×
+input. So extraction of a ref-dense *paste* still crosses three seconds, at roughly **4 MB**
+(1.2 s at 2.0 MB, 2.5 s at 3.4 MB, 7.4 s at 6.9 MB). Before the overlap fix above, the same
+crossing sat under **1 MB**. Recorded rather than capped: the input FR-1.5 actually receives is a
+task title or a note body, several megabytes of link-dense text is a pathological paste, and the
+remaining cost is inside a system framework — a cap would be this task inventing a data-loss rule
+to work around a detector, which is the maintainer's call and not a design decision to make here.
 
 ---
 
