@@ -52,13 +52,17 @@ Each is stated fully in REQUIREMENTS.md; these are the pointers.
    task branch.
 2. `git checkout -b <branch named in the task file>` (see §9.5 for the prefix table).
 3. Read the task file and the REQUIREMENTS.md sections it cites.
-4. Implement. Follow the task's **Out of scope** list — it exists to keep the PR reviewable and
+4. Check [`docs/tasks/README.md`](docs/tasks/README.md) for rows that merged without being
+   ticked, and tick them in this PR alongside your own. The README says a row is ticked "in a
+   later PR" — this step is what makes that happen, because nothing else prompts it and §9.5
+   forbids a direct commit to `main`.
+5. Implement. Follow the task's **Out of scope** list — it exists to keep the PR reviewable and
    to protect the next task's boundary.
-5. `make build && make test && make lint`.
-6. Commit with a message explaining *why*, not just *what*, prefixed with a Conventional
+6. `make build && make test && make lint`.
+7. Commit with a message explaining *why*, not just *what*, prefixed with a Conventional
    Commits type (`feat:`, `fix:`, `chore:`, `docs:`, `test:`, `refactor:`).
-7. Push and open a PR. The template will prompt for what §9.5 requires.
-8. **Stop.** Do not merge.
+8. Push and open a PR. The template will prompt for what §9.5 requires.
+9. **Stop.** Do not merge.
 
 ## Commands
 
