@@ -23,8 +23,9 @@ public enum ReferenceExtractor {
     public static func extract(from text: String) -> [ExtractedRef] {
         guard !text.isEmpty else { return [] }
         let spans = linkSpans(in: text)
-        var found: [(start: String.Index, ref: ExtractedRef)] = spans.map {
-            ($0.range.lowerBound, SourceURLClassifier.classify($0.link))
+        var found: [(start: String.Index, ref: ExtractedRef)] = spans.compactMap { span in
+            guard isRefBearing(span.link) else { return nil }
+            return (span.range.lowerBound, SourceURLClassifier.classify(span.link))
         }
         // A key overlapping a link is part of that link. This is what turns a
         // browse URL into one ref instead of two, and what stops a slug like
@@ -41,21 +42,30 @@ public enum ReferenceExtractor {
         return merged(found.map(\.ref))
     }
 
-    /// `http(s)` links only. The detector synthesises a `mailto:` link from a
-    /// bare email address, and an email address is not a `SourceRef`.
+    /// **Every** link the detector recognised, whatever its scheme.
+    ///
+    /// The `http(s)` filter belongs to `isRefBearing`, not here: a span this
+    /// function dropped would be invisible to the overlap rule, and the key
+    /// regex would read straight through it — `ping PAY-421@example.com` would
+    /// yield a phantom ticket out of the interior of an email address.
     private static func linkSpans(in text: String) -> [LinkSpan] {
         guard let detector else { return [] }
         let whole = NSRange(text.startIndex..., in: text)
         var spans: [LinkSpan] = []
         for match in detector.matches(in: text, range: whole) {
-            guard let link = match.url,
-                let scheme = link.scheme?.lowercased(),
-                scheme == "http" || scheme == "https",
-                let range = Range(match.range, in: text)
-            else { continue }
+            guard let link = match.url, let range = Range(match.range, in: text) else { continue }
             spans.append(LinkSpan(range: range, link: link))
         }
         return spans
+    }
+
+    /// Only an `http(s)` link becomes a ref. The detector synthesises a
+    /// `mailto:` link from a bare email address, and an email address is not a
+    /// `SourceRef`; the same goes for `file:` and `ftp:`. Such a span still
+    /// suppresses the keys inside it — see `linkSpans`.
+    private static func isRefBearing(_ link: URL) -> Bool {
+        guard let scheme = link.scheme?.lowercased() else { return false }
+        return scheme == "http" || scheme == "https"
     }
 
     /// Dedup within one pass, first occurrence winning the position.

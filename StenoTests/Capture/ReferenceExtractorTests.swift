@@ -89,6 +89,18 @@ private let extractCases: [ExtractCase] = [
         expected: [.init(kind: .jiraIssue, identifier: "PAY-421")]),
     .init(name: "an email address is not a reference", text: "ping bob@example.com", expected: []),
     .init(
+        name: "a key inside an email address is part of the address, not a ticket",
+        text: "ping PAY-421@example.com about it",
+        expected: []),
+    .init(
+        name: "a key inside a file: URL is part of that link, not a ticket",
+        text: "see file:///docs/PAY-421.md",
+        expected: []),
+    .init(
+        name: "a key inside an ftp: URL is part of that link, not a ticket",
+        text: "ftp://files.corp.net/PAY-421/dump",
+        expected: []),
+    .init(
         name: "a scheme-less PR URL still classifies",
         text: "see github.com/acme/api/pull/421 please",
         expected: [

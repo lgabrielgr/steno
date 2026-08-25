@@ -72,9 +72,12 @@ A cached `static let` `NSDataDetector(types: .link)`. Verified under Swift 6 str
 `NSDataDetector` and `NSRegularExpression` are `Sendable` in the macOS SDK, so the static needs
 no `nonisolated(unsafe)` and no actor isolation.
 
-Only `http` and `https` links survive. The detector synthesizes a `mailto:` link from a bare
-email address — verified: `"mail me at bob@example.com"` yields `mailto:bob@example.com` — and an
-email address is not a `SourceRef`.
+Only `http` and `https` links are **classified into refs**. The detector synthesizes a `mailto:`
+link from a bare email address — verified: `"mail me at bob@example.com"` yields
+`mailto:bob@example.com` — and an email address is not a `SourceRef`. Every span the detector
+found is kept for §2.3's overlap rule regardless of scheme, though: filtering first would make a
+`mailto:`, `file:` or `ftp:` span invisible to suppression, and `ping PAY-421@example.com` would
+yield a phantom ticket out of the interior of an email address. (It did, until review found it.)
 
 The detector normalizes a scheme-less match, so `github.com/acme/api/pull/421` arrives as
 `http://github.com/acme/api/pull/421` and still classifies correctly. It also excludes trailing
@@ -122,8 +125,9 @@ build failure. `Regex` is **not** `Sendable` (verified — it cannot be a `stati
 91 µs per extraction versus 44 µs for a cached `NSRegularExpression`. Both are noise against
 §1.1's three-second budget, and the literal is the one that cannot ship a malformed pattern.
 
-Any key whose range overlaps an `http(s)` span is discarded. That single rule produces every
-overlap behaviour the task asks for:
+Any key whose range overlaps a detected link span — of any scheme, per §2.1 — is discarded.
+Ranges are half-open, so a key that merely touches a span is not overlapping it and is still
+emitted. That single rule produces every overlap behaviour the task asks for:
 
 ```
 "Fixed PAY-421, see https://acme.atlassian.net/browse/PAY-421"
