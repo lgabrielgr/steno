@@ -37,7 +37,7 @@ private let classifyCases: [ClassifyCase] = [
 ]
 
 @Test("each shape maps to its kind and identifier", arguments: classifyCases)
-func classifiesByShape(testCase: ClassifyCase) throws {
+private func classifiesByShape(testCase: ClassifyCase) throws {
     let link = try #require(URL(string: testCase.link))
 
     let ref = SourceURLClassifier.classify(link)
@@ -62,7 +62,7 @@ private let fallbackCases: [String] = [
 ]
 
 @Test("anything unrecognised is a plain url, identified by itself", arguments: fallbackCases)
-func fallsBackToURL(raw: String) throws {
+private func fallsBackToURL(raw: String) throws {
     let link = try #require(URL(string: raw))
 
     let ref = SourceURLClassifier.classify(link)
@@ -73,7 +73,7 @@ func fallsBackToURL(raw: String) throws {
 }
 
 @Test("the FR-1.5 pattern is used verbatim")
-func patternIsVerbatim() {
+private func patternIsVerbatim() {
     #expect("PAY-421".wholeMatch(of: JiraKey.pattern) != nil)
     #expect("ABCDEFGHIJ-9".wholeMatch(of: JiraKey.pattern) != nil)
     #expect("ABCDEFGHIJK-9".wholeMatch(of: JiraKey.pattern) == nil)
