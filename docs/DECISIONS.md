@@ -425,6 +425,22 @@ Spec amendment — carried in full by `REQUIREMENTS.md` §3.4 (v1.10). §3.4's "
 serve as an identifier, because the same section makes a ref unique per
 `(taskID, kind, identifier)`. GitHub identifiers are repo-qualified (`acme/api#421`).
 
+### D-023 — `make format && make lint` was already broken on `main` before M1-01
+**2026-08-25** · M1-01 · **Status:** accepted
+
+`make format && make lint` — the exact sequence §9.5 step 4 requires — failed on `main` before
+this branch started, with three `opening_brace` violations in M0-05 files
+(`Steno/Features/MainWindow/TaskListView.swift:66`, `StenoKit/Features/MainWindow/MainWindowModel.swift:92`
+and `:143`). swift-format breaks a multi-clause `if let` and a long generic signature across
+lines, and SwiftLint `--strict` then rejects its own formatter's output — latent since M0-05
+merged because no task had run `make format` since. Commit `43f563d` on this branch fixed the
+three sites by restructuring them.
+
+**Why:** the narrow fix is restructuring, not a disable comment, per D-013. The broader question —
+whether SwiftLint should police `opening_brace` at all, given D-013 already assigns layout to
+swift-format — is left open for the maintainer rather than decided here.
+**Alternatives:** none taken; this entry records a finding, not a design choice.
+
 ---
 
 ## Open — decided by the task that owns them

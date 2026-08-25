@@ -238,7 +238,7 @@ private let classifyCases: [ClassifyCase] = [
 ]
 
 @Test("each shape maps to its kind and identifier", arguments: classifyCases)
-func classifiesByShape(testCase: ClassifyCase) throws {
+private func classifiesByShape(testCase: ClassifyCase) throws {
     let link = try #require(URL(string: testCase.link))
 
     let ref = SourceURLClassifier.classify(link)
@@ -263,7 +263,7 @@ private let fallbackCases: [String] = [
 ]
 
 @Test("anything unrecognised is a plain url, identified by itself", arguments: fallbackCases)
-func fallsBackToURL(raw: String) throws {
+private func fallsBackToURL(raw: String) throws {
     let link = try #require(URL(string: raw))
 
     let ref = SourceURLClassifier.classify(link)
@@ -274,7 +274,7 @@ func fallsBackToURL(raw: String) throws {
 }
 
 @Test("the FR-1.5 pattern is used verbatim")
-func patternIsVerbatim() {
+private func patternIsVerbatim() {
     #expect("PAY-421".wholeMatch(of: JiraKey.pattern) != nil)
     #expect("ABCDEFGHIJ-9".wholeMatch(of: JiraKey.pattern) != nil)
     #expect("ABCDEFGHIJK-9".wholeMatch(of: JiraKey.pattern) == nil)
@@ -569,12 +569,12 @@ private let extractCases: [ExtractCase] = [
 ]
 
 @Test("FR-1.5 extraction", arguments: extractCases)
-func extracts(testCase: ExtractCase) {
+private func extracts(testCase: ExtractCase) {
     #expect(ReferenceExtractor.extract(from: testCase.text) == testCase.expected)
 }
 
 @Test("keys and URLs interleave in first-occurrence order")
-func ordersByFirstOccurrence() {
+private func ordersByFirstOccurrence() {
     let text = "PAY-421 then https://example.com/a then INFRA-7"
 
     let refs = ReferenceExtractor.extract(from: text)
@@ -583,14 +583,14 @@ func ordersByFirstOccurrence() {
 }
 
 @Test("extraction is pure: the same input gives the same output")
-func isPure() {
+private func isPure() {
     let text = "PAY-421 and \(browseURL) and https://github.com/acme/api/pull/421"
 
     #expect(ReferenceExtractor.extract(from: text) == ReferenceExtractor.extract(from: text))
 }
 
 @Test("the link detector is available, so URL refs are not silently lost")
-func detectorIsAvailable() {
+private func detectorIsAvailable() {
     #expect(ReferenceExtractor.detector != nil)
 }
 ```
