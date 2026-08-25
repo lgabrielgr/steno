@@ -31,13 +31,13 @@ struct TaskDetailView: View {
                     Text("Timeline")
                         .font(.headline)
 
-                    // `events(forTaskID:)` is an untracked fetch — SwiftUI has
-                    // no dependency to observe here. This pane only re-renders
-                    // after a write because `task` above reads `model.groups`,
-                    // which `reload()` reassigns on every mutation. Superseded
-                    // by M1-06: once notes can be appended without changing
-                    // `groups`, this pane needs its own explicit refresh.
-                    let events = model.events(forTaskID: taskID)
+                    // Observed state, not a fetch: the model refreshes this
+                    // when the selection or the store changes. Calling a
+                    // fetching method here instead would give SwiftUI no
+                    // dependency to track, and would let a failed read set
+                    // `lastError` mid-render — which this window observes, so
+                    // the failure would re-invalidate the view that caused it.
+                    let events = model.selectedTaskEvents
                     if events.isEmpty {
                         Text("No events.")
                             .foregroundStyle(.secondary)

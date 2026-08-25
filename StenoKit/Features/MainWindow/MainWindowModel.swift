@@ -27,7 +27,21 @@ public final class MainWindowModel: MainWindowActions {
         didSet { if selection != oldValue { reload() } }
     }
 
-    public var selectedTaskID: UUID?
+    public var selectedTaskID: UUID? {
+        didSet { if selectedTaskID != oldValue { reloadSelectedTaskEvents() } }
+    }
+
+    /// The selected task's timeline, newest first, redacted events excluded.
+    ///
+    /// Published as stored state rather than fetched by the detail pane on
+    /// demand, and that is load-bearing in two ways. A fetch during `body`
+    /// would set `lastError` on failure — mutating observed state inside a
+    /// SwiftUI update pass, which `MainWindowView` reads, so the failure would
+    /// re-invalidate the view that triggered it and spin. And a method call
+    /// mid-render is invisible to observation, so the pane would refresh only
+    /// by accident, through whatever else it happened to read — fragile now
+    /// and wrong once M1-06 appends notes.
+    public private(set) var selectedTaskEvents: [Event] = []
 
     /// Which modal is on screen, if any. See `ActiveSheet` for why this is one
     /// optional rather than a `Bool` per sheet.
@@ -67,6 +81,14 @@ public final class MainWindowModel: MainWindowActions {
             !groups.contains(where: { group in group.tasks.contains { $0.id == id } }) {
             selectedTaskID = nil
         }
+
+        // Unconditional: the selection may be unchanged while its timeline is
+        // not — M1-06 appending a note is exactly that case.
+        reloadSelectedTaskEvents()
+    }
+
+    private func reloadSelectedTaskEvents() {
+        selectedTaskEvents = selectedTaskID.map { events(forTaskID: $0) } ?? []
     }
 
     public func project(withID id: UUID) -> Project? {

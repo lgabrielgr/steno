@@ -164,3 +164,47 @@ func selectionChangeReloads() throws {
 
     #expect(model.groups[0].tasks.count == 1)
 }
+
+@MainActor
+@Test("selecting a task publishes its timeline; deselecting clears it")
+func selectingATaskPublishesItsTimeline() throws {
+    let (model, _) = try makeModel()
+    model.createProject(named: "Payments")
+    model.createTask(titled: "Fix the retry handler")
+    let taskID = try #require(model.groups.first?.tasks.first?.id)
+
+    #expect(model.selectedTaskEvents.isEmpty)
+
+    model.selectedTaskID = taskID
+
+    // The detail pane reads this array; it must never have to fetch during a
+    // render pass, where a failed read would mutate observed state.
+    #expect(model.selectedTaskEvents.map(\.kind) == [.created])
+
+    model.selectedTaskID = nil
+
+    #expect(model.selectedTaskEvents.isEmpty)
+}
+
+@MainActor
+@Test("a reload refreshes the selected task's timeline in place")
+func reloadRefreshesTheSelectedTimeline() throws {
+    let (model, context) = try makeModel()
+    model.createProject(named: "Payments")
+    model.createTask(titled: "Fix the retry handler")
+    let taskID = try #require(model.groups.first?.tasks.first?.id)
+    model.selectedTaskID = taskID
+    #expect(model.selectedTaskEvents.count == 1)
+
+    // Appended behind the model's back, the way M1-06's note service will.
+    context.insert(
+        Event(taskID: taskID, timestamp: origin, kind: .note, body: "Repro'd it")
+    )
+    try context.save()
+
+    model.reload()
+
+    // Selection is unchanged, so this only passes if reload() refreshes the
+    // timeline unconditionally rather than on selection change alone.
+    #expect(model.selectedTaskEvents.count == 2)
+}
