@@ -87,10 +87,10 @@ public final class MainWindowModel: MainWindowActions {
 
         // A task that has scrolled out of the DONE window, or whose project was
         // just archived, must not leave the detail pane showing a stale row.
-        if let id = selectedTaskID {
-            if !groups.contains(where: { group in group.tasks.contains { $0.id == id } }) {
-                selectedTaskID = nil
-            }
+        if let id = selectedTaskID,
+            !groups.contains(where: { group in group.tasks.contains { $0.id == id } })
+        {
+            selectedTaskID = nil
         }
 
         // Unconditional: the selection may be unchanged while its timeline is

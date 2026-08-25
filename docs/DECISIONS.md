@@ -425,23 +425,30 @@ Spec amendment — carried in full by `REQUIREMENTS.md` §3.4 (v1.10). §3.4's "
 serve as an identifier, because the same section makes a ref unique per
 `(taskID, kind, identifier)`. GitHub identifiers are repo-qualified (`acme/api#421`).
 
-### D-023 — `make format && make lint` was already broken on `main` before M1-01
-**2026-08-25** · M1-01 · **Status:** accepted
+### D-023 — `opening_brace` is disabled; swift-format owns brace placement
+**2026-08-25** · M1-01 · **Status:** accepted · extends D-013
 
 `make format && make lint` — the exact sequence §9.5 step 4 requires — failed on `main` before
 this branch started, with three `opening_brace` violations in M0-05 files
 (`Steno/Features/MainWindow/TaskListView.swift:66`, `StenoKit/Features/MainWindow/MainWindowModel.swift:92`
 and `:143`). swift-format breaks a multi-clause `if let` and a long generic signature across
 lines, and SwiftLint `--strict` then rejects its own formatter's output — latent since M0-05
-merged because no task had run `make format` since. Commit `43f563d` on this branch fixed the
-three sites by restructuring them; that commit also touched
-`StenoKit/Features/MainWindow/TaskGrouping.swift:31-32`, which was not a lint violation but
-swift-format layout the same run rewrote, folded in so the tree is format-stable.
+merged because no task had run `make format` since. Commit `43f563d` restructured the three
+sites; it also touched `StenoKit/Features/MainWindow/TaskGrouping.swift:31-32`, which was not a
+violation but swift-format layout the same run rewrote, folded in so the tree stayed
+format-stable. `opening_brace` is now in `.swiftlint.yml`'s `disabled_rules`, and the two
+`if`-restructurings that existed only to satisfy it are reverted (the generic-signature wrap and
+the `TaskGrouping` change stay — those are formatter output, not lint appeasement).
 
-**Why:** the narrow fix is restructuring, not a disable comment, per D-013. The broader question —
-whether SwiftLint should police `opening_brace` at all, given D-013 already assigns layout to
-swift-format — is left open for the maintainer rather than decided here.
-**Alternatives:** none taken; this entry records a finding, not a design choice.
+**Why:** the rule is pure layout, which D-013 already assigns to swift-format; this extends that
+division rather than contradicting it. Its only observed effect here was rejecting the
+formatter's own output and forcing correct code to be rewritten by hand — the loop D-013 exists
+to prevent. Its residual value is nil, because `make format` normalises a hand-written misplaced
+brace anyway.
+**Alternatives:** per-site restructuring, as `43f563d` did (pays the cost again at every
+multi-clause `if let` anyone writes, in code that was already correct); `swiftlint:disable`
+comments (D-013 reserves those for genuine false positives, which this is not — the rule is
+working as designed and the design is wrong for this repo).
 
 ---
 
