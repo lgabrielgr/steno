@@ -418,6 +418,13 @@ tasks belonging to an archived project. The two places this is likeliest to bite
 stale-task detection, and M2-01's event-gathering for the report window — both need "tasks
 belonging to a live project," and neither gets it for free from the store.
 
+### D-022 — `SourceRef.identifier` must be unique within its kind
+**2026-08-25** · M1-01 · **Status:** accepted
+
+Spec amendment — carried in full by `REQUIREMENTS.md` §3.4 (v1.10). §3.4's "PR number" could not
+serve as an identifier, because the same section makes a ref unique per
+`(taskID, kind, identifier)`. GitHub identifiers are repo-qualified (`acme/api#421`).
+
 ---
 
 ## Open — decided by the task that owns them

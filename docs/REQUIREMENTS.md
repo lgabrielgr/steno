@@ -1,12 +1,13 @@
 # REQUIREMENTS.md — Steno
 
-**Status:** Draft v1.9
-**Date:** 2026-08-20
+**Status:** Draft v1.10
+**Date:** 2026-08-25
 **Audience:** Engineering agents in future sessions. This document is the source of truth for task generation and implementation.
 
 > **Steno** — a stenographer records what was said, verbatim, without editorializing. That is the product in one word: an accurate record of what you did, lightly organized, never embellished.
 
 **Changelog**
+- *v1.10* — Corrected §3.4's `identifier` column. "PR number" was not a viable identifier: §3.4 makes a ref unique per `(taskID, kind, identifier)`, so two pull requests numbered 421 in different repositories collapse into one row and the second reference is silently dropped. The identifier is now required to be unique within its kind, and GitHub's is repo-qualified (`acme/api#421`). Found while designing M1-01.
 - *v1.9* — Corrected §10.1's claim that events are immutable. They are append-only, but `Event.isRedacted` and `StandupReport.isUndone` are mutable flags, so a record present on both machines can still differ and union-by-UUID alone would drop a redaction. §10.1 now names the gap and routes the actual merge rule to `DECISIONS.md` O-8 (owner: M2.5-02); the mutable-field table's row count is corrected from "three" to four. Found while implementing M0-03.
 - *v1.8* — The task model's Swift type is named **`TaskItem`**, not `Task`, to avoid shadowing `_Concurrency.Task` (§3.2). Domain vocabulary is unchanged: prose, UI copy, and the export key `"tasks"` all still say "task". Updated §3, §3.2, and §10.1.
 - *v1.7* — Resolved nine internal contradictions and gaps found on first full read. First-run `windowStart` is now unambiguously 24h (§3.5 corrected to match FR-4). Undo (FR-4.1) and the note grace window (FR-2) are both defined as *redaction*, so the append-only invariant holds with no exceptions. `modifiedAt` added to `Project` and `Task` (§3.1, §3.2) as §10.1 already required. `SourceRef` promoted to a first-class model with `id` and an export array (§3.4, §10.1, §10.2). §7.3 gains a second output schema for `periodic` cadence. Stale threshold clarified as global default + per-project override (FR-6). Project facts fixed in §9.1 (bundle ID `com.lgabrielgr.steno`, macOS 14.0 floor). Vestigial CloudKit purge clause removed from §8.
@@ -175,7 +176,7 @@ A reference from a task to an external system, extracted automatically from task
 | `id` | UUID | |
 | `taskID` | UUID | |
 | `kind` | enum | `jiraIssue`, `confluencePage`, `githubPR`, `url`, `mcpResource` |
-| `identifier` | String | e.g. `PAY-421`, page ID, PR number |
+| `identifier` | String | Must be unique within its `kind`, because it is half the dedup key below. Jira: the key, `PAY-421`. Confluence: the numeric page ID. GitHub: **repo-qualified**, `acme/api#421` — a bare PR number collides across repositories |
 | `url` | String? | Canonical link |
 | `lastFetchedAt` | Date? | |
 | `cachedSummary` | String? | Last known state, for offline use |
