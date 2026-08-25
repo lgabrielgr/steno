@@ -14,6 +14,44 @@ public enum ReferenceExtractor {
         let link: URL
     }
 
+    /// Answers "does this range sit inside a link?" without rescanning the
+    /// spans for every key.
+    ///
+    /// Keys arrive in ascending start order — `Regex.matches(of:)` yields
+    /// non-overlapping matches in text order — and `linkSpans` returns spans
+    /// sorted the same way, so one cursor walks the spans once for the whole
+    /// key sequence. Testing each key against every span instead is O(keys ×
+    /// spans), which is quadratic on ref-dense text: measured on a 950 KB
+    /// paste, that phase alone cost 3.3 s against §1.1's three-second capture
+    /// budget, for input FR-1.5 reaches because it also runs over note bodies.
+    private struct SpanCursor {
+        private let spans: [LinkSpan]
+        private var index: Int
+
+        init(_ spans: [LinkSpan]) {
+            self.spans = spans
+            index = spans.startIndex
+        }
+
+        /// True when `range` intersects any span.
+        ///
+        /// Call with non-descending `range.lowerBound`; the cursor only moves
+        /// forward. A span it skips ends at or before this range's start, so
+        /// it can overlap neither this range nor any later one. Of the spans
+        /// that remain, the one at `index` starts earliest, so comparing that
+        /// one start against `range.upperBound` settles the whole set — and
+        /// because the ranges are half-open, a key that merely touches a span
+        /// is correctly *not* covered, while one that starts before a span and
+        /// ends inside it is.
+        mutating func covers(_ range: Range<String.Index>) -> Bool {
+            while index < spans.endIndex, spans[index].range.upperBound <= range.lowerBound {
+                index += 1
+            }
+            guard index < spans.endIndex else { return false }
+            return spans[index].range.lowerBound < range.upperBound
+        }
+    }
+
     /// `NSDataDetector` is `Sendable`, so this needs no isolation. Built with
     /// `try?` rather than `try!`, which `make lint --strict` rejects; a test
     /// asserts it is non-nil, so a silent total failure cannot ship.
@@ -30,8 +68,8 @@ public enum ReferenceExtractor {
         // A key overlapping a link is part of that link. This is what turns a
         // browse URL into one ref instead of two, and what stops a slug like
         // /reports/AWS-2024/q3 from manufacturing a ticket that never existed.
-        for match in text.matches(of: JiraKey.pattern) {
-            guard !spans.contains(where: { $0.range.overlaps(match.range) }) else { continue }
+        var cursor = SpanCursor(spans)
+        for match in text.matches(of: JiraKey.pattern) where !cursor.covers(match.range) {
             found.append(
                 (
                     match.range.lowerBound,
@@ -42,12 +80,17 @@ public enum ReferenceExtractor {
         return merged(found.map(\.ref))
     }
 
-    /// **Every** link the detector recognised, whatever its scheme.
+    /// **Every** link the detector recognised, whatever its scheme, in
+    /// ascending start order.
     ///
     /// The `http(s)` filter belongs to `isRefBearing`, not here: a span this
     /// function dropped would be invisible to the overlap rule, and the key
     /// regex would read straight through it — `ping PAY-421@example.com` would
     /// yield a phantom ticket out of the interior of an email address.
+    ///
+    /// The detector returns matches in text order; sorting makes `SpanCursor`'s
+    /// precondition enforced rather than assumed, at n log n on data that is
+    /// already sorted.
     private static func linkSpans(in text: String) -> [LinkSpan] {
         guard let detector else { return [] }
         let whole = NSRange(text.startIndex..., in: text)
@@ -56,7 +99,7 @@ public enum ReferenceExtractor {
             guard let link = match.url, let range = Range(match.range, in: text) else { continue }
             spans.append(LinkSpan(range: range, link: link))
         }
-        return spans
+        return spans.sorted { $0.range.lowerBound < $1.range.lowerBound }
     }
 
     /// Only an `http(s)` link becomes a ref. The detector synthesises a

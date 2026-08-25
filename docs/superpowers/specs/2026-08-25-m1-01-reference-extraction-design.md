@@ -177,11 +177,21 @@ because the regex path does not depend on the detector. Losing URL detection sho
 cost the user their ticket references. A test asserts the detector is non-nil, so a silent total
 failure cannot ship.
 
-No input length cap. Cost is linear in length and stays far inside the budget: measured against
-the finished implementation, a realistic capture string is **91 µs** and a ~7 KB note body is
-**1.9 ms** — three orders of magnitude under §1.1's three seconds, on the slowest input this
-product can produce. A cap is a silent data-loss rule that would need a justification this task
-does not have.
+No input length cap. Cost is **O(n log n)** in the length of the text: link detection and the key
+regex are each a single pass, the spans are sorted once, and the overlap rule is a two-pointer
+walk over them rather than a membership test per key. Measured against the fixed implementation,
+worst of `measure`'s ten iterations: a realistic capture string is **180 µs**, a ~7 KB note body
+is **3.9 ms**, and a link-dense 250 KB paste — 8,000 links, 8,000 keys — is **180 ms**. All are
+far inside §1.1's three seconds. A cap is a silent data-loss rule that would need a justification
+this task does not have.
+
+That claim was false as first written, and this section was the only thing standing in for a
+cap. The original overlap rule tested each key against every span — O(keys × spans), quadratic on
+ref-dense text: the overlap phase alone cost **3.6 s** on the 250 KB paste above, and end-to-end
+extraction of a 950 KB paste took **4.9 s**, past the budget, on input FR-1.5 reaches because it
+also runs over note bodies. Found in review of this branch; fixed by `ReferenceExtractor`'s
+`SpanCursor`, which brought the same 950 KB paste to 0.46 s, and pinned by the third `measure`
+case, which no quadratic implementation can pass.
 
 ---
 
