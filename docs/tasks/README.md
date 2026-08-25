@@ -50,7 +50,7 @@ something better than paper. **M2 is the true MVP; M6 is the finish line.**
 - [x] [M0-02](M0-02-test-lint-harness.md) — headless test target and SwiftLint; `make test`/`make lint` green
 - [x] [M0-03](M0-03-domain-models.md) — the five SwiftData models, CloudKit-compatible
 - [x] [M0-04](M0-04-persistence-container.md) — local store wiring; data survives relaunch
-- [ ] [M0-05](M0-05-main-window-shell.md) — three-column shell; create and list projects and tasks
+- [x] [M0-05](M0-05-main-window-shell.md) — three-column shell; create and list projects and tasks — PR #9
 
 ### M1 — Capture
 > Exit: the user can abandon the paper notebook for capture.
