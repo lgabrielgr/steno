@@ -141,7 +141,7 @@ StenoKit/         framework — everything testable
   Support/        Logging.swift                          (exists, M0-02)
   Models/         SwiftData models, enums                (exists, M0-03)
   Persistence/    StenoStore — schema, store location    (exists, M0-04)
-  Capture/        capture core, ref extraction           (M1-01, M1-02)
+  Capture/        ref extraction (exists, M1-01); capture core (M1-02)
   Report/         window computation, renderers          (M2-01, M2-02)
   Portability/    export, import, merge                  (M2.5)
   AI/             AIProvider, AnthropicProvider          (M3)
