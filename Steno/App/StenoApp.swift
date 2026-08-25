@@ -44,10 +44,15 @@ struct StenoApp: App {
         WindowGroup {
             switch store {
             case .success(let container):
-                ContentView().modelContainer(container)
+                // No `.modelContainer(container)`: no view reaches the store
+                // directly, so ARCHITECTURE §2 rule 2 holds by construction
+                // rather than by discipline. Do not add it back without a view
+                // that genuinely needs `@Query`.
+                MainWindowView(container: container)
             case .failure(let error):
                 StoreFailureView(path: storePath, error: error)
             }
         }
+        .commands { MainWindowCommands() }
     }
 }

@@ -93,6 +93,8 @@ a broad refactor.
 | Secrets never persisted | Keychain only; never SwiftData, `UserDefaults`, plists, logs | Credential layer (M3-01), asserted in export tests (M2.5-01) | §8, §10.3 |
 | Reads only, permanently | No mutating request to Jira or Confluence | Connectors (M4-02, M4-03) | D5 |
 | Integrations never block | A failed fetch degrades to cache, never stops a report | Connector registry (M4-01) | §5.5, §7.4 |
+| Views never *query* the store | No `@Query`, no `@Environment(\.modelContext)`; `.modelContainer` not attached to the scene | View models (M0-05) | §14, ARCH §2 rule 2 |
+| Views never *mutate* the store | Domain mutators unreachable from `Steno/` | **Not yet enforced** — views hold live `@Model` objects with public mutators; M1-05 closes it (see D-019) | §3.2, §10.1 |
 
 Where a row says "asserted in tests", that is deliberate: these are the invariants whose
 violation is invisible in review and expensive in production.
@@ -144,10 +146,10 @@ StenoKit/         framework — everything testable
   Portability/    export, import, merge                  (M2.5)
   AI/             AIProvider, AnthropicProvider          (M3)
   Sources/        SourceConnector, Jira, Confluence, MCP (M4, M5)
-  Features/       view models, by feature
+  Features/       view models, by feature — MainWindow (M0-05)
 Steno/            application — SwiftUI views and @main, nothing else
-  App/            StenoApp.swift, ContentView.swift      (exists)
-  Features/       views, by feature — paired with StenoKit/Features/
+  App/            @main, store failure scene, menu commands  (exists)
+  Features/       views, by feature — MainWindow (M0-05)
   Steno.entitlements                                     (exists)
 StenoTests/       unhosted unit-test bundle; headless, network denied  (exists, M0-02)
 Scripts/

@@ -320,7 +320,7 @@ an implicit path).
 **2026-08-21** · M0-04 · **Status:** accepted
 
 `StenoApp` builds the container into a `Result` and switches the root scene: success gets
-`ContentView`, failure gets `StoreFailureView`, which names the store path and the underlying
+`MainWindowView`, failure gets `StoreFailureView`, which names the store path and the underlying
 error and offers Quit.
 
 **Why:** Apple's `.modelContainer(for:)` traps, which reads as a crash to anyone not watching
@@ -331,6 +331,92 @@ stand-up. §13's "degradation ships with the feature" is scoped to network-depen
 (§7.4); it does not ask for a store that pretends to persist.
 **Alternatives:** `fatalError` with a logged reason (cheapest; invisible unless stderr is being
 watched). M0-05 inherits a root scene conditional on container construction, which is deliberate.
+
+### D-019 — View models own the `ModelContext`; views get no store access
+**2026-08-23** · M0-05 · **Status:** accepted
+
+An `@Observable @MainActor` view model in `StenoKit/Features/` holds the context, fetches, and
+publishes ready-to-render arrays. Views declare no `@Query` and no
+`@Environment(\.modelContext)`, and `.modelContainer(_:)` is **not** attached to the scene.
+
+**Why:** ARCHITECTURE §2 rule 2 and §14 already require the separation on testability grounds
+(§9.4); this is where it becomes structural rather than advisory. Dropping the environment
+container means there is no route from a view to *query* the store by accident. Every behaviour
+in the main window — grouping, the DONE window, project scoping, the `created` event, archive
+filtering — is therefore covered by the headless bundle, which matters more than usual here
+because GUI automation is unavailable on this machine.
+
+**What this does NOT close, stated precisely because the obvious reading overclaims it.** This
+closes the *read* path only. The model publishes live `@Model` objects — `projects` is `[Project]`,
+and `groups` carries `[TaskItem]` — and those types expose public mutators (`rename(to:at:)`,
+`setStatus(_:at:)`, `setArchived(_:at:)`). A view therefore *holds* objects it could mutate, and
+because `save(context)` commits every pending change in the context, such a mutation would be
+persisted by the next unrelated `perform(_:_:)` — a write nobody asked for, riding along on a
+save for something else. No view does this today: the only production mutator call is
+`MainWindowModel.archive`. **The danger is M1-05's:** a view calling `setStatus` directly would
+change status *without* appending the `statusChanged` event, which ARCHITECTURE §1 names as a bug
+that surfaces much later as an inexplicable revert after an import (§10.1). M1-05 owns the status
+service and should close this by construction — reducing the domain mutators from `public` to
+`internal` compiles today (the sole production caller is inside `StenoKit`, and tests use
+`@testable import`), and is the cheapest option; mapping to value types is the thorough one.
+Deliberately not done here: it changes M0-03's domain API, which deserves its own task and review
+rather than a tail-end amendment to this one.
+**Alternatives:** `@Query` in views with view models for derived logic only — idiomatic SwiftUI
+and self-refreshing, but it puts the fetch in the view, which is the thing rule 2 forbids.
+**The cost, and who pays it:** a manual fetch does not refresh when another surface writes.
+Mutations through the model reload themselves, so M0-05 is correct; M1-03's floating window and
+M1-04's popover must add a refresh (window activation is the likely minimum) or the main window
+will silently miss tasks captured elsewhere.
+
+### D-020 — Keyboard shortcuts are menu-bar commands reached via `@FocusedValue`
+**2026-08-23** · M0-05 · **Status:** accepted
+
+`MainWindowView` publishes its model with `.focusedSceneValue(\.mainWindowActions, model)`; a
+`Commands` struct reads it with `@FocusedValue` and declares real menu items. Actions are declared
+on the `MainWindowActions` protocol.
+
+**Why:** FR-3 requires a shortcut for every primary action, and M1-05/M1-06 are instructed to
+extend one mechanism rather than invent a second. Adding a shortcut is now one protocol method and
+one `Button`, and omitting the implementation is a compile error rather than a menu item that
+silently does nothing. On macOS a shortcut that exists is expected to appear in a menu, which
+in-view `.keyboardShortcut` bindings never do.
+**Alternatives:** `.keyboardShortcut` on toolbar/context-menu buttons (undiscoverable, enumerated
+nowhere, re-declared per surface); a pure key-router in `StenoKit` with a unit-tested chord table
+(most testable, and collisions become test failures — but it still needs separate menu
+declarations for discoverability, so both would have to be maintained).
+**Not settled here:** bare-letter shortcuts such as FR-2's suggested `N` for notes. A no-modifier
+menu shortcut risks swallowing keystrokes meant for a text field; M1-06 should decide it against
+real UI.
+
+### D-021 — M0-05's interim behaviours, and who supersedes them
+**2026-08-24** · M0-05 · **Status:** accepted
+
+Three rules in `MainWindowModel` are deliberately provisional, standing in for specs that need
+data this milestone doesn't have yet:
+
+- **DONE's cutoff is a fixed 24 hours** (`doneCutoff()`), not FR-3's actual report window.
+  Superseded by M2-01, which computes the window from `project.lastStandupAt` (D8) — a field that
+  stays nil, and so answers identically to the fixed cutoff, until M2-03 ships the Copy action that
+  advances it.
+- **Under "All", a new task's target project is the first by `sortOrder`** (`targetProjectID()`),
+  not FR-1.4's specified "last-used project". Superseded by M1-02, which owns that rule along with
+  first-launch behaviour.
+- **Archiving hides a project's tasks by an in-memory join, not a stored flag.** `archive()` sets
+  only `Project.isArchived`; `TaskItem` has no archived bit of its own. `MainWindowModel.fetchTasks()`
+  fetches every non-deleted task and filters it to the set of currently-visible project IDs after
+  the fact — "a project's tasks disappear when it archives" is an emergent property of that one
+  filter, not a fact stored anywhere.
+
+**Why:** each rule ships a real, spec-compliant behaviour for every state M0-05 can reach, while
+naming the milestone that owns the general case, so the stand-in is never mistaken for the spec.
+**Alternatives:** blocking M0-05 on the real rules landing first — rejected, since none of the
+three specs (report window, last-used project, an archived-task flag) has an owner yet and the
+main window is otherwise ready to ship.
+**The archived-task rule is the one with teeth.** It lives only in `fetchTasks()`. Any future query
+that wants "live tasks" and does not re-apply the visible-projects filter will silently include
+tasks belonging to an archived project. The two places this is likeliest to bite: M6-01's
+stale-task detection, and M2-01's event-gathering for the report window — both need "tasks
+belonging to a live project," and neither gets it for free from the store.
 
 ---
 

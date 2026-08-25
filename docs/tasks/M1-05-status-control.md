@@ -46,3 +46,12 @@ a keyboard shortcut and UI in every surface that shows a task.
   §3.3 marks it optional; keep it optional.
 - This path is called from the detail pane, task rows, and M1-04's popover. Build it as a
   service the surfaces call, not as view code.
+- **Close the mutation hole M0-05 left open (D-019).** The main window's view model publishes live
+  `@Model` objects, and `Project`/`TaskItem` expose `public` mutators — so a view *can* call
+  `setStatus` directly, skipping the event, and `save(context)` would commit it on the next
+  unrelated write. Nothing does this today, but this task is where it becomes dangerous, because
+  this task is the one adding status controls to view code. Reducing the domain mutators from
+  `public` to `internal` compiles as of M0-05 (the only production caller is inside `StenoKit`,
+  and tests use `@testable import`) and makes the service the sole route by construction rather
+  than by convention. Decide it here deliberately; M0-05 declined to change M0-03's API from a
+  UI task.
