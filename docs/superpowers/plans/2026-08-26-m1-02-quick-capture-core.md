@@ -1574,6 +1574,11 @@ func ticketKeyOutranksSelection() throws {
     model.selection = .project(hiring)
     model.createTask(titled: "PAY-421 fix the retry handler")
 
+    // Assert under All: the task went to Payments while the sidebar shows
+    // Hiring, and `groups` is scoped to the selection — so reading it here
+    // would find an empty list and prove nothing.
+    model.selection = .all
+
     // FR-1.4 rung 1 beats rung 2.
     let landed = try #require(model.groups.flatMap(\.tasks).first)
     #expect(landed.projectID == payments.id)
@@ -1952,6 +1957,10 @@ func editedKeysRouteACapture() throws {
 
     model.selection = .project(hiring)
     model.createTask(titled: "PAY-421 fix the retry handler")
+
+    // Under All, because the key routed the task away from the selection and
+    // `groups` only ever holds the selected project's tasks.
+    model.selection = .all
 
     // The whole point of the editor: without it every project holds [] and
     // this assertion cannot be made to pass by any user action.
