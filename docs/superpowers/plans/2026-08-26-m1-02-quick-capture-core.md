@@ -683,21 +683,34 @@ func lastUsedFollowsTheNewestTask() throws {
 @Test("last-used ignores a newer task belonging to an archived project")
 func lastUsedSkipsArchivedProjects() throws {
     let context = try makeContext()
-    let payments = try insertProject("Payments", order: 0, into: context)
-    let hiring = try insertProject("EM — Hiring", order: 1, into: context)
+    try insertProject("Payments", order: 0, into: context)
+    let design = try insertProject("Design System", order: 1, into: context)
+    let hiring = try insertProject("EM — Hiring", order: 2, into: context)
     let clock = AdvancingClock(start: epoch)
     let service = CaptureService(context: context, now: { clock.next() })
 
+    // Older capture into a project that stays live...
+    try service.capture(text: "into design", preferred: design.id)
+    // ...then a newer one into the project about to be archived.
     try service.capture(text: "into hiring", preferred: hiring.id)
     hiring.setArchived(true, at: epoch)
     try context.save()
 
     let next = try #require(try service.capture(text: "where does this land", preferred: nil))
 
-    // D-021: TaskItem has no archived flag of its own, so the newest task row
-    // still belongs to Hiring. A fetchLimit of 1 would route into a project
-    // the user cannot see.
-    #expect(next.projectID == payments.id)
+    // **Three projects, not two, and that is what makes this test discriminate.**
+    // D-021: `TaskItem` has no archived flag of its own, so the newest task row
+    // still belongs to archived Hiring. The three candidate implementations
+    // must give three answers, and only one of them is Design System:
+    //
+    //   correct           → Design System — newest task in a *live* project
+    //   `fetchLimit = 1`  → Hiring, which `ProjectRouter` then rejects as not
+    //                       live, falling through to rung 5 → Payments
+    //   no derivation     → rung 5 → Payments
+    //
+    // With only two projects the correct answer collapses onto rung 5's answer
+    // and the bug this test is named for passes it.
+    #expect(next.projectID == design.id)
 }
 
 @MainActor
