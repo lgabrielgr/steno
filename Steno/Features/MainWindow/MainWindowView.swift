@@ -45,11 +45,7 @@ struct MainWindowView: View {
                     confirm: "Create"
                 ) { model.createProject(named: $0) }
             case .newTask:
-                TextEntrySheet(
-                    title: "New Task",
-                    placeholder: "What are you working on?",
-                    confirm: "Add"
-                ) { model.createTask(titled: $0) }
+                NewTaskSheet(model: model)
             }
         }
     }

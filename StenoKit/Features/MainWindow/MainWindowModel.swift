@@ -209,6 +209,18 @@ public final class MainWindowModel: MainWindowActions {
 
     // MARK: - Writing
 
+    /// A capture service over this window's context, for the capture sheet.
+    ///
+    /// The view never touches the context itself — it gets a service that
+    /// already holds one, so D-019's rule (no `@Query`, no
+    /// `@Environment(\.modelContext)`) is untouched.
+    public func captureService() -> CaptureService {
+        CaptureService(context: context, now: now, save: save)
+    }
+
+    /// FR-1.4 rung 2, exposed for the capture sheet. See `preferredProjectID`.
+    public var preferredProjectIDForCapture: UUID? { preferredProjectID() }
+
     public func createProject(named name: String) {
         let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
