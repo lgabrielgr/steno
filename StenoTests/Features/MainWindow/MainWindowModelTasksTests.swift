@@ -46,8 +46,8 @@ func createTaskAppendsCreatedEvent() throws {
 }
 
 @MainActor
-@Test("with no projects, creating a task is a no-op and stores nothing")
-func createTaskWithoutProjectsIsNoOp() throws {
+@Test("with no projects, creating a task stores nothing and says why")
+func createTaskWithoutProjectsExplainsItself() throws {
     let (model, context) = try makeModel()
 
     model.createTask(titled: "orphan")
@@ -55,6 +55,9 @@ func createTaskWithoutProjectsIsNoOp() throws {
     #expect(model.groups.isEmpty)
     #expect(try context.fetch(FetchDescriptor<TaskItem>()).isEmpty)
     #expect(try context.fetch(FetchDescriptor<Event>()).isEmpty)
+    // The one state where capture refuses. Silence here would look like a
+    // dropped keystroke (design §4.2).
+    #expect(model.lastError != nil)
 }
 
 @MainActor
@@ -102,8 +105,8 @@ func selectionScopesTheList() throws {
 }
 
 @MainActor
-@Test("under All, a new task goes to the first project by sortOrder")
-func allTargetsFirstProject() throws {
+@Test("under All with no history, a new task goes to the first project")
+func allTargetsFirstProjectWhenThereIsNoHistory() throws {
     let (model, _) = try makeModel()
     model.createProject(named: "First")
     model.createProject(named: "Second")
@@ -112,7 +115,51 @@ func allTargetsFirstProject() throws {
 
     model.createTask(titled: "where does this go")
 
+    // FR-1.4 rung 5: no key, no selection, no last-used, no configured
+    // default. Same answer as M0-05's stand-in, now for a stated reason.
     #expect(model.groups[0].tasks.first?.projectID == first)
+}
+
+@MainActor
+@Test("under All, a new task follows the last-used project")
+func allFollowsLastUsed() throws {
+    let (model, _) = try makeModel()
+    model.createProject(named: "First")
+    model.createProject(named: "Second")
+    let second = try #require(model.projects.last?.id)
+
+    model.selection = .project(second)
+    model.createTask(titled: "into second")
+    model.selection = .all
+    model.createTask(titled: "and this one?")
+
+    // FR-1.4 rung 3, which D-021 recorded as M1-02's to implement.
+    let landed = try #require(model.groups[0].tasks.first { $0.title == "and this one?" })
+    #expect(landed.projectID == second)
+}
+
+@MainActor
+@Test("a matching ticket key outranks the sidebar selection")
+func ticketKeyOutranksSelection() throws {
+    let (model, context) = try makeModel()
+    model.createProject(named: "Payments")
+    model.createProject(named: "EM — Hiring")
+    let payments = try #require(model.projects.first)
+    let hiring = try #require(model.projects.last?.id)
+    payments.setJiraProjectKeys(["PAY"], at: origin)
+    try context.save()
+
+    model.selection = .project(hiring)
+    model.createTask(titled: "PAY-421 fix the retry handler")
+
+    // Assert under All: the task went to Payments while the sidebar shows
+    // Hiring, and `groups` is scoped to the selection — so reading it here
+    // would find an empty list and prove nothing.
+    model.selection = .all
+
+    // FR-1.4 rung 1 beats rung 2.
+    let landed = try #require(model.groups.flatMap(\.tasks).first)
+    #expect(landed.projectID == payments.id)
 }
 
 @MainActor

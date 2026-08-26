@@ -239,34 +239,41 @@ public final class MainWindowModel: MainWindowActions {
         }
     }
 
+    /// FR-1's capture, through the shared path (D15).
+    ///
+    /// The routing, the `created` event and the ref extraction all live in
+    /// `CaptureService`, so this window, M1-03's floating window and M1-04's
+    /// popover cannot drift apart. What stays here is this surface's own
+    /// context — the sidebar selection — and the error presentation.
     public func createTask(titled title: String) {
-        let trimmed = title.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty, let projectID = targetProjectID() else { return }
-
-        let stamp = now()
-        perform("create the task") {
-            let task = TaskItem(title: trimmed, projectID: projectID, createdAt: stamp)
-            self.context.insert(task)
-            // §3.3's EventKind table: `created` is written when a task is
-            // created. A task without one is a hole in the append-only log —
-            // M2-01's gathering would skip it and M2.5-02's merge would reason
-            // from it. M1-02's capture service takes over this call site.
-            self.context.insert(
-                Event(taskID: task.id, timestamp: stamp, kind: .created, body: "Task created")
+        // Constructed per call rather than stored: three retained references
+        // is nothing against a SwiftData save, and it keeps `now` and `save`
+        // from being captured at init and going stale in tests.
+        let capture = CaptureService(context: context, now: now, save: save)
+        do {
+            try capture.capture(text: title, preferred: preferredProjectID())
+            lastError = nil
+        } catch CaptureError.noProjectAvailable {
+            lastError = "Create a project before adding a task."
+        } catch {
+            Log.app.error(
+                "could not create the task: \(String(describing: error), privacy: .public)"
             )
+            lastError = "Could not create the task. Your change was not saved."
         }
+        reload()
     }
 
-    /// FR-1.4: never block on project selection.
+    /// FR-1.4 rung 2: this surface's own context.
     ///
-    /// Superseded by M1-02: the specified rule is "default to the last-used
-    /// project", which M1-02 owns along with the first-launch behaviour. Until
-    /// then the first project by `sortOrder` stands in — and the task row shows
-    /// its project, so the assignment is visible rather than silent.
-    private func targetProjectID() -> UUID? {
+    /// Under "All" the window has no opinion about where a task belongs, so it
+    /// says so with `nil` and the ladder falls through to the last-used
+    /// project — rather than asserting the first project, which is what
+    /// D-021's stand-in did before this task retired it.
+    private func preferredProjectID() -> UUID? {
         switch selection {
         case .project(let id): id
-        case .all: projects.first?.id
+        case .all: nil
         }
     }
 
