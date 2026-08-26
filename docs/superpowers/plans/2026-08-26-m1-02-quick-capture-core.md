@@ -1650,12 +1650,20 @@ Expected: FAIL — `allFollowsLastUsed`, `ticketKeyOutranksSelection`, and `crea
 In `StenoKit/Features/MainWindow/MainWindowModel.swift`, replace `createTask(titled:)` and `targetProjectID()` — everything from `public func createTask(titled title: String) {` through the closing brace of `private func targetProjectID() -> UUID? { … }` — with:
 
 ```swift
-    /// FR-1's capture, through the shared path (D15).
+    /// FR-1's capture, through the shared path (D15) — **programmatic entry
+    /// point only.**
     ///
     /// The routing, the `created` event and the ref extraction all live in
-    /// `CaptureService`, so this window, M1-03's floating window and M1-04's
-    /// popover cannot drift apart. What stays here is this surface's own
-    /// context — the sidebar selection — and the error presentation.
+    /// `CaptureService`. What stays here is this surface's own context — the
+    /// sidebar selection — and the error presentation.
+    ///
+    /// **The capture sheet does not call this.** `NewTaskSheet` drives
+    /// `CaptureFieldModel`, which needs per-keystroke chip state this method
+    /// has no way to express, and reaches the same `CaptureService`. Both
+    /// wrappers therefore share the write path, which is what D15 requires,
+    /// but this one has no production caller today. Whether it should be
+    /// deleted or kept as a documented API is recorded for review rather than
+    /// settled here — see the M1-02 plan's Task 6 findings.
     public func createTask(titled title: String) {
         // Constructed per call rather than stored: three retained references
         // is nothing against a SwiftData save, and it keeps `now` and `save`
@@ -1756,7 +1764,16 @@ struct CaptureFieldView: View {
             TextField("What are you working on?", text: $field.text)
                 .textFieldStyle(.roundedBorder)
                 .focused($isFocused)
-                .onSubmit(commit)
+                // Guarded, not bare `.onSubmit(commit)`. `CaptureService`
+                // treats empty-after-trim text as a silent no-op, so an
+                // unguarded Return on an empty field would run the success
+                // path and dismiss the sheet as though something had been
+                // saved — while the Add button, one line below, refuses the
+                // very same action. Esc is the way out; Return is Add.
+                .onSubmit {
+                    guard !isBlank else { return }
+                    commit()
+                }
 
             if let chip = field.chip {
                 chipView(chip)
@@ -1774,7 +1791,7 @@ struct CaptureFieldView: View {
                     .keyboardShortcut(.cancelAction)
                 Button("Add", action: commit)
                     .keyboardShortcut(.defaultAction)
-                    .disabled(field.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                    .disabled(isBlank)
             }
         }
         .padding(20)
@@ -1807,6 +1824,12 @@ struct CaptureFieldView: View {
         .padding(.horizontal, 8)
         .padding(.vertical, 4)
         .background(Color(projectHex: chip.colorHex).opacity(0.15), in: Capsule())
+    }
+
+    /// One definition of "nothing to submit", shared by the Add button and
+    /// the Return key so the two cannot disagree.
+    private var isBlank: Bool {
+        field.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
     private func commit() {
@@ -1992,7 +2015,25 @@ func editedKeysRouteACapture() throws {
     model.updateProject(id: payments, name: "Payments", jiraKeys: "PAY")
 
     model.selection = .project(hiring)
-    model.createTask(titled: "PAY-421 fix the retry handler")
+
+    // **Drives the live path deliberately.** This is the same
+    // `CaptureFieldModel` wiring `NewTaskSheet` builds — not
+    // `MainWindowModel.createTask`, which production no longer calls. An
+    // end-to-end claim has to travel the route the user's keystrokes take,
+    // or it is an end-to-end claim about nothing.
+    let field = CaptureFieldModel(
+        service: model.captureService(),
+        projects: { model.projects },
+        preferred: { model.preferredProjectIDForCapture },
+        onCaptured: { _ in model.reload() }
+    )
+    field.text = "PAY-421 fix the retry handler"
+
+    // The chip is the user-visible half of the same routing decision, and
+    // it is the thing the editor exists to make reachable at all.
+    #expect(field.chip?.projectID == payments)
+
+    field.commit()
 
     // Under All, because the key routed the task away from the selection and
     // `groups` only ever holds the selected project's tasks.
