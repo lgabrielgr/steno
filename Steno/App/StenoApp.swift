@@ -38,6 +38,23 @@ struct StenoApp: App {
             let detail = "store failed to open at \(path): \(String(describing: error))"
             Log.app.fault("\(detail, privacy: .public)")
         }
+
+        // Capture must always have somewhere to go (FR-1.4, §1.1). A failure
+        // here is not fatal — the window still opens, and the empty state
+        // tells the user to create a project — so it is logged, not surfaced.
+        if case .success(let container) = store {
+            do {
+                if let seeded = try StenoStore.seedDefaultProjectIfEmpty(
+                    in: ModelContext(container))
+                {
+                    Log.app.info("seeded default project \(seeded.name, privacy: .public)")
+                }
+            } catch {
+                Log.app.error(
+                    "could not seed the default project: \(String(describing: error), privacy: .public)"
+                )
+            }
+        }
     }
 
     var body: some Scene {
