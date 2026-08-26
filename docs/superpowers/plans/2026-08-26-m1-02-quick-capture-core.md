@@ -2387,7 +2387,7 @@ Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>"
 
 - [ ] **Step 1: Add the decisions**
 
-In `docs/DECISIONS.md`, append to the `## Accepted` section, after D-023 and before the `---` that closes it:
+In `docs/DECISIONS.md`, append to the `## Accepted` section, after D-023 and before the `---` that closes it. **D-028 records a deviation Task 1 already shipped** — read `StenoKit/Capture/ProjectRouter.swift`'s `route` signature to confirm the entry describes what is actually there before writing it:
 
 ````markdown
 ### D-024 — "Last-used project" is derived from the newest task, not stored
@@ -2464,6 +2464,30 @@ the main window" has nothing to compare.
 **Scope:** a sidebar context-menu sheet with a name field and a comma-separated keys field, over
 the mutators M0-03 already shipped. Deliberately outside the task file's In-scope list, and
 declared in the PR body rather than smuggled.
+
+### D-028 — `ProjectRouter.route`'s `defaultProjectID` carries a default value
+**2026-08-26** · M1-02 · **Status:** accepted · extends D-013, D-023
+
+`route(text:projects:preferred:lastUsed:defaultProjectID:ignoringTicketKey:)` takes six
+parameters, which trips SwiftLint's `function_parameter_count` (warning threshold 5, promoted to
+a failure by `--strict`). `defaultProjectID` is declared `UUID? = nil`; the rule's
+`ignores_default_parameters` option defaults to true, so one default clears the violation.
+
+**Why this parameter and not another:** FR-6's configured default is the one rung that genuinely
+has no value until M1-08 builds the setting — the design already describes it as "a parameter
+from day one, `nil` until M1-08 fills it." A default therefore misrepresents nothing. The other
+five are required at every call site and defaulting any of them would hide a real argument.
+**Why not the alternatives:** an inline `swiftlint:disable` is what D-023 reserves for genuine
+false positives, and a function that really does take six arguments is not one. Disabling
+`function_parameter_count` in `.swiftlint.yml` would drop the rule for the whole project to
+settle one call — the opposite of D-023's reasoning, where a rule was removed because its
+residual value was nil rather than because one site found it inconvenient.
+**The cost, and where it is paid:** the design's argument for threading the parameter through
+from day one is that M1-08 satisfies its acceptance criterion "by passing an argument, not by
+editing this function" — which holds only while every call site passes it explicitly. A default
+makes silent omission possible. `CaptureService.capture` is the only production caller and does
+pass it explicitly; `capture`'s *own* `defaultProjectID: UUID? = nil` is separate and was
+specified from the start. **M1-08 should verify both call sites rather than assuming.**
 ````
 
 - [ ] **Step 2: Update ARCHITECTURE**
