@@ -20,7 +20,16 @@ struct CaptureFieldView: View {
             TextField("What are you working on?", text: $field.text)
                 .textFieldStyle(.roundedBorder)
                 .focused($isFocused)
-                .onSubmit(commit)
+                // Guarded, not bare `.onSubmit(commit)`. `CaptureService`
+                // treats empty-after-trim text as a silent no-op, so an
+                // unguarded Return on an empty field would run the success
+                // path and dismiss the sheet as though something had been
+                // saved — while the Add button, one line below, refuses the
+                // very same action. Esc is the way out; Return is Add.
+                .onSubmit {
+                    guard !isBlank else { return }
+                    commit()
+                }
 
             if let chip = field.chip {
                 chipView(chip)
@@ -38,7 +47,7 @@ struct CaptureFieldView: View {
                     .keyboardShortcut(.cancelAction)
                 Button("Add", action: commit)
                     .keyboardShortcut(.defaultAction)
-                    .disabled(field.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                    .disabled(isBlank)
             }
         }
         .padding(20)
@@ -71,6 +80,12 @@ struct CaptureFieldView: View {
         .padding(.horizontal, 8)
         .padding(.vertical, 4)
         .background(Color(projectHex: chip.colorHex).opacity(0.15), in: Capsule())
+    }
+
+    /// One definition of "nothing to submit", shared by the Add button and
+    /// the Return key so the two cannot disagree.
+    private var isBlank: Bool {
+        field.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
     private func commit() {

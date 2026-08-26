@@ -251,12 +251,20 @@ public final class MainWindowModel: MainWindowActions {
         }
     }
 
-    /// FR-1's capture, through the shared path (D15).
+    /// FR-1's capture, through the shared path (D15) — **programmatic entry
+    /// point only.**
     ///
     /// The routing, the `created` event and the ref extraction all live in
-    /// `CaptureService`, so this window, M1-03's floating window and M1-04's
-    /// popover cannot drift apart. What stays here is this surface's own
-    /// context — the sidebar selection — and the error presentation.
+    /// `CaptureService`. What stays here is this surface's own context — the
+    /// sidebar selection — and the error presentation.
+    ///
+    /// **The capture sheet does not call this.** `NewTaskSheet` drives
+    /// `CaptureFieldModel`, which needs per-keystroke chip state this method
+    /// has no way to express, and reaches the same `CaptureService`. Both
+    /// wrappers therefore share the write path, which is what D15 requires,
+    /// but this one has no production caller today. Whether it should be
+    /// deleted or kept as a documented API is recorded for review rather than
+    /// settled here — see the M1-02 plan's Task 6 findings.
     public func createTask(titled title: String) {
         // Constructed per call rather than stored: three retained references
         // is nothing against a SwiftData save, and it keeps `now` and `save`
