@@ -46,6 +46,15 @@ struct MainWindowView: View {
                 ) { model.createProject(named: $0) }
             case .newTask:
                 NewTaskSheet(model: model)
+            case .editProject(let id):
+                if let project = model.project(withID: id) {
+                    ProjectEditSheet(
+                        projectName: project.name,
+                        jiraKeys: project.jiraProjectKeys
+                    ) { name, keys in
+                        model.updateProject(id: id, name: name, jiraKeys: keys)
+                    }
+                }
             }
         }
     }

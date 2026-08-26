@@ -24,6 +24,9 @@ struct SidebarView: View {
                     }
                     .tag(ProjectSelection.project(project.id))
                     .contextMenu {
+                        Button("Edit Project…") {
+                            model.activeSheet = .editProject(project.id)
+                        }
                         // Archive, not delete: §3.1 hides projects, never
                         // removes them, and there is deliberately no delete.
                         Button("Archive Project") { model.archive(projectID: project.id) }

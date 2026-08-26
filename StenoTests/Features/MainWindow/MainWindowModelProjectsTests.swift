@@ -173,3 +173,80 @@ func archiveDoesNotMoveSelectionOnSaveFailure() throws {
     let stored = try workingContext.fetch(FetchDescriptor<Project>())
     #expect(stored.first?.isArchived == false)
 }
+
+@MainActor
+@Test("editing a project stores its name and Jira keys")
+func editingAProjectStoresNameAndKeys() throws {
+    let (model, _) = try makeModel()
+    model.createProject(named: "Payments")
+    let id = try #require(model.projects.first?.id)
+
+    model.updateProject(id: id, name: "Payments Platform", jiraKeys: "PAY, BILL")
+
+    let project = try #require(model.project(withID: id))
+    #expect(project.name == "Payments Platform")
+    #expect(project.jiraProjectKeys == ["PAY", "BILL"])
+}
+
+@MainActor
+@Test("keys are uppercased, trimmed, de-duplicated, and emptied")
+func keysAreNormalised() {
+    #expect(MainWindowModel.normalisedKeys(" pay , BILL,pay,, ") == ["PAY", "BILL"])
+    #expect(MainWindowModel.normalisedKeys("") == [])
+    #expect(MainWindowModel.normalisedKeys("   ") == [])
+}
+
+@MainActor
+@Test("a project cannot be renamed to nothing")
+func blankProjectNameIsRefused() throws {
+    let (model, _) = try makeModel()
+    model.createProject(named: "Payments")
+    let id = try #require(model.projects.first?.id)
+
+    model.updateProject(id: id, name: "   ", jiraKeys: "PAY")
+
+    let project = try #require(model.project(withID: id))
+    #expect(project.name == "Payments")
+    #expect(project.jiraProjectKeys.isEmpty)
+}
+
+@MainActor
+@Test("editing keys makes auto-routing reachable end to end")
+func editedKeysRouteACapture() throws {
+    let (model, _) = try makeModel()
+    model.createProject(named: "Payments")
+    model.createProject(named: "EM — Hiring")
+    let payments = try #require(model.projects.first?.id)
+    let hiring = try #require(model.projects.last?.id)
+    model.updateProject(id: payments, name: "Payments", jiraKeys: "PAY")
+
+    model.selection = .project(hiring)
+
+    // **Drives the live path deliberately.** This is the same
+    // `CaptureFieldModel` wiring `NewTaskSheet` builds — not
+    // `MainWindowModel.createTask`, which production no longer calls. An
+    // end-to-end claim has to travel the route the user's keystrokes take,
+    // or it is an end-to-end claim about nothing.
+    let field = CaptureFieldModel(
+        service: model.captureService(),
+        projects: { model.projects },
+        preferred: { model.preferredProjectIDForCapture },
+        onCaptured: { _ in model.reload() }
+    )
+    field.text = "PAY-421 fix the retry handler"
+
+    // The chip is the user-visible half of the same routing decision, and
+    // it is the thing the editor exists to make reachable at all.
+    #expect(field.chip?.projectID == payments)
+
+    field.commit()
+
+    // Under All, because the key routed the task away from the selection and
+    // `groups` only ever holds the selected project's tasks.
+    model.selection = .all
+
+    // The whole point of the editor: without it every project holds [] and
+    // this assertion cannot be made to pass by any user action.
+    let landed = try #require(model.groups.flatMap(\.tasks).first)
+    #expect(landed.projectID == payments)
+}

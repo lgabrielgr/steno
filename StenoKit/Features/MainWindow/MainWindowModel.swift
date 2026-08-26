@@ -284,6 +284,35 @@ public final class MainWindowModel: MainWindowActions {
         reload()
     }
 
+    /// Edit a project's name and its Jira key prefixes — what FR-1.4 routes on,
+    /// unreachable before this method (M1-02 design doc §7). Keys arrive
+    /// comma-separated; normalising here keeps `ProjectRouter` typing-agnostic.
+    public func updateProject(id: UUID, name: String, jiraKeys: String) {
+        guard let project = projects.first(where: { $0.id == id }) else { return }
+        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+
+        let keys = Self.normalisedKeys(jiraKeys)
+        let stamp = now()
+        perform("save the project") {
+            project.rename(to: trimmed, at: stamp)
+            project.setJiraProjectKeys(keys, at: stamp)
+        }
+    }
+
+    /// `" pay , BILL,pay,, "` → `["PAY", "BILL"]`. Internal so `@testable
+    /// import` can exercise the rule without a container.
+    static func normalisedKeys(_ raw: String) -> [String] {
+        var seen: Set<String> = []
+        var result: [String] = []
+        for piece in raw.split(separator: ",") {
+            let key = piece.trimmingCharacters(in: .whitespaces).uppercased()
+            guard !key.isEmpty, seen.insert(key).inserted else { continue }
+            result.append(key)
+        }
+        return result
+    }
+
     /// FR-1.4 rung 2: this surface's own context.
     ///
     /// Under "All" the window has no opinion about where a task belongs, so it
