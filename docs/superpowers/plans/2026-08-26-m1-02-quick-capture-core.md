@@ -1068,6 +1068,13 @@ extension StenoStore {
     /// doc §4.2, which keeps that state as capture's one documented refusal.
     ///
     /// Returns the seeded project, or `nil` when the store already had one.
+    ///
+    /// **Pass a context with no unrelated pending changes.** The `save()` below
+    /// commits everything the context holds, not just the seed. Both current
+    /// callers are clean at the call site — the app seeds before anything else
+    /// touches the store, and each test builds a fresh context — but a future
+    /// caller with pending edits would have them committed here as a side
+    /// effect.
     @discardableResult
     public static func seedDefaultProjectIfEmpty(in context: ModelContext) throws -> Project? {
         var descriptor = FetchDescriptor<Project>()
@@ -1102,8 +1109,24 @@ In `Steno/App/StenoApp.swift`, inside `init()`, immediately after the existing `
         // tells the user to create a project — so it is logged, not surfaced.
         if case .success(let container) = store {
             do {
+                // `container.mainContext`, deliberately — **not** a fresh
+                // `ModelContext(container)`. `MainWindowView.init` builds its
+                // view model over `mainContext`, so seeding into the same
+                // context makes the window's first fetch a same-context read
+                // that is guaranteed to see the seeded row. A sibling context
+                // would leave the one guarantee this seeding exists to make
+                // resting on cross-context visibility, which SwiftData does
+                // not contractually document — and which no test here could
+                // cover, since GUI automation is unavailable.
+                //
+                // This does not contradict the tests' use of
+                // `ModelContext(container)`: that rule exists because
+                // `mainContext` does not retain its container, and a test
+                // whose container is a local would dangle. Here `store` is a
+                // stored property of the `@main` App, so the container lives
+                // for the whole process.
                 if let seeded = try StenoStore.seedDefaultProjectIfEmpty(
-                    in: ModelContext(container))
+                    in: container.mainContext)
                 {
                     Log.app.info("seeded default project \(seeded.name, privacy: .public)")
                 }
