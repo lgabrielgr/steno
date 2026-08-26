@@ -21,6 +21,13 @@ extension StenoStore {
     /// doc §4.2, which keeps that state as capture's one documented refusal.
     ///
     /// Returns the seeded project, or `nil` when the store already had one.
+    ///
+    /// **Pass a context with no unrelated pending changes.** The `save()` below
+    /// commits everything the context holds, not just the seed. Both current
+    /// callers are clean at the call site — the app seeds before anything else
+    /// touches the store, and each test builds a fresh context — but a future
+    /// caller with pending edits would have them committed here as a side
+    /// effect.
     @discardableResult
     public static func seedDefaultProjectIfEmpty(in context: ModelContext) throws -> Project? {
         var descriptor = FetchDescriptor<Project>()
