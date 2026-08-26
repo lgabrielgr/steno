@@ -60,8 +60,10 @@ struct TaskListView: View {
             VStack(alignment: .leading, spacing: 2) {
                 Text(task.title)
                 // Under "All" the project is not implied by the sidebar, so
-                // show it — this is also what makes M0-05's stand-in project
-                // routing visible rather than silent (see targetProjectID).
+                // show it. FR-1.4's ladder can route a capture away from the
+                // selected project — a matching ticket key outranks the
+                // sidebar selection — so this label is what keeps that
+                // routing visible rather than silent.
                 if case .all = model.selection, let project = model.project(withID: task.projectID)
                 {
                     Text(project.name)
