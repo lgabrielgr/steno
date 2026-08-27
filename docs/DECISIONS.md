@@ -477,7 +477,21 @@ not call M1-01's extractor, and the two therefore disagree about keys inside lin
 
 **Why, twice over.** *Cost:* the chip re-derives on every keystroke, and `NSDataDetector` is the
 expensive half of extraction — 180 µs on a capture string but ~180 ms on a 250 KB paste, which
-would then be paid per keystroke. A regex scan with an early exit has no such cliff.
+would then be paid per keystroke. A regex scan with an early exit is the cheaper of the two.
+
+**Corrected before merge — this entry originally claimed the regex scan "has no such cliff", and
+that was asserted, not measured.** It has one. A large paste containing no resolving key defeats
+the early exit, and a paste dense in the false positives `JiraKey` documents (`UTF-8`, `ISO-8601`,
+`COVID-19`) defeats it while also maximising the match loop. Worse, `JiraKey.pattern` must be a
+computed property — `Regex` is not `Sendable` — so reading it inside the loop condition built a
+fresh `Regex` per iteration: **342 ms on a 250 KB adversarial paste, per keystroke, on the main
+actor.** Hoisting it to a local before the loop brings that to 21 ms (both `-O`). The scan is still
+cheaper than paying `NSDataDetector` on top of it, which is what this decision is actually about —
+but "no cliff" was wrong and the number is now gated by
+`CapturePerformanceTests.testKeyScanOnALargePasteStaysInteractive` rather than claimed in prose.
+The lesson generalises past this entry: CLAUDE.md's non-negotiable #4 says the quick-add path must
+be *measured*, and a decision record is exactly where an unmeasured assertion gets read as fact by
+the next agent.
 *Correctness:* M1-01's overlap rule suppresses keys sitting inside links so a browse URL yields
 one ref rather than two. That is right for extraction and wrong for routing —
 `https://acme.atlassian.net/browse/PAY-421` should route to Payments. Routing wants every key the
@@ -552,6 +566,8 @@ editing this function" — which holds only while every call site passes it expl
 makes silent omission possible. `CaptureService.capture` is the only production caller and does
 pass it explicitly; `capture`'s *own* `defaultProjectID: UUID? = nil` is separate and was
 specified from the start. **M1-08 should verify both call sites rather than assuming.**
+Note also that `CaptureFieldModel.commit()` omits `defaultProjectID` and has no way to receive
+one — M1-08 must thread a parameter through there too, so the work is three sites, not two.
 
 ---
 

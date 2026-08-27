@@ -15,8 +15,16 @@ public enum ProjectRouter {
     ///
     /// *Cost.* The chip re-derives on every keystroke, and `NSDataDetector` is
     /// the expensive half of extraction — 180 µs on a capture string but
-    /// ~180 ms on a 250 KB paste, which would then be paid per keystroke. A
-    /// bare regex scan with an early exit has no such cliff.
+    /// ~180 ms on a 250 KB paste, which would then be paid per keystroke.
+    ///
+    /// A regex scan is the cheaper of the two, but **not unconditionally**, and
+    /// the earlier claim that it "has no such cliff" was asserted rather than
+    /// measured. It does have one: a large paste with no resolving key defeats
+    /// the early exit, and one dense in `JiraKey`'s documented false positives
+    /// defeats it while also maximising the loop. Measured worst-of-ten on a
+    /// 250 KB paste: 1 ms when a matching key is near the front, ~21 ms when
+    /// none resolves. That is a scan cost this function cannot avoid — what it
+    /// avoids is paying `NSDataDetector` on top of it.
     ///
     /// *Correctness.* M1-01's overlap rule suppresses keys sitting inside
     /// links so that a browse URL yields one ref rather than two. That is
@@ -32,8 +40,18 @@ public enum ProjectRouter {
         // `firstMatch` in a loop rather than `matches(of:)`, which is eager:
         // the common case is a key in the first few words, and this returns
         // there instead of scanning to the end of a paste.
+        //
+        // The pattern is hoisted out of the loop deliberately, and it is not a
+        // micro-optimisation. `JiraKey.pattern` is a computed property — it has
+        // to be, because `Regex` is not `Sendable` — so reading it inside the
+        // condition builds a fresh `Regex` on every iteration. On a 250 KB
+        // paste dense in the false positives `JiraKey` documents (`UTF-8`,
+        // `ISO-8601`, `COVID-19`), that is 342 ms against 21 ms hoisted (both
+        // built `-O`), per keystroke, on the main actor. Measured; see
+        // `CapturePerformanceTests.testKeyScanOnALargePasteStaysInteractive`.
+        let pattern = JiraKey.pattern
         var remainder = Substring(text)
-        while let match = remainder.firstMatch(of: JiraKey.pattern) {
+        while let match = remainder.firstMatch(of: pattern) {
             let key = String(match.output)
             if let prefix = prefix(of: key), let projectID = byPrefix[prefix] {
                 return KeyMatch(key: key, projectID: projectID)

@@ -94,6 +94,60 @@ func aDifferentKeyRaisesANewChip() throws {
 }
 
 @MainActor
+@Test("a dismissed key still suppresses routing when a second key is appended")
+func appendingAKeyAfterDismissalDoesNotRaiseANewChip() throws {
+    let fixture = try makeField()
+    let field = fixture.field
+    field.text = "HIR-9 screen the candidate"
+    field.dismissChip()
+
+    // Appending, not replacing — which is what `aDifferentKeyRaisesANewChip`
+    // above does, and why it does not discriminate this case.
+    field.text = "HIR-9 screen the candidate, then PAY-421"
+
+    // `ticketKeyMatch` returns the first *resolving* key, so the match is
+    // still HIR-9 and still dismissed: no chip, and `commit` skips rung 1
+    // entirely rather than falling through to PAY. The chip and the save
+    // agree — both decline to route by key — so there is no divergence for
+    // the user to see. This test exists because that behaviour is a
+    // consequence of "first resolving key wins" rather than something
+    // designed, and M1-03/M1-04 must not "fix" it into a divergence.
+    #expect(field.chip == nil)
+
+    field.commit()
+
+    let tasks = try fixture.context.fetch(FetchDescriptor<TaskItem>())
+    let task = try #require(tasks.first)
+    // Rung 2: the surface's preference, which `makeField` sets to Hiring.
+    #expect(task.projectID == fixture.projects[1].id)
+}
+
+@MainActor
+@Test("§4.2: capture refuses, in words, when every project is archived")
+func commitWithEveryProjectArchivedExplainsItself() throws {
+    let fixture = try makeField()
+    let field = fixture.field
+    for project in fixture.projects { project.setArchived(true, at: epoch) }
+    try fixture.context.save()
+    let live = fixture.projects.filter { !$0.isArchived }
+    let archived = CaptureFieldModel(
+        service: CaptureService(context: fixture.context, now: { epoch }),
+        projects: { live },
+        preferred: { nil }
+    )
+    archived.text = "somewhere to put this"
+
+    archived.commit()
+
+    // D-026's documented exception, on the live UI path. The text is kept —
+    // §1.1 makes losing it the worst outcome — and the message says what to
+    // do rather than reporting a failure.
+    #expect(archived.lastError == "Create a project before capturing a task.")
+    #expect(archived.text == "somewhere to put this")
+    #expect(try fixture.context.fetch(FetchDescriptor<TaskItem>()).isEmpty)
+}
+
+@MainActor
 @Test("committing an undismissed chip routes to the key's project")
 func commitHonoursTheChip() throws {
     let fixture = try makeField()
@@ -169,4 +223,38 @@ func emptyCommitIsSilent() throws {
 
     #expect(try fixture.context.fetch(FetchDescriptor<TaskItem>()).isEmpty)
     #expect(field.lastError == nil)
+}
+
+@MainActor
+@Test("with no history, a plain capture lands on the first project")
+func commitWithNoHistoryLandsOnFirstProject() throws {
+    // Ported from `MainWindowModelTasksTests.allTargetsFirstProjectWhenThereIsNoHistory`,
+    // deleted when `MainWindowModel.createTask` was (D15: it had no
+    // production caller). `ProjectRouterTests.firstProjectIsTheLastResort`
+    // already covers rung 5 in isolation, and `CaptureServiceTests` already
+    // drives rung 3 (last-used) through the live path — but nothing drove
+    // the "no key, no preference, no history, no configured default" case
+    // through the surface a real capture actually uses, so this rung was a
+    // genuine gap rather than a duplicate.
+    let context = ModelContext(try StenoStore.inMemory())
+    let payments = Project(
+        name: "Payments", colorHex: "#3B82F6", sortOrder: 0, modifiedAt: epoch)
+    let hiring = Project(
+        name: "EM — Hiring", colorHex: "#F59E0B", sortOrder: 1, modifiedAt: epoch)
+    context.insert(payments)
+    context.insert(hiring)
+    try context.save()
+    let field = CaptureFieldModel(
+        service: CaptureService(context: context, now: { epoch }),
+        projects: { [payments, hiring] },
+        preferred: { nil }
+    )
+    field.text = "where does this go"
+
+    field.commit()
+
+    let tasks = try context.fetch(FetchDescriptor<TaskItem>())
+    // FR-1.4 rung 5: no key, no selection, no last-used, no configured
+    // default — first project by sortOrder.
+    #expect(tasks.first?.projectID == payments.id)
 }

@@ -94,6 +94,14 @@ struct CaptureFieldView: View {
         // open for the retry rather than swallowing the capture.
         if field.lastError == nil { onDismiss() }
     }
+
+    // A capture failure sets `field.lastError` and deliberately not the
+    // window's `model.lastError`: the message belongs where the user is
+    // looking, inline in the sheet, not on a bar behind the modal. The
+    // converse — a successful capture leaving an older `model.lastError`
+    // standing — is also deliberate. That bar may be reporting a failure from
+    // some unrelated action the user has not acknowledged, and a successful
+    // capture is not evidence it was resolved. It has its own Dismiss.
 }
 
 /// Owns the field model for one presentation of the capture sheet.

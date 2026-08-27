@@ -60,6 +60,15 @@ public final class CaptureFieldModel {
     ///
     /// One click, no modal, no confirmation — §1.1 treats a modal interruption
     /// during capture as a defect.
+    ///
+    /// **Dismissal is keyed to the key, but the key is whichever one resolves
+    /// first.** So editing the text to *replace* `HIR-9` raises a new chip,
+    /// while *appending* `PAY-421` after it does not: `ticketKeyMatch` still
+    /// returns the dismissed `HIR-9`, and `commit` then skips rung 1 rather
+    /// than falling through to PAY. The chip and the save agree in both cases
+    /// — the user never sees one project and gets another — which is the
+    /// property that actually matters. See
+    /// `appendingAKeyAfterDismissalDoesNotRaiseANewChip`.
     public func dismissChip() {
         dismissedKey = chip?.key
         chip = nil

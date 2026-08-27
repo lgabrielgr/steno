@@ -18,13 +18,33 @@ private func makeModel() throws -> (MainWindowModel, ModelContext) {
     return (MainWindowModel(context: context, now: { origin }), context)
 }
 
+/// Captures `title` the way production does — through `CaptureService`,
+/// using this window's own context as `preferred` (FR-1.4 rung 2) — and
+/// reloads the model so `groups`/`projects` reflect the write.
+///
+/// `MainWindowModel.createTask(titled:)` used to be this fixture's job, but
+/// it had zero production callers (`CaptureFieldView` drives
+/// `CaptureFieldModel` instead) and was deleted per D15: a second capture
+/// entry point on the main window model is exactly the divergent code path
+/// D15 exists to prevent. These tests only ever needed a task in the store
+/// to assert grouping, selection scoping, or the timeline against — this
+/// helper gets them one via the one real write path instead.
+@MainActor
+@discardableResult
+private func createTask(_ model: MainWindowModel, titled title: String) throws -> TaskItem? {
+    let task = try model.captureService().capture(
+        text: title, preferred: model.preferredProjectIDForCapture)
+    model.reload()
+    return task
+}
+
 @MainActor
 @Test("a new task lands in the TODO group")
 func createdTaskIsTodo() throws {
     let (model, _) = try makeModel()
     model.createProject(named: "Payments")
 
-    model.createTask(titled: "Fix the retry handler")
+    try createTask(model, titled: "Fix the retry handler")
 
     #expect(model.groups.map(\.status) == [.todo])
     #expect(model.groups[0].tasks.map(\.title) == ["Fix the retry handler"])
@@ -35,29 +55,38 @@ func createdTaskIsTodo() throws {
 func createTaskAppendsCreatedEvent() throws {
     let (model, _) = try makeModel()
     model.createProject(named: "Payments")
-    model.createTask(titled: "Fix the retry handler")
+    let task = try createTask(model, titled: "Fix the retry handler")
 
-    let taskID = try #require(model.groups.first?.tasks.first?.id)
-    let events = model.events(forTaskID: taskID)
+    let taskID = try #require(task?.id)
+    // `MainWindowModel.events(forTaskID:)` was deleted alongside `createTask`
+    // — zero production callers (`TaskDetailView` reads `selectedTaskEvents`,
+    // not a per-ID fetch), so this drives the same redaction-filtering
+    // `fetchEvents` through the surface production actually uses.
+    model.selectedTaskID = taskID
 
-    #expect(events.count == 1)
-    #expect(events.first?.kind == .created)
-    #expect(events.first?.taskID == taskID)
+    #expect(model.selectedTaskEvents.count == 1)
+    #expect(model.selectedTaskEvents.first?.kind == .created)
+    #expect(model.selectedTaskEvents.first?.taskID == taskID)
 }
 
 @MainActor
-@Test("with no projects, creating a task stores nothing and says why")
+@Test("with no projects, capturing stores nothing and throws")
 func createTaskWithoutProjectsExplainsItself() throws {
     let (model, context) = try makeModel()
 
-    model.createTask(titled: "orphan")
+    // `MainWindowModel.createTask` used to translate this into `lastError`,
+    // but production never reaches that translation: `newTask()` gates the
+    // sheet on `canCreateTask`, which is already false here. What remains
+    // worth asserting is the write-path invariant — the surface a real
+    // capture goes through refuses cleanly rather than writing a partial
+    // task.
+    #expect(throws: CaptureError.noProjectAvailable) {
+        try createTask(model, titled: "orphan")
+    }
 
     #expect(model.groups.isEmpty)
     #expect(try context.fetch(FetchDescriptor<TaskItem>()).isEmpty)
     #expect(try context.fetch(FetchDescriptor<Event>()).isEmpty)
-    // The one state where capture refuses. Silence here would look like a
-    // dropped keystroke (design §4.2).
-    #expect(model.lastError != nil)
 }
 
 @MainActor
@@ -66,7 +95,7 @@ func blankTitleRefused() throws {
     let (model, _) = try makeModel()
     model.createProject(named: "Payments")
 
-    model.createTask(titled: "   ")
+    try createTask(model, titled: "   ")
 
     #expect(model.groups.isEmpty)
 }
@@ -80,9 +109,9 @@ func allSpansProjects() throws {
     let ids = model.projects.map(\.id)
 
     model.selection = .project(ids[0])
-    model.createTask(titled: "one")
+    try createTask(model, titled: "one")
     model.selection = .project(ids[1])
-    model.createTask(titled: "two")
+    try createTask(model, titled: "two")
 
     model.selection = .all
 
@@ -97,69 +126,11 @@ func selectionScopesTheList() throws {
     model.createProject(named: "Second")
     let ids = model.projects.map(\.id)
     model.selection = .project(ids[0])
-    model.createTask(titled: "one")
+    try createTask(model, titled: "one")
 
     model.selection = .project(ids[1])
 
     #expect(model.groups.isEmpty)
-}
-
-@MainActor
-@Test("under All with no history, a new task goes to the first project")
-func allTargetsFirstProjectWhenThereIsNoHistory() throws {
-    let (model, _) = try makeModel()
-    model.createProject(named: "First")
-    model.createProject(named: "Second")
-    let first = try #require(model.projects.first?.id)
-    model.selection = .all
-
-    model.createTask(titled: "where does this go")
-
-    // FR-1.4 rung 5: no key, no selection, no last-used, no configured
-    // default. Same answer as M0-05's stand-in, now for a stated reason.
-    #expect(model.groups[0].tasks.first?.projectID == first)
-}
-
-@MainActor
-@Test("under All, a new task follows the last-used project")
-func allFollowsLastUsed() throws {
-    let (model, _) = try makeModel()
-    model.createProject(named: "First")
-    model.createProject(named: "Second")
-    let second = try #require(model.projects.last?.id)
-
-    model.selection = .project(second)
-    model.createTask(titled: "into second")
-    model.selection = .all
-    model.createTask(titled: "and this one?")
-
-    // FR-1.4 rung 3, which D-021 recorded as M1-02's to implement.
-    let landed = try #require(model.groups[0].tasks.first { $0.title == "and this one?" })
-    #expect(landed.projectID == second)
-}
-
-@MainActor
-@Test("a matching ticket key outranks the sidebar selection")
-func ticketKeyOutranksSelection() throws {
-    let (model, context) = try makeModel()
-    model.createProject(named: "Payments")
-    model.createProject(named: "EM — Hiring")
-    let payments = try #require(model.projects.first)
-    let hiring = try #require(model.projects.last?.id)
-    payments.setJiraProjectKeys(["PAY"], at: origin)
-    try context.save()
-
-    model.selection = .project(hiring)
-    model.createTask(titled: "PAY-421 fix the retry handler")
-
-    // Assert under All: the task went to Payments while the sidebar shows
-    // Hiring, and `groups` is scoped to the selection — so reading it here
-    // would find an empty list and prove nothing.
-    model.selection = .all
-
-    // FR-1.4 rung 1 beats rung 2.
-    let landed = try #require(model.groups.flatMap(\.tasks).first)
-    #expect(landed.projectID == payments.id)
 }
 
 @MainActor
@@ -170,7 +141,7 @@ func archivedProjectsTasksAreHidden() throws {
     model.createProject(named: "Second")
     let ids = model.projects.map(\.id)
     model.selection = .project(ids[1])
-    model.createTask(titled: "hide me")
+    try createTask(model, titled: "hide me")
 
     model.archive(projectID: ids[1])
     model.selection = .all
@@ -205,7 +176,7 @@ func selectionChangeReloads() throws {
     let (model, _) = try makeModel()
     model.createProject(named: "First")
     let id = try #require(model.projects.first?.id)
-    model.createTask(titled: "one")
+    try createTask(model, titled: "one")
 
     model.selection = .project(id)
 
@@ -217,7 +188,7 @@ func selectionChangeReloads() throws {
 func selectingATaskPublishesItsTimeline() throws {
     let (model, _) = try makeModel()
     model.createProject(named: "Payments")
-    model.createTask(titled: "Fix the retry handler")
+    try createTask(model, titled: "Fix the retry handler")
     let taskID = try #require(model.groups.first?.tasks.first?.id)
 
     #expect(model.selectedTaskEvents.isEmpty)
@@ -238,7 +209,7 @@ func selectingATaskPublishesItsTimeline() throws {
 func reloadRefreshesTheSelectedTimeline() throws {
     let (model, context) = try makeModel()
     model.createProject(named: "Payments")
-    model.createTask(titled: "Fix the retry handler")
+    try createTask(model, titled: "Fix the retry handler")
     let taskID = try #require(model.groups.first?.tasks.first?.id)
     model.selectedTaskID = taskID
     #expect(model.selectedTaskEvents.count == 1)
@@ -261,7 +232,7 @@ func reloadRefreshesTheSelectedTimeline() throws {
 func timelineFailureFlagStaysClearOnSuccess() throws {
     let (model, _) = try makeModel()
     model.createProject(named: "Payments")
-    model.createTask(titled: "Fix the retry handler")
+    try createTask(model, titled: "Fix the retry handler")
     let taskID = try #require(model.groups.first?.tasks.first?.id)
 
     model.selectedTaskID = taskID
@@ -275,7 +246,7 @@ func timelineFailureFlagStaysClearOnSuccess() throws {
 func deselectingClearsWithoutFailure() throws {
     let (model, _) = try makeModel()
     model.createProject(named: "Payments")
-    model.createTask(titled: "Fix the retry handler")
+    try createTask(model, titled: "Fix the retry handler")
     model.selectedTaskID = try #require(model.groups.first?.tasks.first?.id)
 
     model.selectedTaskID = nil

@@ -145,7 +145,12 @@ either of which is sufficient:
 **Cost.** The chip re-derives on every keystroke. `NSDataDetector` is the expensive half of
 extraction — 180 µs on a capture string, but M1-01's own benchmarks put a 250 KB paste at 180 ms.
 Paid per keystroke after such a paste, that is felt, and §1.1 is unambiguous about what the user
-does when capture is felt. A bare regex scan with early exit has no such cliff.
+does when capture is felt. A bare regex scan with early exit is the cheaper of the two.
+
+*Corrected during implementation:* this paragraph originally ended "has no such cliff", which was
+asserted rather than measured and is false. See D-025 — the scan has its own cliff on a large paste
+where no key resolves, and reading the computed `JiraKey.pattern` inside the match loop made it
+342 ms. Both are now gated by `CapturePerformanceTests`.
 
 **Correctness, and this one is counterintuitive.** M1-01's overlap rule suppresses keys that sit
 inside links, so that a browse URL yields one ref instead of two. That rule is right for
@@ -374,8 +379,11 @@ Measured against a **real on-disk store in a temp directory**, not `StenoStore.i
 in-memory store skips the fsync, which is the entire question being asked. `ModelContext(container)`,
 never `mainContext` — `mainContext` does not retain its container.
 
-**The end-to-end number:** an `os_signpost` interval around `capture`, read back with
-`log show --info` after a `make run` session, recorded in the PR body. With GUI automation
+**The end-to-end number:** an `os_signpost` interval around `capture`, read back after a `make run`
+session, recorded in the PR body. *Corrected during implementation:* the recipe is
+`/usr/bin/log show --signpost`, not `log show --info` — `--info` returns no signpost rows at all,
+and zsh's `log` builtin shadows the binary. `Log.captureSignposter`'s doc comment carries the
+working command; prefer it over this paragraph. With GUI automation
 unavailable on this machine that is the only route to a real-app figure, and the signpost stays in
 the source as the instrument M1-03 uses to measure the hotkey path including window presentation.
 
@@ -415,7 +423,11 @@ Headless, network-denied (§9.4), Swift Testing except where noted.
 **`CaptureFieldModelTests`** — container-backed:
 - Typing a matching key raises a chip carrying the project's name and colour.
 - `dismissChip()` clears it; continuing to type the same key does not raise it again.
-- Typing a *different* matching key after a dismissal raises a new chip (§5.1).
+- Typing a *different* matching key after a dismissal raises a new chip (§5.1) — *corrected during
+  implementation:* only when it **replaces** the dismissed key. Appending a second key leaves
+  `ticketKeyMatch` returning the first-resolving, still-dismissed one, so no chip appears and
+  `commit` skips rung 1. Chip and save agree either way, which is the property that matters; see
+  `appendingAKeyAfterDismissalDoesNotRaiseANewChip`.
 - `commit()` on a dismissed chip routes down the ladder, not to the key's project.
 - `commit()` resets the field.
 

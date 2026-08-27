@@ -54,6 +54,56 @@ final class CapturePerformanceTests: XCTestCase {
         return (CaptureService(context: context), context)
     }
 
+    /// A 250 KB paste dense in the false positives `JiraKey` documents
+    /// (`UTF-8`, `ISO-8601`, `COVID-19`, `M1-01`) and containing no key that
+    /// resolves to a project — the worst input for `ticketKeyMatch`, because
+    /// it defeats the early exit *and* maximises the match loop.
+    ///
+    /// **This case exists because the claim it tests was once asserted rather
+    /// than measured.** `ticketKeyMatch` runs on `text.didSet`, synchronously
+    /// on the main actor, on every keystroke — it is more latency-sensitive
+    /// than `capture` itself, which runs once per task. `ProjectRouter`'s
+    /// comment used to say a regex scan "has no such cliff"; it has one, and
+    /// reading the computed `JiraKey.pattern` inside the loop made it 342 ms.
+    ///
+    /// Measured worst-of-ten on this machine: **50 ms** in this unoptimised
+    /// Debug test build (32 ms average); the same scan costs 21 ms built `-O`,
+    /// which is what the shipped app pays.
+    ///
+    /// The ceiling is 150 ms, well above both — this is an adversarial input
+    /// on a machine already under test load, and the assertion exists to catch
+    /// the return of the per-iteration `Regex` construction, not to police
+    /// milliseconds. It discriminates: reinstating `JiraKey.pattern` inside
+    /// the loop takes this case to ~400 ms per iteration and fails the
+    /// assertion. That was verified by breaking it on purpose, not reasoned
+    /// about.
+    @MainActor
+    func testKeyScanOnALargePasteStaysInteractive() throws {
+        let directory = makeDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let (_, context) = try makeService(at: directory)
+        let projects = try context.fetch(FetchDescriptor<Project>())
+        var noisy = ""
+        while noisy.utf8.count < 250_000 {
+            noisy += "UTF-8 encodes ISO-8601 stamps and COVID-19 counts beside M1-01 notes. "
+        }
+        var elapsed = 0.0
+        var matched = true
+
+        measure {
+            let start = Date()
+            let hit = ProjectRouter.ticketKeyMatch(text: noisy, projects: projects)
+            elapsed = max(elapsed, Date().timeIntervalSince(start))
+            matched = matched && hit == nil
+        }
+
+        // None of those tokens carries a configured prefix, so the scan must
+        // run to the end. If this ever returns a match the input stopped being
+        // the worst case and the number below stops meaning anything.
+        XCTAssertTrue(matched, "the adversarial paste unexpectedly resolved to a project")
+        XCTAssertLessThan(elapsed, 0.150, "scanning a large paste for ticket keys exceeded 150 ms")
+    }
+
     private func makeDirectory() -> URL {
         URL(fileURLWithPath: NSTemporaryDirectory())
             .appendingPathComponent("steno-capture-perf-\(UUID().uuidString)", isDirectory: true)

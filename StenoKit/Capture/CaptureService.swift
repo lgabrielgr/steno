@@ -105,6 +105,13 @@ public struct CaptureService {
         // provably a no-op. M1-06's note path is its real first caller.
 
         do {
+            // Both of these act on the whole context, not just this capture.
+            // `save` commits anything else already pending in it, and
+            // `rollback` discards anything else pending. That is safe today
+            // because the only caller passes `mainContext` and
+            // `MainWindowModel.perform` never leaves changes pending across a
+            // call — but it is an assumption, and M1-06's note path is the
+            // first thing likely to break it.
             try save(context)
         } catch {
             // Without this the objects sit in the context, the next reload

@@ -7,21 +7,20 @@ import SwiftUI
 /// picker by decision (see `ProjectPalette`); and §3.1 has no delete, only
 /// archive, which the sidebar's context menu already offers.
 struct ProjectEditSheet: View {
-    let projectName: String
-    let jiraKeys: [String]
     let onCommit: (String, String) -> Void
 
     @State private var name: String
     @State private var keys: String
     @Environment(\.dismiss) private var dismiss
 
+    /// `projectName` and `jiraKeys` seed the `@State` and are not stored:
+    /// after the sheet appears the edited copies are the truth, and keeping
+    /// the originals around would offer a stale value to read by mistake.
     init(
         projectName: String,
         jiraKeys: [String],
         onCommit: @escaping (String, String) -> Void
     ) {
-        self.projectName = projectName
-        self.jiraKeys = jiraKeys
         self.onCommit = onCommit
         _name = State(initialValue: projectName)
         _keys = State(initialValue: jiraKeys.joined(separator: ", "))

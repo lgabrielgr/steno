@@ -54,6 +54,19 @@ struct MainWindowView: View {
                     ) { name, keys in
                         model.updateProject(id: id, name: name, jiraKeys: keys)
                     }
+                } else {
+                    // Unreachable today — archiving lives in the sidebar's
+                    // context menu, which is behind this modal. It is one
+                    // M1-05 keyboard shortcut away from being reachable, and
+                    // without this branch the sheet would render empty with
+                    // no way out. A sheet you cannot close is worse than any
+                    // stale-data problem it might be hiding.
+                    VStack(spacing: 16) {
+                        Text("That project is no longer available.")
+                        Button("Close") { model.activeSheet = nil }
+                            .keyboardShortcut(.cancelAction)
+                    }
+                    .padding(24)
                 }
             }
         }
