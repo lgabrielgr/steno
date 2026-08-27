@@ -56,6 +56,9 @@ public struct CaptureService {
         defaultProjectID: UUID? = nil,
         ignoringTicketKey: Bool = false
     ) throws -> TaskItem? {
+        let interval = Log.captureSignposter.beginInterval("capture")
+        defer { Log.captureSignposter.endInterval("capture", interval) }
+
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return nil }
 
