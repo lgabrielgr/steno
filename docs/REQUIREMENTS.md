@@ -1,12 +1,13 @@
 # REQUIREMENTS.md — Steno
 
-**Status:** Draft v1.10
-**Date:** 2026-08-25
+**Status:** Draft v1.11
+**Date:** 2026-08-26
 **Audience:** Engineering agents in future sessions. This document is the source of truth for task generation and implementation.
 
 > **Steno** — a stenographer records what was said, verbatim, without editorializing. That is the product in one word: an accurate record of what you did, lightly organized, never embellished.
 
 **Changelog**
+- *v1.11* — FR-3 gains project editing. FR-1.4 routes captures on `Project.jiraProjectKeys`, but no requirement granted any way to set them: projects are created with `[]` and nothing could change it, so auto-routing and its chip would have shipped unreachable in the running app. Found while implementing M1-02, which adds the editor.
 - *v1.10* — Corrected §3.4's `identifier` column. "PR number" was not a viable identifier: §3.4 makes a ref unique per `(taskID, kind, identifier)`, so two pull requests numbered 421 in different repositories collapse into one row and the second reference is silently dropped. The identifier is now required to be unique within its kind, and GitHub's is repo-qualified (`acme/api#421`). Found while designing M1-01.
 - *v1.9* — Corrected §10.1's claim that events are immutable. They are append-only, but `Event.isRedacted` and `StandupReport.isUndone` are mutable flags, so a record present on both machines can still differ and union-by-UUID alone would drop a redaction. §10.1 now names the gap and routes the actual merge rule to `DECISIONS.md` O-8 (owner: M2.5-02); the mutable-field table's row count is corrected from "three" to four. Found while implementing M0-03.
 - *v1.8* — The task model's Swift type is named **`TaskItem`**, not `Task`, to avoid shadowing `_Concurrency.Task` (§3.2). Domain vocabulary is unchanged: prose, UI copy, and the export key `"tasks"` all still say "task". Updated §3, §3.2, and §10.1.
@@ -242,6 +243,8 @@ Three-column layout:
 1. **Sidebar** — flat list of projects with unread/stale badge counts. An "All" pseudo-project at top.
 2. **Task list** — tasks for the selected project, grouped by status in the order IN-PROGRESS, BLOCKED, TODO, DONE. `DONE` collapsed by default, showing only items completed within the current report window.
 3. **Detail pane** — task title, status control, source-ref cards with fetched external state, and the full event timeline.
+
+**Project editing.** A project's name and its `jiraProjectKeys` are editable from the sidebar. This is what makes FR-1.4's auto-routing reachable: routing matches a typed ticket key's prefix against `jiraProjectKeys`, and without a way to set them every project holds an empty list forever. Colour is not editable — see D9 and §3.1; deletion does not exist — see §3.1, archiving only.
 
 **Keyboard-first requirement.** Every primary action needs a shortcut: new task, cycle status, add note, generate report, switch project.
 

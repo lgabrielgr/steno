@@ -117,14 +117,6 @@ public final class MainWindowModel: MainWindowActions {
         groups.lazy.flatMap(\.tasks).first { $0.id == id }
     }
 
-    /// The task's timeline, newest first, excluding redacted events (§3.3).
-    ///
-    /// The exclusion is a property of this query rather than of each caller,
-    /// so M1-06's redaction cannot be forgotten by one of them.
-    public func events(forTaskID id: UUID) -> [Event] {
-        fetchEvents(forTaskID: id) ?? []
-    }
-
     private func fetchEvents(forTaskID id: UUID) -> [Event]? {
         let descriptor = FetchDescriptor<Event>(
             predicate: #Predicate { $0.taskID == id && !$0.isRedacted },
@@ -209,6 +201,18 @@ public final class MainWindowModel: MainWindowActions {
 
     // MARK: - Writing
 
+    /// A capture service over this window's context, for the capture sheet.
+    ///
+    /// The view never touches the context itself — it gets a service that
+    /// already holds one, so D-019's rule (no `@Query`, no
+    /// `@Environment(\.modelContext)`) is untouched.
+    public func captureService() -> CaptureService {
+        CaptureService(context: context, now: now, save: save)
+    }
+
+    /// FR-1.4 rung 2, exposed for the capture sheet. See `preferredProjectID`.
+    public var preferredProjectIDForCapture: UUID? { preferredProjectID() }
+
     public func createProject(named name: String) {
         let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
@@ -239,34 +243,45 @@ public final class MainWindowModel: MainWindowActions {
         }
     }
 
-    public func createTask(titled title: String) {
-        let trimmed = title.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty, let projectID = targetProjectID() else { return }
+    /// Edit a project's name and its Jira key prefixes — what FR-1.4 routes on,
+    /// unreachable before this method (M1-02 design doc §7). Keys arrive
+    /// comma-separated; normalising here keeps `ProjectRouter` typing-agnostic.
+    public func updateProject(id: UUID, name: String, jiraKeys: String) {
+        guard let project = projects.first(where: { $0.id == id }) else { return }
+        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
 
+        let keys = Self.normalisedKeys(jiraKeys)
         let stamp = now()
-        perform("create the task") {
-            let task = TaskItem(title: trimmed, projectID: projectID, createdAt: stamp)
-            self.context.insert(task)
-            // §3.3's EventKind table: `created` is written when a task is
-            // created. A task without one is a hole in the append-only log —
-            // M2-01's gathering would skip it and M2.5-02's merge would reason
-            // from it. M1-02's capture service takes over this call site.
-            self.context.insert(
-                Event(taskID: task.id, timestamp: stamp, kind: .created, body: "Task created")
-            )
+        perform("save the project") {
+            project.rename(to: trimmed, at: stamp)
+            project.setJiraProjectKeys(keys, at: stamp)
         }
     }
 
-    /// FR-1.4: never block on project selection.
+    /// `" pay , BILL,pay,, "` → `["PAY", "BILL"]`. Internal so `@testable
+    /// import` can exercise the rule without a container.
+    static func normalisedKeys(_ raw: String) -> [String] {
+        var seen: Set<String> = []
+        var result: [String] = []
+        for piece in raw.split(separator: ",") {
+            let key = piece.trimmingCharacters(in: .whitespaces).uppercased()
+            guard !key.isEmpty, seen.insert(key).inserted else { continue }
+            result.append(key)
+        }
+        return result
+    }
+
+    /// FR-1.4 rung 2: this surface's own context.
     ///
-    /// Superseded by M1-02: the specified rule is "default to the last-used
-    /// project", which M1-02 owns along with the first-launch behaviour. Until
-    /// then the first project by `sortOrder` stands in — and the task row shows
-    /// its project, so the assignment is visible rather than silent.
-    private func targetProjectID() -> UUID? {
+    /// Under "All" the window has no opinion about where a task belongs, so it
+    /// says so with `nil` and the ladder falls through to the last-used
+    /// project — rather than asserting the first project, which is what
+    /// D-021's stand-in did before this task retired it.
+    private func preferredProjectID() -> UUID? {
         switch selection {
         case .project(let id): id
-        case .all: projects.first?.id
+        case .all: nil
         }
     }
 

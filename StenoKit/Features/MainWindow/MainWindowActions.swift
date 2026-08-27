@@ -1,3 +1,5 @@
+import Foundation
+
 /// Which modal the main window is showing, if any.
 ///
 /// One optional value rather than a `Bool` per sheet: two independent flags can
@@ -6,6 +8,9 @@
 public enum ActiveSheet: Identifiable, Hashable, Sendable {
     case newProject
     case newTask
+
+    /// Edit the named project — FR-3's project editing (REQUIREMENTS v1.11).
+    case editProject(UUID)
 
     public var id: Self { self }
 }

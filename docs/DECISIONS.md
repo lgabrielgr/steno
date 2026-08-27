@@ -450,6 +450,129 @@ multi-clause `if let` anyone writes, in code that was already correct); `swiftli
 comments (D-013 reserves those for genuine false positives, which this is not — the rule is
 working as designed and the design is wrong for this repo).
 
+### D-024 — "Last-used project" is derived from the newest task, not stored
+**2026-08-26** · M1-02 · **Status:** accepted
+
+FR-1.4's "default to the last-used project" is answered by a query — the project of the most
+recently created `TaskItem` — rather than by a stored `lastUsedProjectID`. No new field, no
+`UserDefaults` key, no settings row.
+
+**Why:** it cannot drift from reality; all three capture surfaces agree by construction rather
+than by each remembering to write the same key; and it round-trips through §10's JSON export for
+free, because it is not a separate fact at all. D18 caps the dataset under 20 live tasks, so the
+read costs nothing.
+**Alternatives:** a `UserDefaults` key written on each save (fastest read, but state outside the
+store — it does not export, and it can point at an archived project, needing validation on read
+anyway); a singleton settings row in SwiftData (portable, but a schema addition that §6's
+CloudKit-compat rules and M2.5-02's merge would both then have to reason about, for one UUID).
+**The trap, and it is D-021's:** the derivation must re-apply the visible-projects filter.
+A task row does not encode whether its **project** is archived — `TaskItem.isArchived` exists and
+the fetch does use it, but it tracks the task, not the project — and no predicate on `TaskItem` can
+express "belongs to a live project", because D-021 makes that an in-memory join rather than a
+stored fact. So `fetchLimit = 1` returns the newest unarchived task, which may still sit in an
+archived project, and routes the capture somewhere the user cannot see it. The join must happen
+after the fetch.
+
+### D-025 — Routing scans for ticket keys directly, not through `ReferenceExtractor`
+**2026-08-26** · M1-02 · **Status:** accepted
+
+`ProjectRouter.ticketKeyMatch` runs `JiraKey.pattern` over the text with an early exit. It does
+not call M1-01's extractor, and the two therefore disagree about keys inside links — deliberately.
+
+**Why, twice over.** *Cost:* the chip re-derives on every keystroke, and `NSDataDetector` is the
+expensive half of extraction — 180 µs on a capture string but ~180 ms on a 250 KB paste, which
+would then be paid per keystroke. A regex scan with an early exit is the cheaper of the two.
+
+**Corrected before merge — this entry originally claimed the regex scan "has no such cliff", and
+that was asserted, not measured.** It has one. A large paste containing no resolving key defeats
+the early exit, and a paste dense in the false positives `JiraKey` documents (`UTF-8`, `ISO-8601`,
+`COVID-19`) defeats it while also maximising the match loop. Worse, `JiraKey.pattern` must be a
+computed property — `Regex` is not `Sendable` — so reading it inside the loop condition built a
+fresh `Regex` per iteration: **342 ms on a 250 KB adversarial paste, per keystroke, on the main
+actor.** Hoisting it to a local before the loop brings that to 21 ms (both `-O`). The scan is still
+cheaper than paying `NSDataDetector` on top of it, which is what this decision is actually about —
+but "no cliff" was wrong and the number is now gated by
+`CapturePerformanceTests.testKeyScanOnALargePasteStaysInteractive` rather than claimed in prose.
+The lesson generalises past this entry: CLAUDE.md's non-negotiable #4 says the quick-add path must
+be *measured*, and a decision record is exactly where an unmeasured assertion gets read as fact by
+the next agent.
+*Correctness:* M1-01's overlap rule suppresses keys sitting inside links so a browse URL yields
+one ref rather than two. That is right for extraction and wrong for routing —
+`https://acme.atlassian.net/browse/PAY-421` should route to Payments. Routing wants every key the
+text mentions; extraction wants each one once.
+**Alternatives:** calling `extract` for both (one scan, but pays `NSDataDetector` per keystroke
+*and* silently declines to route a pasted browse URL); debouncing the live extraction (adds a
+timer and a stale-chip window to the latency-critical path).
+**Consequence to know about:** a URL slug like `/reports/AWS-2024/q3` routes to a project
+configured with the prefix `AWS`. Narrow, and one click to dismiss.
+
+### D-026 — A project is seeded on first launch; capture refuses only when all are archived
+**2026-08-26** · M1-02 · **Status:** accepted
+
+`StenoStore.seedDefaultProjectIfEmpty(in:)` inserts one `Inbox` project when the store holds zero
+projects, called from `StenoApp` after the container opens. The emptiness check counts archived
+projects, so seeding happens once in a store's life.
+
+**Why:** on a fresh install there are no projects, so M0-05 disabled New Task — a capture surface
+refusing text, which §1.1 forbids. M1-03 makes it worse: the hotkey window would open above every
+other app into a field whose `Return` does nothing.
+**The exception this leaves, stated because ARCHITECTURE §3 claims capture never blocks.** With
+every project archived, routing has no target, `CaptureService` throws `noProjectAvailable`, and
+`canCreateTask` is false. Not re-seeded: that would resurrect a project the user archived on
+purpose, and unlike a fresh install it is a state they navigated into deliberately with a visible
+undo. §3.1 hides archived projects and never deletes them, so choosing to hide all of them is a
+legitimate thing to have done.
+**Alternatives:** minting a project lazily inside the first capture (nothing exists until the user
+types, but the write becomes conditional and two-part on the latency-critical path); keeping
+M0-05's gate (honest about the data model, dead field on a fresh install).
+**Called on `container.mainContext`, not a sibling context.** The plan specified
+`ModelContext(container)`; that was changed during implementation because `MainWindowView` reads
+`mainContext`, and seeding into a sibling would have rested M1-02's core guarantee — a fresh
+install has somewhere to capture to — on undocumented SwiftData cross-context visibility.
+
+### D-027 — M1-02 adds project editing, which no task owned
+**2026-08-26** · M1-02 · **Status:** accepted · spec amendment
+
+Spec amendment — carried by `REQUIREMENTS.md` FR-3 (v1.11). Nothing in the 36-task plan owned
+editing `Project.jiraProjectKeys`: the field and `setJiraProjectKeys(_:at:)` exist from M0-03,
+`createProject(named:)` always passes `[]`, and the field is named in `docs/tasks/` only inside
+M1-02's own file. M1-08's Settings scope is hotkey, launch at login and default project, and
+per-project keys are not Settings-shaped.
+
+**Why it could not wait:** FR-1.4 routes on `jiraProjectKeys`. Without an editor every project
+holds `[]` forever, so auto-routing and its chip are unreachable in the running app, M1-02's second
+acceptance criterion is provable only in the test bundle, and M1-04's "chip behaving identically to
+the main window" has nothing to compare.
+**Scope:** a sidebar context-menu sheet with a name field and a comma-separated keys field, over
+the mutators M0-03 already shipped. Deliberately outside the task file's In-scope list, and
+declared in the PR body rather than smuggled.
+
+### D-028 — `ProjectRouter.route`'s `defaultProjectID` carries a default value
+**2026-08-26** · M1-02 · **Status:** accepted · extends D-013, D-023
+
+`route(text:projects:preferred:lastUsed:defaultProjectID:ignoringTicketKey:)` takes six
+parameters, which trips SwiftLint's `function_parameter_count` (warning threshold 5, promoted to
+a failure by `--strict`). `defaultProjectID` is declared `UUID? = nil`; the rule's
+`ignores_default_parameters` option defaults to true, so one default clears the violation.
+
+**Why this parameter and not another:** FR-6's configured default is the one rung that genuinely
+has no value until M1-08 builds the setting — the design already describes it as "a parameter
+from day one, `nil` until M1-08 fills it." A default therefore misrepresents nothing. The other
+five are required at every call site and defaulting any of them would hide a real argument.
+**Why not the alternatives:** an inline `swiftlint:disable` is what D-023 reserves for genuine
+false positives, and a function that really does take six arguments is not one. Disabling
+`function_parameter_count` in `.swiftlint.yml` would drop the rule for the whole project to
+settle one call — the opposite of D-023's reasoning, where a rule was removed because its
+residual value was nil rather than because one site found it inconvenient.
+**The cost, and where it is paid:** the design's argument for threading the parameter through
+from day one is that M1-08 satisfies its acceptance criterion "by passing an argument, not by
+editing this function" — which holds only while every call site passes it explicitly. A default
+makes silent omission possible. `CaptureService.capture` is the only production caller and does
+pass it explicitly; `capture`'s *own* `defaultProjectID: UUID? = nil` is separate and was
+specified from the start. **M1-08 should verify both call sites rather than assuming.**
+Note also that `CaptureFieldModel.commit()` omits `defaultProjectID` and has no way to receive
+one — M1-08 must thread a parameter through there too, so the work is three sites, not two.
+
 ---
 
 ## Open — decided by the task that owns them

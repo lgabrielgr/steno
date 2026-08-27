@@ -45,11 +45,29 @@ struct MainWindowView: View {
                     confirm: "Create"
                 ) { model.createProject(named: $0) }
             case .newTask:
-                TextEntrySheet(
-                    title: "New Task",
-                    placeholder: "What are you working on?",
-                    confirm: "Add"
-                ) { model.createTask(titled: $0) }
+                NewTaskSheet(model: model)
+            case .editProject(let id):
+                if let project = model.project(withID: id) {
+                    ProjectEditSheet(
+                        projectName: project.name,
+                        jiraKeys: project.jiraProjectKeys
+                    ) { name, keys in
+                        model.updateProject(id: id, name: name, jiraKeys: keys)
+                    }
+                } else {
+                    // Unreachable today — archiving lives in the sidebar's
+                    // context menu, which is behind this modal. It is one
+                    // M1-05 keyboard shortcut away from being reachable, and
+                    // without this branch the sheet would render empty with
+                    // no way out. A sheet you cannot close is worse than any
+                    // stale-data problem it might be hiding.
+                    VStack(spacing: 16) {
+                        Text("That project is no longer available.")
+                        Button("Close") { model.activeSheet = nil }
+                            .keyboardShortcut(.cancelAction)
+                    }
+                    .padding(24)
+                }
             }
         }
     }
