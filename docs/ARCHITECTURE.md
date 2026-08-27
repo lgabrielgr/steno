@@ -87,7 +87,7 @@ a broad refactor.
 |---|---|---|---|
 | Append-only | No write to an existing `Event` except `isRedacted` | Domain models expose no mutating API (M0-03); notes redact-and-reappend (M1-06) | §3.3, §13 |
 | Status has an event | Every transition appends `statusChanged` | Single status service (M1-05) | §3.2, §10.1 |
-| Capture never blocks | No modal, picker, or validation before text entry | Capture core (M1-02) | §1.1, FR-1.4 |
+| Capture never blocks | No modal, picker, or validation before text entry | Capture core (M1-02). One documented exception: every project archived (D-026) | §1.1, FR-1.4 |
 | Preview is side-effect free | Only Copy advances `lastStandupAt` | Report engine (M2-01), report UI (M2-03) | FR-4 |
 | CloudKit-compatible schema | Defaults or optionals everywhere; no `@Attribute(.unique)` | Domain models (M0-03), asserted in tests | §6 |
 | Secrets never persisted | Keychain only; never SwiftData, `UserDefaults`, plists, logs | Credential layer (M3-01), asserted in export tests (M2.5-01) | §8, §10.3 |
@@ -108,7 +108,8 @@ violation is invisible in review and expensive in production.
 ```
 hotkey / menu bar / main window
         └─> capture core ──> ref extraction (pure) ──> store
-                          └─> project routing (ticket-key prefix, else last-used)
+                          └─> project routing (ticket key, else surface context,
+                              else last-used, else configured default)
 ```
 
 Three surfaces, one code path (D15). Extraction is passive and silent — no `@project`, no
@@ -138,18 +139,18 @@ tested without a window server, it does not belong in `Steno/`** (D-010, amendin
 
 ```
 StenoKit/         framework — everything testable
-  Support/        Logging.swift                          (exists, M0-02)
+  Support/        Logging.swift, ProjectPalette.swift    (exists, M0-02/M1-02)
   Models/         SwiftData models, enums                (exists, M0-03)
   Persistence/    StenoStore — schema, store location    (exists, M0-04)
-  Capture/        ref extraction (exists, M1-01); capture core (M1-02)
+  Capture/        ref extraction (M1-01); routing, capture service (M1-02)
   Report/         window computation, renderers          (M2-01, M2-02)
   Portability/    export, import, merge                  (M2.5)
   AI/             AIProvider, AnthropicProvider          (M3)
   Sources/        SourceConnector, Jira, Confluence, MCP (M4, M5)
-  Features/       view models, by feature — MainWindow (M0-05)
+  Features/       view models, by feature — MainWindow (M0-05), Capture (M1-02)
 Steno/            application — SwiftUI views and @main, nothing else
   App/            @main, store failure scene, menu commands  (exists)
-  Features/       views, by feature — MainWindow (M0-05)
+  Features/       views, by feature — MainWindow (M0-05), Capture (M1-02)
   Steno.entitlements                                     (exists)
 StenoTests/       unhosted unit-test bundle; headless, network denied  (exists, M0-02)
 Scripts/
