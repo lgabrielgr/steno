@@ -699,8 +699,10 @@ func lastUsedSkipsArchivedProjects() throws {
     let next = try #require(try service.capture(text: "where does this land", preferred: nil))
 
     // **Three projects, not two, and that is what makes this test discriminate.**
-    // D-021: `TaskItem` has no archived flag of its own, so the newest task row
-    // still belongs to archived Hiring. The three candidate implementations
+    // D-021: a task row does not encode whether its *project* is archived
+    // (`TaskItem.isArchived` exists, but it tracks the task, and Hiring's tasks
+    // were never individually archived), so the newest task row still belongs
+    // to archived Hiring. The three candidate implementations
     // must give three answers, and only one of them is Design System:
     //
     //   correct           → Design System — newest task in a *live* project
@@ -891,12 +893,14 @@ public struct CaptureService {
     /// reality, every surface agrees by construction, and it round-trips
     /// through §10's export for free because it is not a separate fact.
     ///
-    /// **Not `fetchLimit = 1`.** D-021: `TaskItem` has no archived flag of its
-    /// own — "a project's tasks disappear when it archives" is an emergent
-    /// property of one in-memory filter, not a stored fact. Limiting the fetch
-    /// returns a task belonging to an archived project and routes the capture
-    /// somewhere the user cannot see it. D18 caps the dataset under 20 live
-    /// tasks, so reading them all costs nothing.
+    /// **Not `fetchLimit = 1`.** D-021: a task row does not encode whether its
+    /// **project** is archived. (`TaskItem.isArchived` exists and the predicate
+    /// below uses it, but it tracks the task, not its project.) "A project's
+    /// tasks disappear when it archives" is an emergent property of one
+    /// in-memory join, not a stored fact. Limiting the fetch returns a task
+    /// belonging to an archived project and routes the capture somewhere the
+    /// user cannot see it. D18 caps the dataset under 20 live tasks, so
+    /// reading them all costs nothing.
     private func lastUsedProjectID(among projects: [Project]) throws -> UUID? {
         let live = Set(projects.map(\.id))
         guard !live.isEmpty else { return nil }
@@ -2483,8 +2487,12 @@ store — it does not export, and it can point at an archived project, needing v
 anyway); a singleton settings row in SwiftData (portable, but a schema addition that §6's
 CloudKit-compat rules and M2.5-02's merge would both then have to reason about, for one UUID).
 **The trap, and it is D-021's:** the derivation must re-apply the visible-projects filter.
-`TaskItem` has no archived flag of its own, so a `fetchLimit = 1` returns a task belonging to an
-archived project and routes the capture into a project the user cannot see.
+A task row does not encode whether its **project** is archived — `TaskItem.isArchived` exists and
+the fetch does use it, but it tracks the task, not the project — and no predicate on `TaskItem` can
+express "belongs to a live project", because D-021 makes that an in-memory join rather than a
+stored fact. So `fetchLimit = 1` returns the newest unarchived task, which may still sit in an
+archived project, and routes the capture somewhere the user cannot see it. The join must happen
+after the fetch.
 
 ### D-025 — Routing scans for ticket keys directly, not through `ReferenceExtractor`
 **2026-08-26** · M1-02 · **Status:** accepted

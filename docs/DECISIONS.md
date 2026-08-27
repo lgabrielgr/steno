@@ -466,8 +466,12 @@ store — it does not export, and it can point at an archived project, needing v
 anyway); a singleton settings row in SwiftData (portable, but a schema addition that §6's
 CloudKit-compat rules and M2.5-02's merge would both then have to reason about, for one UUID).
 **The trap, and it is D-021's:** the derivation must re-apply the visible-projects filter.
-`TaskItem` has no archived flag of its own, so a `fetchLimit = 1` returns a task belonging to an
-archived project and routes the capture into a project the user cannot see.
+A task row does not encode whether its **project** is archived — `TaskItem.isArchived` exists and
+the fetch does use it, but it tracks the task, not the project — and no predicate on `TaskItem` can
+express "belongs to a live project", because D-021 makes that an in-memory join rather than a
+stored fact. So `fetchLimit = 1` returns the newest unarchived task, which may still sit in an
+archived project, and routes the capture somewhere the user cannot see it. The join must happen
+after the fetch.
 
 ### D-025 — Routing scans for ticket keys directly, not through `ReferenceExtractor`
 **2026-08-26** · M1-02 · **Status:** accepted

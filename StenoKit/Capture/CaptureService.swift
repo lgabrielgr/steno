@@ -139,12 +139,16 @@ public struct CaptureService {
     /// reality, every surface agrees by construction, and it round-trips
     /// through §10's export for free because it is not a separate fact.
     ///
-    /// **Not `fetchLimit = 1`.** D-021: `TaskItem` has no archived flag of its
-    /// own — "a project's tasks disappear when it archives" is an emergent
-    /// property of one in-memory filter, not a stored fact. Limiting the fetch
-    /// returns a task belonging to an archived project and routes the capture
-    /// somewhere the user cannot see it. D18 caps the dataset under 20 live
-    /// tasks, so reading them all costs nothing.
+    /// **Not `fetchLimit = 1`.** `TaskItem` *does* have its own `isArchived`,
+    /// and the predicate below uses it — but that is not the flag that matters
+    /// here. D-021: a task row does not encode whether its **project** is
+    /// archived. "A project's tasks disappear when it archives" is an emergent
+    /// property of one in-memory join, not a stored fact, and no predicate on
+    /// `TaskItem` can express it. So limiting the fetch returns the newest
+    /// unarchived task, which may still belong to an archived project, and
+    /// routes the capture somewhere the user cannot see it. The join has to
+    /// happen after the fetch — hence read all, then `live.contains`. D18 caps
+    /// the dataset under 20 live tasks, so that costs nothing.
     private func lastUsedProjectID(among projects: [Project]) throws -> UUID? {
         let live = Set(projects.map(\.id))
         guard !live.isEmpty else { return nil }

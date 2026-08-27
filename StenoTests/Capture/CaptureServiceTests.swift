@@ -175,8 +175,10 @@ func lastUsedSkipsArchivedProjects() throws {
     let next = try #require(try service.capture(text: "where does this land", preferred: nil))
 
     // **Three projects, not two, and that is what makes this test discriminate.**
-    // D-021: `TaskItem` has no archived flag of its own, so the newest task row
-    // still belongs to archived Hiring. The three candidate implementations
+    // D-021: a task row does not encode whether its *project* is archived
+    // (`TaskItem.isArchived` exists, but it tracks the task, and Hiring's tasks
+    // were never individually archived), so the newest task row still belongs
+    // to archived Hiring. The three candidate implementations
     // must give three answers, and only one of them is Design System:
     //
     //   correct           → Design System — newest task in a *live* project
