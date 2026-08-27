@@ -23,11 +23,12 @@ public enum Log {
     /// app*, where GUI automation is unavailable:
     ///
     ///     /usr/bin/log show --last 5m --signpost --predicate \
-    ///       'subsystem == "com.lgabrielgr.steno"'
+    ///       'subsystem == "com.lgabrielgr.steno" AND category == "capture"'
     ///
-    /// Spell out `/usr/bin/log` — zsh has a `log` builtin that shadows it and
-    /// fails with "too many arguments". `--signpost` rather than `--info`,
-    /// because intervals are signpost records, not log messages.
+    /// Two things that recipe gets wrong if you shorten it. Spell out
+    /// `/usr/bin/log` — zsh has a `log` builtin that shadows it and fails with
+    /// "too many arguments". And `--signpost`, not `--info`: intervals are
+    /// signpost records, so `--info` returns nothing at all.
     ///
     /// M1-03 and M1-04 must each show they did not regress it.
     public static let captureSignposter = OSSignposter(
