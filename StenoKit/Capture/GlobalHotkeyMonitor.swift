@@ -43,10 +43,9 @@ public protocol GlobalHotkeyMonitor: AnyObject {
 /// worked around.
 @MainActor
 public final class CarbonHotkeyMonitor: GlobalHotkeyMonitor {
-    // nonisolated(unsafe) because these are exclusively accessed during
-    // register/unregister and read in the event callback, which runs on the
-    // main thread. deinit uses nonisolated access to ensure cleanup even if
-    // unregister wasn't called.
+    // nonisolated(unsafe) because deinit is nonisolated in Swift 6. This is
+    // safe: deinit is the only context where exclusive access is structurally
+    // guaranteed — no other reference to the object survives.
     private nonisolated(unsafe) var hotKeyRef: EventHotKeyRef?
     private nonisolated(unsafe) var handlerRef: EventHandlerRef?
     private var onPress: (() -> Void)?
@@ -79,9 +78,9 @@ public final class CarbonHotkeyMonitor: GlobalHotkeyMonitor {
         var spec = EventTypeSpec(
             eventClass: OSType(kEventClassKeyboard), eventKind: UInt32(kEventHotKeyPressed))
 
-        // `passUnretained`: the event handler is torn down in `unregister`, which
-        // runs before deinit can complete, so retaining self here would be a
-        // cycle for no added safety.
+        // `passUnretained`: the context pointer is unretained. It's safe because
+        // deinit unconditionally tears down the Carbon registration via
+        // cleanupCarbon(), so the pointer cannot outlive the object.
         let context = Unmanaged.passUnretained(self).toOpaque()
         let handlerStatus = InstallEventHandler(
             GetEventDispatcherTarget(),
@@ -97,6 +96,7 @@ public final class CarbonHotkeyMonitor: GlobalHotkeyMonitor {
             }, 1, &spec, context, &handlerRef)
 
         guard handlerStatus == noErr else {
+            unregister()
             throw HotkeyRegistrationError.systemRefused(handlerStatus)
         }
 
