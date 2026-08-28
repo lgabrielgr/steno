@@ -57,7 +57,7 @@ something better than paper. **M2 is the true MVP; M6 is the finish line.**
 
 - [x] [M1-01](M1-01-reference-extraction.md) — passive ref extraction (FR-1.5), pure and headless-tested
 - [x] [M1-02](M1-02-quick-capture-core.md) — the one shared capture code path, with project auto-routing
-- [ ] [M1-03](M1-03-global-hotkey.md) — global hotkey and floating window (FR-1.1)
+- [x] [M1-03](M1-03-global-hotkey.md) — global hotkey and floating window (FR-1.1)
 - [ ] [M1-04](M1-04-menu-bar.md) — menu bar item and popover (FR-1.2)
 - [ ] [M1-05](M1-05-status-control.md) — status transitions and `statusChanged` events
 - [ ] [M1-06](M1-06-progress-notes.md) — notes, timeline, redact-and-reappend grace window (FR-2)

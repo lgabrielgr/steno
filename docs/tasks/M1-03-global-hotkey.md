@@ -17,8 +17,9 @@ with no mouse.
 - **Conflict detection and warning** — FR-1.1 requires this explicitly.
 - A small floating window above all apps, text field focused on open.
 - `Return` saves and dismisses. `Esc` dismisses without saving.
-- Accessibility (TCC) permission request with a clear explanation, and graceful behavior when
-  permission is absent or revoked.
+- ~~Accessibility (TCC) permission request with a clear explanation, and graceful behavior when
+  permission is absent or revoked.~~ Dropped: `RegisterEventHotKey` is not TCC-gated, so this
+  permission is never requested (D-029, REQUIREMENTS.md §9.3 v1.12).
 
 ## Out of scope
 
@@ -33,17 +34,17 @@ with no mouse.
 - [ ] The text field has focus the instant the window appears — no click required.
 - [ ] Binding a hotkey already claimed by the system or another app produces a warning rather
       than silent failure.
-- [ ] Denying or revoking Accessibility permission produces a clear explanation, not a dead
-      hotkey.
+- [ ] No Accessibility (TCC) permission is ever requested, and Steno does not appear in System
+      Settings → Privacy & Security → Accessibility. `RegisterEventHotKey` is not TCC-gated; a
+      permission prompt here means the mechanism was changed (D-029, REQUIREMENTS.md §9.3 v1.12).
 - [ ] Capture latency has not regressed against the M1-02 measurement.
 
 ## Notes for the spec/plan phase
 
-- **Signing determines whether this feature works at all.** §9.3: Accessibility permission is
-  granted by TCC against the app's *code signature*. If M0-01's stable Personal Team identity
-  was not set up correctly, every rebuild looks like a new app to macOS and re-prompts for
-  permission — turning the core feature into a permissions dialog on every run. If that
-  behavior appears, the bug is in signing, not here.
+- **Signing stability still matters, but not for the reason this file originally gave.** §9.3
+  claimed the hotkey needs Accessibility permission granted by TCC against the code signature.
+  It does not (D-029). Keep M0-01's stable Personal Team identity anyway: ad-hoc signing makes
+  every rebuild a new app to macOS, which resets any per-signature state the app does acquire.
 - The floating window must appear above full-screen apps and must not steal the user's place in
   whatever they were doing. Returning focus correctly on dismiss is part of the 3-second
   budget, not polish.

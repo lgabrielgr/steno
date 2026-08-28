@@ -573,6 +573,117 @@ specified from the start. **M1-08 should verify both call sites rather than assu
 Note also that `CaptureFieldModel.commit()` omits `defaultProjectID` and has no way to receive
 one — M1-08 must thread a parameter through there too, so the work is three sites, not two.
 
+### D-029 — The global hotkey needs no Accessibility permission
+**2026-08-27** · M1-03 · **Status:** accepted
+
+`CarbonHotkeyMonitor` binds the chord with Carbon's `RegisterEventHotKey`, which the WindowServer
+dispatches directly to the registering process. REQUIREMENTS.md §9.3 previously derived its
+stable-signing requirement from Accessibility (TCC) permission this mechanism never requests;
+§9.3 is corrected in this PR (REQUIREMENTS.md v1.12).
+
+**Why:** `M1-03-global-hotkey.md`'s fifth acceptance criterion — "Denying or revoking
+Accessibility permission produces a clear explanation, not a dead hotkey" — describes a state
+`RegisterEventHotKey` cannot enter. It is dropped from the task file rather than implemented:
+there is no permission to deny or revoke, and a dialog built for that case would be a control
+surface over nothing, working against the case §1.1 already makes for interrupting nothing on
+this path.
+**Alternatives:** `NSEvent.addGlobalMonitorForEvents` — TCC-gated, and fails silently rather than
+throwing until the grant exists, the worse failure mode for a P0 capture path. `CGEventTap` —
+also TCC-gated, and heavier: it can synthesize and swallow events system-wide, a capability this
+feature never needs.
+**The evidence, and what it is not.** A grep across `StenoKit/` and `Steno/` finds no
+`AXIsProcessTrusted`, `NSEvent.addGlobalMonitorForEvents`, `CGEvent.tapCreate`, or
+`NSAccessibility` call, and `make run` produced a clean launch with no registration fault in the
+unified log. That is source-level and runtime-log evidence that the mechanism does not request
+the permission — it is not proof that no dialog can appear on screen. That remains design §7's
+manual check 6, run by the reviewer rather than an agent, and is not claimed as verified by the
+test suite here.
+
+### D-030 — The capture panel is non-activating
+**2026-08-27** · M1-03 · **Status:** accepted
+
+`CapturePanel` is an `NSPanel` with `.nonactivatingPanel` in its style mask, `canBecomeKey`
+overridden to `true`, `canBecomeMain` to `false`, and is shown with `makeKeyAndOrderFront(nil)`
+and no `NSApp.activate`. The panel becomes key and receives typing while the user's own
+application never stops being frontmost at the `NSWorkspace` level, so dismissal has nothing to
+restore. Focus *return* is therefore structural, not a step that can fail at runtime.
+
+**Alternatives:** *Activate and restore* — stash `NSWorkspace.shared.frontmostApplication`, call
+`NSApp.activate(ignoringOtherApps:)`, restore on dismiss. Focus is guaranteed, but Steno visibly
+becomes frontmost (the menu bar swaps, the Dock icon marks active) and the restore is an
+asynchronous cross-process call that can lose a race to whatever else activates — the "steals the
+user's place" the task file warns against, and a round trip inside the 3-second budget. *Toggling
+activation policy* — flip to `.accessory` around show and hide. Gets some of the same discretion
+without `.nonactivatingPanel`, but mutates global application state on the latency-critical path
+and pre-empts M1-04, which has its own view on activation policy for the menu bar item.
+**What is not settled here.** Whether SwiftUI's `@FocusState` reliably takes the caret *inside*
+a non-activating panel — as opposed to the panel merely becoming key — is a runtime question no
+compile probe answers, and GUI automation is unavailable on this machine (design §4.1). It is
+design §7's manual check 1, run by the reviewer rather than an agent, and no result had been
+recorded as of this PR. If it fails, design §4.1 names the fallback as the rejected
+activate-and-restore alternative above, and that outcome belongs in an update to this entry, not
+a silent patch around it.
+
+### D-031 — `.stenoDidCapture` is posted at the write, not per surface
+**2026-08-27** · M1-03 · **Status:** accepted, closes D-019's gap
+
+`CaptureService.capture` posts `Notification.Name.stenoDidCapture` synchronously on the main
+actor after a successful write; `MainWindowModel` observes it and reloads. This closes the
+staleness gap D-019 named for a later task: a manually-fetched view model does not refresh when
+another surface writes, and D-019 left `MainWindowModel` correctness resting on whichever task
+added the second writing surface actually closing the gap.
+
+**Why one post site, not one per surface:** M1-03's floating panel and M1-04's future popover
+both call the same `CaptureService.capture`, so a single post there covers every surface without
+each one remembering to notify. The alternative D-019 itself suggested —
+`NSApplication.didBecomeActiveNotification` — is less code but leaves two holes: a main window
+visible on a second display and never re-activated stays stale, and a menu bar popover (M1-04)
+never activates the application either. Posting synchronously on the main actor, rather than
+deferring to the next run-loop turn, is also what makes the observing tests deterministic — a
+reload can be asserted immediately after `capture()` returns rather than waited for.
+**Why the observer token lives in `CaptureObservation`, not a stored property with a `deinit`:**
+in Swift 6, `deinit` on a `@MainActor` class is nonisolated and cannot reference isolated stored
+members, so `MainWindowModel`'s obvious `deinit { NotificationCenter.default.removeObserver(...) }`
+does not compile. `CaptureObservation` holds the token in a plain, non-isolated object; ARC
+releases it alongside the model, and *its* `deinit` — which touches nothing isolated — does the
+removal. The same rule surfaces once more in this task, in `CarbonHotkeyMonitor`: its
+`EventHotKeyRef`/`EventHandlerRef` are `nonisolated(unsafe)` for the identical reason, so its
+`deinit` can call a nonisolated cleanup function and actually run — `deinit` is also the one
+context where exclusive access to those references is structurally guaranteed, which is what
+makes the `unsafe` honest. One rule, two independent workarounds; recorded here rather than
+twice.
+
+### D-032 — Reserved-hotkey detection carries a static default table
+**2026-08-27** · M1-03 · **Status:** accepted
+
+`SystemHotkeys.reserved(in:)` resolves conflicts against `com.apple.symbolichotkeys`'s
+`AppleSymbolicHotKeys` domain, but treats the domain as a record of *deviations from the
+default*, not the full set of live shortcuts: `systemDefaults` supplies the thirteen ids a
+capture hotkey could plausibly collide with, and any id the domain omits entirely is still live
+at its default chord.
+
+**The evidence.** Run against this machine's real domain — after Task 3's fixture-based tests
+already passed — the three real units (`HotkeyChord`, `SystemHotkeys`, `HotkeyConflictChecker`)
+resolved 19 domain entries to 13 reserved chords, and the default `⌥Space` chord came back free.
+Four of those thirteen — Spotlight (`⌘Space`, id 64), Finder search (`⌥⌘Space`, 65), Mission
+Control (`⌃↑`, 32), and Application windows (`⌃↓`, 33) — were recovered entirely from
+`systemDefaults`, because none of the four ids appears in the domain at all. A resolver that
+trusted the plist alone would have reported `⌘Space` free, which is the single likeliest conflict
+any user of FR-1.1 will ever attempt.
+**The fail-safe direction, decided during review.** When a domain entry exists but is malformed —
+its key isn't parseable as `Int`, or its value isn't a `[String: Any]` — `reserved(in:)` does not
+mark that id `seen`. It falls through to the "id absent from the domain" path and reserves it at
+its `systemDefaults` chord, rather than dropping it. This is deliberate and asymmetric: falling
+back to the default can only produce a false-positive conflict warning, which is advisory and
+visible; dropping the id would produce a false negative — the user picks a chord macOS already
+owns, Steno binds it, and the hotkey is silently dead. The fallback direction is the one that
+cannot silently lose the hotkey.
+**What this cannot do, documented rather than simulated:** a chord already claimed by a
+*third-party* application is invisible to this mechanism — `RegisterEventHotKey` typically
+returns `noErr` regardless, and the other application simply wins the dispatch.
+`HotkeyConflictChecker`'s own doc comment states the limit; there is no fixture or unit test that
+could demonstrate covering it, because it isn't covered.
+
 ---
 
 ## Open — decided by the task that owns them
@@ -586,6 +697,7 @@ its PR body, and adds an entry above.
 | O-6 | Does the menu bar popover show in-progress tasks across all projects, or only the selected one? FR-1.2 doesn't say | `M1-04` |
 | O-7 | Whether integration *configuration* (site URLs, MCP definitions minus secrets) is exported by M2.5-01 or added by M4-04/M5-02 | `M2.5-01` |
 | O-8 | How import merges the two mutable boolean flags, `Event.isRedacted` and `StandupReport.isUndone` — §10.1's union-by-UUID default has no rule for them and neither model carries `modifiedAt` | `M2.5-02` |
+| O-9 | Whether the hotkey chord in `UserDefaults` is carried by §10's export | `M2.5-01` |
 
 ## Product questions — not for agents to decide
 
