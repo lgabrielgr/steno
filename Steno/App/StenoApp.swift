@@ -10,6 +10,10 @@ struct StenoApp: App {
     private let store: Result<ModelContainer, Error>
     private let storePath: String
 
+    /// FR-1.1's surface. Held here so it lives for the whole process — a
+    /// controller that goes out of scope takes the hotkey with it.
+    private let quickCapture: QuickCaptureController?
+
     init() {
         // os.Logger writes to the unified log, never to stdio — this line is
         // what makes `make run` self-evidencing that it execs the binary and
@@ -70,6 +74,17 @@ struct StenoApp: App {
                     "could not seed the default project: \(String(describing: error), privacy: .public)"
                 )
             }
+        }
+
+        // Only on a working store: with no container there is nowhere to
+        // capture to, and a hotkey opening a panel over a failure scene would
+        // be worse than no hotkey (D-018).
+        if case .success(let container) = store {
+            let controller = QuickCaptureController(container: container)
+            controller.start()
+            quickCapture = controller
+        } else {
+            quickCapture = nil
         }
     }
 
