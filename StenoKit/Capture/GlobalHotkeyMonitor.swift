@@ -43,8 +43,12 @@ public protocol GlobalHotkeyMonitor: AnyObject {
 /// worked around.
 @MainActor
 public final class CarbonHotkeyMonitor: GlobalHotkeyMonitor {
-    private var hotKeyRef: EventHotKeyRef?
-    private var handlerRef: EventHandlerRef?
+    // nonisolated(unsafe) because these are exclusively accessed during
+    // register/unregister and read in the event callback, which runs on the
+    // main thread. deinit uses nonisolated access to ensure cleanup even if
+    // unregister wasn't called.
+    private nonisolated(unsafe) var hotKeyRef: EventHotKeyRef?
+    private nonisolated(unsafe) var handlerRef: EventHandlerRef?
     private var onPress: (() -> Void)?
 
     /// 'STNO' — identifies our hot key in the event, so the handler ignores
@@ -52,6 +56,19 @@ public final class CarbonHotkeyMonitor: GlobalHotkeyMonitor {
     private static let signature = OSType(0x5354_4E4F)
 
     public init() {}
+
+    nonisolated private func cleanupCarbon() {
+        // Tear down Carbon registrations; failures here are best-effort cleanup
+        // and do not report errors, since this may be called from deinit.
+        if let hotKeyRef { UnregisterEventHotKey(hotKeyRef) }
+        self.hotKeyRef = nil
+        if let handlerRef { RemoveEventHandler(handlerRef) }
+        self.handlerRef = nil
+    }
+
+    deinit {
+        cleanupCarbon()
+    }
 
     public func register(_ chord: HotkeyChord, onPress: @escaping () -> Void) throws {
         // Idempotent: rebinding from M1-08 is register-over-register, and a
@@ -62,11 +79,11 @@ public final class CarbonHotkeyMonitor: GlobalHotkeyMonitor {
         var spec = EventTypeSpec(
             eventClass: OSType(kEventClassKeyboard), eventKind: UInt32(kEventHotKeyPressed))
 
-        // `passUnretained`: the handler is torn down in `unregister`, which
+        // `passUnretained`: the event handler is torn down in `unregister`, which
         // runs before deinit can complete, so retaining self here would be a
         // cycle for no added safety.
         let context = Unmanaged.passUnretained(self).toOpaque()
-        InstallEventHandler(
+        let handlerStatus = InstallEventHandler(
             GetEventDispatcherTarget(),
             { _, _, userData -> OSStatus in
                 guard let userData else { return noErr }
@@ -78,6 +95,10 @@ public final class CarbonHotkeyMonitor: GlobalHotkeyMonitor {
                 MainActor.assumeIsolated { monitor.onPress?() }
                 return noErr
             }, 1, &spec, context, &handlerRef)
+
+        guard handlerStatus == noErr else {
+            throw HotkeyRegistrationError.systemRefused(handlerStatus)
+        }
 
         let status = RegisterEventHotKey(
             UInt32(chord.keyCode), chord.carbonModifiers,
@@ -93,10 +114,7 @@ public final class CarbonHotkeyMonitor: GlobalHotkeyMonitor {
     }
 
     public func unregister() {
-        if let hotKeyRef { UnregisterEventHotKey(hotKeyRef) }
-        hotKeyRef = nil
-        if let handlerRef { RemoveEventHandler(handlerRef) }
-        handlerRef = nil
+        cleanupCarbon()
         onPress = nil
     }
 }

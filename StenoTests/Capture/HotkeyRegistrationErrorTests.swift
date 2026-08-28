@@ -16,5 +16,5 @@ func failuresCarryReadableMessages() {
 @Test("registration errors compare by case and status")
 func registrationErrorsCompare() {
     #expect(HotkeyRegistrationError.systemRefused(-1) != .systemRefused(-2))
-    #expect(HotkeyRegistrationError.alreadyRegistered == .alreadyRegistered)
+    #expect(HotkeyRegistrationError.alreadyRegistered != .systemRefused(0))
 }
