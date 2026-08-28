@@ -32,7 +32,9 @@ final class QuickCaptureController {
             root: CaptureFieldView(
                 field: model.field,
                 onDismiss: { [weak model] in
-                    // Esc: an explicit discard, so the draft goes too.
+                    // Fires on Esc and on a successful Return (`CaptureFieldView.commit()`
+                    // calls `onDismiss` too). `reset()` is the actual discard for Esc; on
+                    // Return it's a harmless no-op, since `commit()` already reset the field.
                     model?.field.reset()
                     NotificationCenter.default.post(name: .capturePanelShouldHide, object: nil)
                 },
@@ -45,11 +47,11 @@ final class QuickCaptureController {
     func start() {
         model.start { [weak self] in self?.toggle() }
 
-        // Esc (via the panel content's `onDismiss`) and losing key focus (via
-        // `PanelDelegate`) both post `.capturePanelShouldHide`, and this is
-        // where that lands. Toggling the chord while the panel is open does
-        // not go through the notification: `toggle()` already holds `self`
-        // and calls `hide()` directly.
+        // `onDismiss` above (Esc and a successful Return both call it) and
+        // `PanelDelegate` (losing key focus) both post `.capturePanelShouldHide`,
+        // and this is where that lands. Toggling the chord while the panel is
+        // open does not go through the notification: `toggle()` already holds
+        // `self` and calls `hide()` directly.
         NotificationCenter.default.addObserver(
             forName: .capturePanelShouldHide, object: nil, queue: nil
         ) { [weak self] _ in
