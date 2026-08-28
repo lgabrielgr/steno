@@ -1,6 +1,24 @@
 import StenoKit
 import SwiftUI
 
+/// How a capture field is being presented.
+///
+/// One view with two styles rather than two views, because M1-04's acceptance
+/// criterion is "the auto-routing chip behaving identically to the main
+/// window" — and the cheapest way to guarantee that is for there to be only
+/// one chip. The chip, the error row, the `isBlank` rule and the guarded
+/// `onSubmit` are shared literally; only chrome differs.
+enum CaptureFieldStyle {
+    /// The main window's modal sheet: fixed width, padding, Cancel and Add.
+    case sheet
+    /// M1-03's floating panel: no button row, panel chrome.
+    ///
+    /// The buttons are dropped deliberately. Cancel and Add duplicate `Esc`
+    /// and `Return` on a surface whose stated requirement (FR-1.1) is that it
+    /// works with no mouse at all.
+    case bar
+}
+
 /// FR-1's capture field: one focused line, `Return` commits, `Esc` dismisses.
 ///
 /// **The surface-shared one.** M1-03's floating window and M1-04's popover
@@ -12,6 +30,7 @@ import SwiftUI
 struct CaptureFieldView: View {
     @Bindable var field: CaptureFieldModel
     let onDismiss: () -> Void
+    var style: CaptureFieldStyle = .sheet
 
     @FocusState private var isFocused: Bool
 
@@ -41,17 +60,28 @@ struct CaptureFieldView: View {
                     .foregroundStyle(.secondary)
             }
 
-            HStack {
-                Spacer()
-                Button("Cancel", role: .cancel, action: onDismiss)
+            if style == .sheet {
+                HStack {
+                    Spacer()
+                    Button("Cancel", role: .cancel, action: onDismiss)
+                        .keyboardShortcut(.cancelAction)
+                    Button("Add", action: commit)
+                        .keyboardShortcut(.defaultAction)
+                        .disabled(isBlank)
+                }
+            } else {
+                // The panel has no buttons, so `Esc` needs a declaration of its
+                // own — in the sheet it came free with the Cancel button's
+                // `.cancelAction` shortcut.
+                Button("", action: onDismiss)
                     .keyboardShortcut(.cancelAction)
-                Button("Add", action: commit)
-                    .keyboardShortcut(.defaultAction)
-                    .disabled(isBlank)
+                    .hidden()
+                    .frame(width: 0, height: 0)
+                    .accessibilityHidden(true)
             }
         }
-        .padding(20)
-        .frame(width: 420)
+        .padding(style == .sheet ? 20 : 14)
+        .frame(width: style == .sheet ? 420 : 560)
         // FR-1.1: focused the instant it appears, no click required.
         .onAppear { isFocused = true }
     }
@@ -130,6 +160,6 @@ struct NewTaskSheet: View {
     }
 
     var body: some View {
-        CaptureFieldView(field: field) { model.activeSheet = nil }
+        CaptureFieldView(field: field, onDismiss: { model.activeSheet = nil }, style: .sheet)
     }
 }
