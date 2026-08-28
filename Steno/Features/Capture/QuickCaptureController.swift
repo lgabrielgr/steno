@@ -16,6 +16,12 @@ final class QuickCaptureController {
     private let panel: CapturePanel
     private var isShowing = false
 
+    /// Retained so the registration can be removed, and so `start()` cannot
+    /// register a second observer if it is ever called twice. Today the
+    /// controller is built once at launch and lives for the process, so this
+    /// is a guard against a future call site rather than a live bug.
+    private var hideObservation: (any NSObjectProtocol)?
+
     init(container: ModelContainer) {
         // `container.mainContext`, matching what `MainWindowView` reads, so a
         // capture from the panel and the window's own fetches agree without
@@ -45,6 +51,8 @@ final class QuickCaptureController {
     }
 
     func start() {
+        guard hideObservation == nil else { return }
+
         model.start { [weak self] in self?.toggle() }
 
         // `onDismiss` above (Esc and a successful Return both call it) and
@@ -52,7 +60,7 @@ final class QuickCaptureController {
         // and this is where that lands. Toggling the chord while the panel is
         // open does not go through the notification: `toggle()` already holds
         // `self` and calls `hide()` directly.
-        NotificationCenter.default.addObserver(
+        hideObservation = NotificationCenter.default.addObserver(
             forName: .capturePanelShouldHide, object: nil, queue: nil
         ) { [weak self] _ in
             MainActor.assumeIsolated { self?.hide() }

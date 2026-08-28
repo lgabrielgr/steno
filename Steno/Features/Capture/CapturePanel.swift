@@ -56,7 +56,7 @@ final class CapturePanel: NSPanel {
         setFrameOrigin(
             NSPoint(
                 x: visible.midX - frame.width / 2,
-                y: visible.midY + visible.height * 0.15
+                y: visible.midY - frame.height / 2 + visible.height * 0.15
             ))
     }
 }

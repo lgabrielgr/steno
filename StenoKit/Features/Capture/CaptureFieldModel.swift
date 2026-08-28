@@ -117,9 +117,18 @@ public final class CaptureFieldModel {
         return match?.key == dismissedKey
     }
 
-    /// Per keystroke — which is why it is a regex scan with an early exit and
-    /// no `NSDataDetector`. See `ProjectRouter.ticketKeyMatch`.
-    private func refreshChip() {
+    /// Re-derive the chip from the current project list.
+    ///
+    /// Called per keystroke by `text`'s `didSet` — which is why it is a regex
+    /// scan with an early exit and no `NSDataDetector`. See
+    /// `ProjectRouter.ticketKeyMatch`.
+    ///
+    /// Public because a surface can outlive the project list it derived from:
+    /// M1-03's panel keeps a draft across dismissals, so a project created
+    /// while it is hidden would otherwise leave the chip stale against the list
+    /// `CaptureService` actually routes with. Re-running this is safe — a
+    /// dismissed key stays dismissed.
+    public func refreshChip() {
         let live = projects()
         guard let match = ProjectRouter.ticketKeyMatch(text: text, projects: live),
             match.key != dismissedKey,

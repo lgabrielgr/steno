@@ -99,6 +99,14 @@ public final class QuickCaptureModel {
     /// half-typed thought survives a fumbled chord.
     public func prepareForShow() {
         projectBox.projects = liveProjects()
+
+        // The draft survives a dismissal, so the project list can change
+        // underneath it — a project created while the panel was hidden. The
+        // chip is otherwise only re-derived on a keystroke, which would leave
+        // the UI promising one routing while `CaptureService` performed
+        // another. FR-1.4's chip is a claim about where the task will land, so
+        // it re-derives here rather than waiting for the next character.
+        field.refreshChip()
     }
 
     private func bind(onPress: @escaping () -> Void) {

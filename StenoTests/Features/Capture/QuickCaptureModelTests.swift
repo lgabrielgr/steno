@@ -183,6 +183,35 @@ func prepareForShowPreservesTheDraft() throws {
     #expect(model.field.text == "half a thought")
 }
 
+/// The gap the keystroke-driven chip refresh leaves: the draft outlives the
+/// dismissal, so a project created while the panel was hidden changes what
+/// `CaptureService` will route with — but nothing types a character to
+/// re-derive the chip. Without an explicit refresh the panel shows no chip
+/// while the write routes to Hiring, which is FR-1.4's promise breaking
+/// silently. Note the ordering: the draft is typed BEFORE the project exists.
+@Test("preparing to show re-derives the chip for a draft typed before the project existed")
+@MainActor
+func prepareForShowRefreshesTheChipForAnExistingDraft() throws {
+    let fixture = try makeModel()
+    let (model, context) = (fixture.model, fixture.context)
+    model.prepareForShow()
+
+    model.field.text = "HIR-9 schedule the loop"
+    #expect(model.field.chip == nil, "no Hiring project exists yet")
+
+    context.insert(
+        Project(
+            name: "Hiring", colorHex: "#F59E0B", jiraProjectKeys: ["HIR"],
+            sortOrder: 1, modifiedAt: epoch))
+    try context.save()
+
+    // No keystroke — this is the whole point.
+    model.prepareForShow()
+
+    let chip = try #require(model.field.chip)
+    #expect(chip.projectName == "Hiring")
+}
+
 @Test("a capture through the panel routes on a ticket key with no surface context")
 @MainActor
 func panelCaptureRoutesOnTicketKey() throws {

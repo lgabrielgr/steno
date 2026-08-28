@@ -84,8 +84,24 @@ public final class CarbonHotkeyMonitor: GlobalHotkeyMonitor {
         let context = Unmanaged.passUnretained(self).toOpaque()
         let handlerStatus = InstallEventHandler(
             GetEventDispatcherTarget(),
-            { _, _, userData -> OSStatus in
-                guard let userData else { return noErr }
+            { _, event, userData -> OSStatus in
+                guard let userData else { return OSStatus(eventNotHandledErr) }
+
+                // The handler is installed on the *dispatcher* target, so every
+                // hot key registered in this process arrives here. Check the
+                // signature before acting, or a second hot key (M1-08's rebind,
+                // or anything a later milestone adds) would fire this one's
+                // action too. Unmatched events return `eventNotHandledErr` so
+                // they continue on to whoever does own them.
+                var hotKeyID = EventHotKeyID()
+                let read = GetEventParameter(
+                    event, EventParamName(kEventParamDirectObject),
+                    EventParamType(typeEventHotKeyID), nil,
+                    MemoryLayout<EventHotKeyID>.size, nil, &hotKeyID)
+                guard read == noErr,
+                    hotKeyID.signature == CarbonHotkeyMonitor.signature
+                else { return OSStatus(eventNotHandledErr) }
+
                 let monitor = Unmanaged<CarbonHotkeyMonitor>.fromOpaque(userData)
                     .takeUnretainedValue()
                 // Carbon dispatches hot keys on the main thread; this asserts
