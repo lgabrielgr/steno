@@ -95,6 +95,7 @@ a broad refactor.
 | Integrations never block | A failed fetch degrades to cache, never stops a report | Connector registry (M4-01) | §5.5, §7.4 |
 | Views never *query* the store | No `@Query`, no `@Environment(\.modelContext)`; `.modelContainer` not attached to the scene | View models (M0-05) | §14, ARCH §2 rule 2 |
 | Views never *mutate* the store | Domain mutators unreachable from `Steno/` | **Not yet enforced** — views hold live `@Model` objects with public mutators; M1-05 closes it (see D-019) | §3.2, §10.1 |
+| Surfaces see each other's writes | Every successful capture posts `.stenoDidCapture` | `CaptureService` posts, `MainWindowModel` observes (M1-03) | D-019 |
 
 Where a row says "asserted in tests", that is deliberate: these are the invariants whose
 violation is invisible in review and expensive in production.
@@ -142,15 +143,16 @@ StenoKit/         framework — everything testable
   Support/        Logging.swift, ProjectPalette.swift    (exists, M0-02/M1-02)
   Models/         SwiftData models, enums                (exists, M0-03)
   Persistence/    StenoStore — schema, store location    (exists, M0-04)
-  Capture/        ref extraction (M1-01); routing, capture service (M1-02)
+  Capture/        ref extraction (M1-01); routing, capture service (M1-02);
+                  hotkey chord, conflict detection, Carbon monitor (M1-03)
   Report/         window computation, renderers          (M2-01, M2-02)
   Portability/    export, import, merge                  (M2.5)
   AI/             AIProvider, AnthropicProvider          (M3)
   Sources/        SourceConnector, Jira, Confluence, MCP (M4, M5)
   Features/       view models, by feature — MainWindow (M0-05), Capture (M1-02)
-Steno/            application — SwiftUI views and @main, nothing else
+Steno/            application — views, windows, and @main, nothing else
   App/            @main, store failure scene, menu commands  (exists)
-  Features/       views, by feature — MainWindow (M0-05), Capture (M1-02)
+  Features/       views, by feature — MainWindow (M0-05), Capture (M1-02, M1-03's panel)
   Steno.entitlements                                     (exists)
 StenoTests/       unhosted unit-test bundle; headless, network denied  (exists, M0-02)
 Scripts/
@@ -160,6 +162,11 @@ Scripts/
 project.yml       XcodeGen manifest — the .xcodeproj is generated and gitignored (§9.1)  (exists)
 Makefile          the only entry point you need (§9.2)                                   (exists)
 ```
+
+The rule that decides membership is D-010's, not the summary line above: **if it cannot be
+tested without a window server, it does not belong in `Steno/`.** M1-03 is the case that makes
+the distinction visible — Carbon hotkey registration has no window-server dependency and lives
+in `StenoKit`, while the `NSPanel` it feeds cannot and does not.
 
 `Features/` is the one place the split is visible in daily work: a feature's **view models go in
 `StenoKit/Features/<Feature>/`** and its **views in `Steno/Features/<Feature>/`**. That is not

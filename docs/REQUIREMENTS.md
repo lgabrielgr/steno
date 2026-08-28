@@ -1,12 +1,13 @@
 # REQUIREMENTS.md — Steno
 
-**Status:** Draft v1.11
-**Date:** 2026-08-26
+**Status:** Draft v1.12
+**Date:** 2026-08-27
 **Audience:** Engineering agents in future sessions. This document is the source of truth for task generation and implementation.
 
 > **Steno** — a stenographer records what was said, verbatim, without editorializing. That is the product in one word: an accurate record of what you did, lightly organized, never embellished.
 
 **Changelog**
+- *v1.12* — Corrected §9.3. It claimed FR-1's global hotkey requires Accessibility permission, granted by TCC against the code signature. It does not: `RegisterEventHotKey` is not TCC-gated, unlike the `NSEvent` global monitor and `CGEventTap` alternatives. The stable-signing conclusion is unchanged and its reasoning is now correct. Left uncorrected, M1-03 would have shipped a permissions subsystem for a state that cannot occur, plus a banner on the launch path of a feature whose whole argument is that it interrupts nothing. Found while implementing M1-03.
 - *v1.11* — FR-3 gains project editing. FR-1.4 routes captures on `Project.jiraProjectKeys`, but no requirement granted any way to set them: projects are created with `[]` and nothing could change it, so auto-routing and its chip would have shipped unreachable in the running app. Found while implementing M1-02, which adds the editor.
 - *v1.10* — Corrected §3.4's `identifier` column. "PR number" was not a viable identifier: §3.4 makes a ref unique per `(taskID, kind, identifier)`, so two pull requests numbered 421 in different repositories collapse into one row and the second reference is silently dropped. The identifier is now required to be unique within its kind, and GitHub's is repo-qualified (`acme/api#421`). Found while designing M1-01.
 - *v1.9* — Corrected §10.1's claim that events are immutable. They are append-only, but `Event.isRedacted` and `StandupReport.isUndone` are mutable flags, so a record present on both machines can still differ and union-by-UUID alone would drop a redaction. §10.1 now names the gap and routes the actual merge rule to `DECISIONS.md` O-8 (owner: M2.5-02); the mutable-field table's row count is corrected from "three" to four. Found while implementing M0-03.
@@ -591,7 +592,9 @@ For `os.Log` output when launched detached: `log stream --predicate 'subsystem =
 
 **Use a stable Personal Team signing identity, not ad-hoc (`-`) signing.** This matters more than it appears.
 
-FR-1's global hotkey requires macOS Accessibility permission, which is granted by TCC against the app's **code signature**. Ad-hoc signing produces a new identity on every build, so macOS treats each rebuild as a different app and re-prompts for permission — turning the core feature into a permissions dialog on every run. A stable identity makes the grant persist across rebuilds.
+FR-1's global hotkey is bound with Carbon's `RegisterEventHotKey`, which is **not** gated by Accessibility (TCC) — the WindowServer dispatches the chord to the registering process directly. Steno therefore never prompts for Accessibility, and a permission dialog appearing for the hotkey is a bug rather than expected behaviour. (`NSEvent.addGlobalMonitorForEvents` and `CGEventTap` *are* TCC-gated; do not switch to either without reopening this section.)
+
+A stable identity still matters. Ad-hoc signing produces a new identity on every build, so macOS treats each rebuild as a different application — which breaks any TCC grant the app does come to need (Screen Recording, Automation, and Full Disk Access are all candidates as M4 and M5 land), resets per-app state keyed to the signature, and makes local debugging inconsistent.
 
 - `DEVELOPMENT_TEAM` and any local overrides go in a gitignored `Local.xcconfig`.
 - No credentials, team IDs, or tokens committed to the repo.
