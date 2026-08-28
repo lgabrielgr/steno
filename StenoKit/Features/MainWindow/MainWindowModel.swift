@@ -84,6 +84,13 @@ public final class MainWindowModel: MainWindowActions {
         // every stored property has a value. This is what closes the gap
         // this type's doc comment above describes — a capture from the
         // floating panel or the menu bar popover now reaches this model.
+        // A capture from this window's own "New Task" sheet reloads twice:
+        // once here, and once via the `onCaptured: { _ in model.reload() }`
+        // closure `NewTaskSheet` passes straight to `CaptureFieldModel`
+        // (M1-02). Known and harmless — `reload()` is idempotent — and left
+        // alone rather than deduplicated: this observer exists for captures
+        // from *other* surfaces (the floating panel, the popover), which have
+        // no closure of their own to call.
         captureObservation = CaptureObservation(
             NotificationCenter.default.addObserver(
                 forName: .stenoDidCapture, object: nil, queue: nil

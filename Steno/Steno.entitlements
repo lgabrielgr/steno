@@ -4,9 +4,11 @@
 <dict>
 	<!-- Deliberately unsandboxed, and explicitly so rather than by omission.
 	     Steno is never distributed (REQUIREMENTS.md §6.1) — no App Store, no
-	     notarization — so the sandbox protects nobody here, and a sandboxed
-	     app's claim on Accessibility trust is unreliable, which M1-03's global
-	     hotkey depends on (§9.3). Do not flip this to true. -->
+	     notarization — so the sandbox protects nobody here. M1-03's global
+	     hotkey binds with Carbon's RegisterEventHotKey, which needs no
+	     Accessibility permission at all (D-029, REQUIREMENTS.md §9.3), so this
+	     decision never rested on Accessibility trust and does not now. Do not
+	     flip this to true. -->
 	<key>com.apple.security.app-sandbox</key>
 	<false/>
 </dict>

@@ -112,7 +112,7 @@ public final class QuickCaptureModel {
             registrationProblem =
                 "\(chord.displayString) is already used by \(conflict.name). "
                 + "Steno's shortcut may not work until you change one of them."
-            Log.app.fault(
+            Log.app.error(
                 "hotkey \(self.chord.displayString, privacy: .public) conflicts with \(conflict.name, privacy: .public)"
             )
         }
