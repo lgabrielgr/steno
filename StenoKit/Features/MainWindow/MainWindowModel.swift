@@ -10,12 +10,10 @@ import SwiftData
 /// exercised by the headless, network-denied test bundle, which a `@Query` in
 /// a view never could be.
 ///
-/// **Known limit.** A manual fetch does not refresh when another surface
-/// writes. Every mutation that goes through this model reloads itself, so the
-/// window is correct for everything M0-05 can do — but M1-03's floating window
-/// and M1-04's popover will insert tasks this model does not notice. Closing
-/// that belongs to whichever of them lands first; a `reload()` on window
-/// activation is the likely minimum.
+/// **Cross-surface writes.** A manual fetch does not refresh when another
+/// surface writes, so this model observes `.stenoDidCapture` and reloads.
+/// M1-03's floating panel and M1-04's popover therefore reach it without
+/// either one knowing this type exists.
 @Observable
 @MainActor
 public final class MainWindowModel: MainWindowActions {
@@ -65,6 +63,10 @@ public final class MainWindowModel: MainWindowActions {
     private let now: () -> Date
     private let save: (ModelContext) throws -> Void
 
+    /// Kept alive so the observation lives exactly as long as this model. See
+    /// `CaptureObservation` for why the token is not a plain stored property.
+    private var captureObservation: CaptureObservation?
+
     /// `now` is injected so the DONE window is testable without waiting.
     /// `save` is injected so the rollback path in `perform(_:_:)` is testable
     /// — a real `ModelContext` cannot be made to fail its save on demand.
@@ -77,6 +79,17 @@ public final class MainWindowModel: MainWindowActions {
         self.now = now
         self.save = save
         reload()
+
+        // Registered last, deliberately: `self` may only be captured once
+        // every stored property has a value. This is what closes the gap
+        // this type's doc comment above describes — a capture from the
+        // floating panel or the menu bar popover now reaches this model.
+        captureObservation = CaptureObservation(
+            NotificationCenter.default.addObserver(
+                forName: .stenoDidCapture, object: nil, queue: nil
+            ) { [weak self] _ in
+                MainActor.assumeIsolated { self?.reload() }
+            })
     }
 
     // MARK: - Reading
