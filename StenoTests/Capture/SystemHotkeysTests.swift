@@ -68,7 +68,7 @@ func disabledIDIsNotReserved() {
 }
 
 @Test("malformed entries are skipped rather than crashing")
-func malformedEntriesAreSkipped() {
+func malformedEntriesAreSkipped() throws {
     let domain: [String: Any] = [
         "not-a-number": ["enabled": true],
         "60": "not-a-dictionary",
@@ -77,8 +77,10 @@ func malformedEntriesAreSkipped() {
 
     let reserved = SystemHotkeys.reserved(in: domain)
 
-    // 61 is enabled but its parameters are too short, so it resolves from the
-    // default table; the other two contribute nothing.
+    // "not-a-number" is ignored. "60": "not-a-dictionary" fails to parse as a
+    // dictionary, so id 60 is treated as absent and reserved at its default ⌃Space.
+    // 61 is enabled but has truncated parameters, so it also uses the default table.
     #expect(reserved.contains { $0.identifier == 61 })
-    #expect(!reserved.contains { $0.identifier == 60 && $0.chord.keyCode == 0 })
+    let entry60 = try #require(reserved.first { $0.identifier == 60 })
+    #expect(entry60.chord == controlSpace)
 }
