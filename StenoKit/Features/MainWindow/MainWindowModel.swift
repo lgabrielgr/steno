@@ -11,7 +11,7 @@ import SwiftData
 /// a view never could be.
 ///
 /// **Cross-surface writes.** A manual fetch does not refresh when another
-/// surface writes, so this model observes `.stenoDidCapture` and reloads.
+/// surface writes, so this model observes `.stenoDidWrite` and reloads.
 /// M1-03's floating panel and M1-04's popover therefore reach it without
 /// either one knowing this type exists.
 @Observable
@@ -64,8 +64,8 @@ public final class MainWindowModel: MainWindowActions {
     private let save: (ModelContext) throws -> Void
 
     /// Kept alive so the observation lives exactly as long as this model. See
-    /// `CaptureObservation` for why the token is not a plain stored property.
-    private var captureObservation: CaptureObservation?
+    /// `WriteObservation` for why the token is not a plain stored property.
+    private var writeObservation: WriteObservation?
 
     /// `now` is injected so the DONE window is testable without waiting.
     /// `save` is injected so the rollback path in `perform(_:_:)` is testable
@@ -91,9 +91,9 @@ public final class MainWindowModel: MainWindowActions {
         // alone rather than deduplicated: this observer exists for captures
         // from *other* surfaces (the floating panel, the popover), which have
         // no closure of their own to call.
-        captureObservation = CaptureObservation(
+        writeObservation = WriteObservation(
             NotificationCenter.default.addObserver(
-                forName: .stenoDidCapture, object: nil, queue: nil
+                forName: .stenoDidWrite, object: nil, queue: nil
             ) { [weak self] _ in
                 MainActor.assumeIsolated { self?.reload() }
             })

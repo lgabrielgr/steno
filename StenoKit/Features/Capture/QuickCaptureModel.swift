@@ -8,7 +8,7 @@ import SwiftData
 /// write correctly when no main window exists at all — that is most of the
 /// point of a global hotkey. It shares the *code path* with the main window,
 /// per D15, not the main window's state. The other direction is handled for
-/// it: `CaptureService` posts `.stenoDidCapture`, and any open main window
+/// it: `CaptureService` posts `.stenoDidWrite`, and any open main window
 /// reloads itself.
 @Observable
 @MainActor

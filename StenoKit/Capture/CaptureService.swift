@@ -125,7 +125,7 @@ public struct CaptureService {
         // able to read a context whose write has not landed. `queue: nil` on
         // the observing side keeps delivery synchronous on this actor, which
         // is what lets the tests assert a count rather than wait for one.
-        NotificationCenter.default.post(name: .stenoDidCapture, object: nil)
+        NotificationCenter.default.post(name: .stenoDidWrite, object: nil)
         return task
     }
 
