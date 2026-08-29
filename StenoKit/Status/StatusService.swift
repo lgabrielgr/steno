@@ -68,8 +68,11 @@ public struct StatusService {
     /// than as part of it (D-036).
     ///
     /// Writes nothing and returns `false` when the task is not currently
-    /// blocked, or when `text` is empty after trimming — which is what makes
-    /// the reason sheet's Esc path free rather than a source of empty events.
+    /// blocked, or when `text` is empty after trimming. `TextEntrySheet` is
+    /// what actually keeps Esc free of empty events — Esc calls `dismiss()`
+    /// without ever calling `onCommit`, and the confirm button disables itself
+    /// on empty input — so this guard is belt-and-braces behind that, not the
+    /// mechanism itself.
     @discardableResult
     public func addBlockedReason(_ text: String, to task: TaskItem) throws -> Bool {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)

@@ -94,8 +94,8 @@ a broad refactor.
 | Reads only, permanently | No mutating request to Jira or Confluence | Connectors (M4-02, M4-03) | D5 |
 | Integrations never block | A failed fetch degrades to cache, never stops a report | Connector registry (M4-01) | §5.5, §7.4 |
 | Views never *query* the store | No `@Query`, no `@Environment(\.modelContext)`; `.modelContainer` not attached to the scene | View models (M0-05) | §14, ARCH §2 rule 2 |
-| Views never *mutate* the store | Domain mutators unreachable from `Steno/` | Domain mutators are `internal` (M1-05) | §3.2, §10.1, D-033 |
-| Surfaces see each other's writes | Every successful write posts `.stenoDidWrite` | `CaptureService` and `StatusService` post, `MainWindowModel` observes (M1-03, M1-05) | D-019, D-035 |
+| Views never *mutate* the store | Domain mutators unreachable from `Steno/` | Domain mutators are `internal` (M1-05), except `Project.lastStandupAt`, a plain property whose own merge rule requires it | §3.2, §10.1, D-033 |
+| Surfaces see each other's writes | Writes through a writing service post `.stenoDidWrite` | `CaptureService` and `StatusService` post; `MainWindowModel`'s own project writes do not (M1-03, M1-05) | D-019, D-035 |
 | A status change never happens without its event | `StatusService` is the only route; the model mutators are `internal` | `StatusService.setStatus` (M1-05) | §3.3, D-033 |
 
 Where a row says "asserted in tests", that is deliberate: these are the invariants whose

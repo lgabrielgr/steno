@@ -693,8 +693,11 @@ could demonstrate covering it, because it isn't covered.
 Status transitions go through `StatusService`, which appends the `statusChanged`
 event §3.3 requires in the same call. To make that structural rather than
 advisory, the domain mutators — `TaskItem.rename`/`.move`/`.setArchived`/`.setStatus`,
-`Project.rename`/`.setJiraProjectKeys`/`.setArchived`, and `Event.redact()` — drop
-from `public` to `internal`.
+`Project.rename`/`.setJiraProjectKeys`/`.setArchived`/`.setColorHex`/`.setSortOrder`/
+`.setCadence`/`.setStaleThresholdDays`, and `Event.redact()` — drop from `public`
+to `internal`. `Project.lastStandupAt` stays `public`: §10.1 gives it its own
+merge rule (later timestamp wins), which a plain property gets by construction
+and a mutator would get only by remembering.
 
 **Why:** `MainWindowModel` publishes live `@Model` objects, so view code holds a
 real `TaskItem`. With a `public setStatus` it could skip the event and have the

@@ -1,7 +1,12 @@
 import Foundation
 
 extension Notification.Name {
-    /// Posted after a domain write is on disk.
+    /// Posted after a write through a writing service is on disk.
+    ///
+    /// Project writes through `MainWindowModel.perform` do not currently post
+    /// this — that view model is the only surface that shows projects today,
+    /// so nothing yet depends on it. A future cache of projects elsewhere must
+    /// not assume this notification covers them.
     ///
     /// **Posted at the write, not by each surface** (D-031). View models fetch
     /// manually and do not refresh, so without this the floating panel and
