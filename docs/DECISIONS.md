@@ -694,8 +694,9 @@ Status transitions go through `StatusService`, which appends the `statusChanged`
 event §3.3 requires in the same call. To make that structural rather than
 advisory, the domain mutators — `TaskItem.rename`/`.move`/`.setArchived`/`.setStatus`,
 `Project.rename`/`.setJiraProjectKeys`/`.setArchived`/`.setColorHex`/`.setSortOrder`/
-`.setCadence`/`.setStaleThresholdDays`, and `Event.redact()` — drop from `public`
-to `internal`. `Project.lastStandupAt` stays `public`: §10.1 gives it its own
+`.setCadence`/`.setStaleThresholdDays`, `Event.redact()`,
+`StandupReport.markUndone()` and `SourceRef.recordFetch(summary:at:)` — drop from
+`public` to `internal`. `Project.lastStandupAt` stays `public`: §10.1 gives it its own
 merge rule (later timestamp wins), which a plain property gets by construction
 and a mutator would get only by remembering.
 

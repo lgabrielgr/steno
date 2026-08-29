@@ -54,7 +54,7 @@ public final class SourceRef {
     /// as a pair — later `lastFetchedAt` wins, and `nil` loses to any value. A
     /// caller able to set the summary without the timestamp could produce a
     /// record the merge cannot order.
-    public func recordFetch(summary: String?, at date: Date) {
+    func recordFetch(summary: String?, at date: Date) {
         cachedSummary = summary
         lastFetchedAt = date
     }

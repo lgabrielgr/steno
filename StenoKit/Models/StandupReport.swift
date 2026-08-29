@@ -51,7 +51,7 @@ public final class StandupReport {
     }
 
     /// Mark this report undone, retaining the row (FR-4.1).
-    public func markUndone() {
+    func markUndone() {
         isUndone = true
     }
 }
