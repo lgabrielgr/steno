@@ -19,7 +19,12 @@ import SwiftData
 public final class MainWindowModel: MainWindowActions {
     public private(set) var projects: [Project] = []
     public private(set) var groups: [TaskGroup] = []
-    public private(set) var lastError: String?
+
+    /// `internal(set)` rather than `private(set)`: `MainWindowModel+Status.swift`
+    /// sets this too, and that split exists only to keep this file under
+    /// SwiftLint's `file_length` limit — it is not a widening of who may set
+    /// this from outside the module.
+    public internal(set) var lastError: String?
 
     public var selection: ProjectSelection = .all {
         didSet { if selection != oldValue { reload() } }
@@ -59,9 +64,16 @@ public final class MainWindowModel: MainWindowActions {
     /// way to create one implicitly.
     public var canCreateTask: Bool { !projects.isEmpty }
 
-    private let context: ModelContext
-    private let now: () -> Date
-    private let save: (ModelContext) throws -> Void
+    /// FR-3's status actions need a subject.
+    public var canChangeStatus: Bool { selectedTaskID != nil }
+
+    /// Not `private`: `MainWindowModel+Status.swift` builds a `StatusService`
+    /// over these three, the same way `captureService()` does in this file.
+    /// Internal, not public — the app target still cannot reach them, so
+    /// D-019's "views get no store access" is untouched outside this module.
+    let context: ModelContext
+    let now: () -> Date
+    let save: (ModelContext) throws -> Void
 
     /// Kept alive so the observation lives exactly as long as this model. See
     /// `WriteObservation` for why the token is not a plain stored property.
@@ -320,6 +332,11 @@ public final class MainWindowModel: MainWindowActions {
     }
 
     // MARK: - MainWindowActions
+    //
+    // The status actions (`setStatus`, `addBlockedReason`,
+    // `cycleStatusOnSelection`, `markSelectionBlocked`) live in
+    // `MainWindowModel+Status.swift`, not here — SwiftLint's `file_length`
+    // limit, not a change in what belongs in this section.
 
     public func newTask() {
         guard canCreateTask else { return }
