@@ -72,6 +72,16 @@ struct TaskListView: View {
                 }
             }
             .tag(task.id)
+            // A context menu rather than an always-visible per-row picker: the
+            // list is already grouped *by* status, so an inline control would
+            // restate its own section header on every row. M1-04's popover is
+            // where an always-visible toggle earns the space, because that
+            // list has no section headers.
+            .contextMenu {
+                StatusMenuItems(current: task.status) { new in
+                    model.setStatus(new, on: task.id)
+                }
+            }
         }
     }
 }

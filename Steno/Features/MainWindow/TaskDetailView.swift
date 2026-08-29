@@ -3,8 +3,11 @@ import SwiftUI
 
 /// FR-3's third column: title, status, and the event timeline.
 ///
-/// **The status is a label, not a control.** Status changes are M1-05; this
-/// task displays status and never mutates it.
+/// **The status control writes through `MainWindowModel`, never directly.**
+/// The model publishes live `@Model` objects, so a view holds a real
+/// `TaskItem` — but `TaskItem`'s mutators are `internal` as of M1-05, so this
+/// file cannot skip `StatusService` and the event it appends even by mistake
+/// (D-033).
 ///
 /// The timeline is not empty, though the task file said it would be: §3.3
 /// requires a `created` event on every task, so there is always exactly one
@@ -20,11 +23,9 @@ struct TaskDetailView: View {
                     Text(task.title)
                         .font(.title2)
 
-                    Text(task.status.displayName)
-                        .font(.caption.weight(.semibold))
-                        .padding(.horizontal, 8)
-                        .padding(.vertical, 3)
-                        .background(.quaternary, in: Capsule())
+                    StatusControl(current: task.status) { new in
+                        model.setStatus(new, on: task.id)
+                    }
 
                     Divider()
 
