@@ -5,7 +5,7 @@ import Foundation
 /// view never sees a `ModelContext`, it calls the model, which holds the
 /// service — exactly as `captureService()` arranges for capture.
 extension MainWindowModel {
-    /// D15's one path for status, over this window's context.
+    /// D-033's one path for status, over this window's context.
     private func statusService() -> StatusService {
         StatusService(context: context, now: now, save: save)
     }

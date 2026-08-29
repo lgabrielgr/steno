@@ -94,8 +94,9 @@ a broad refactor.
 | Reads only, permanently | No mutating request to Jira or Confluence | Connectors (M4-02, M4-03) | D5 |
 | Integrations never block | A failed fetch degrades to cache, never stops a report | Connector registry (M4-01) | §5.5, §7.4 |
 | Views never *query* the store | No `@Query`, no `@Environment(\.modelContext)`; `.modelContainer` not attached to the scene | View models (M0-05) | §14, ARCH §2 rule 2 |
-| Views never *mutate* the store | Domain mutators unreachable from `Steno/` | **Not yet enforced** — views hold live `@Model` objects with public mutators; M1-05 closes it (see D-019) | §3.2, §10.1 |
-| Surfaces see each other's writes | Every successful capture posts `.stenoDidCapture` | `CaptureService` posts, `MainWindowModel` observes (M1-03) | D-019 |
+| Views never *mutate* the store | Domain mutators unreachable from `Steno/` | Domain mutators are `internal` (M1-05) | §3.2, §10.1, D-033 |
+| Surfaces see each other's writes | Every successful write posts `.stenoDidWrite` | `CaptureService` and `StatusService` post, `MainWindowModel` observes (M1-03, M1-05) | D-019, D-035 |
+| A status change never happens without its event | `StatusService` is the only route; the model mutators are `internal` | `StatusService.setStatus` (M1-05) | §3.3, D-033 |
 
 Where a row says "asserted in tests", that is deliberate: these are the invariants whose
 violation is invisible in review and expensive in production.
@@ -140,11 +141,12 @@ tested without a window server, it does not belong in `Steno/`** (D-010, amendin
 
 ```
 StenoKit/         framework — everything testable
-  Support/        Logging.swift, ProjectPalette.swift    (exists, M0-02/M1-02)
+  Support/        Logging.swift, ProjectPalette.swift, WriteNotifications.swift  (exists, M0-02/M1-02/M1-05)
   Models/         SwiftData models, enums                (exists, M0-03)
   Persistence/    StenoStore — schema, store location    (exists, M0-04)
   Capture/        ref extraction (M1-01); routing, capture service (M1-02);
                   hotkey chord, conflict detection, Carbon monitor (M1-03)
+  Status/         status service, transition and cycle           (exists, M1-05)
   Report/         window computation, renderers          (M2-01, M2-02)
   Portability/    export, import, merge                  (M2.5)
   AI/             AIProvider, AnthropicProvider          (M3)
