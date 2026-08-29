@@ -57,7 +57,7 @@ public final class Project {
         self.modifiedAt = modifiedAt
     }
 
-    public func rename(to newName: String, at date: Date) {
+    func rename(to newName: String, at date: Date) {
         name = newName
         modifiedAt = date
     }
@@ -67,12 +67,12 @@ public final class Project {
         modifiedAt = date
     }
 
-    public func setJiraProjectKeys(_ keys: [String], at date: Date) {
+    func setJiraProjectKeys(_ keys: [String], at date: Date) {
         jiraProjectKeys = keys
         modifiedAt = date
     }
 
-    public func setArchived(_ archived: Bool, at date: Date) {
+    func setArchived(_ archived: Bool, at date: Date) {
         isArchived = archived
         modifiedAt = date
     }
