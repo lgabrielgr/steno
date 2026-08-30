@@ -57,37 +57,37 @@ public final class Project {
         self.modifiedAt = modifiedAt
     }
 
-    public func rename(to newName: String, at date: Date) {
+    func rename(to newName: String, at date: Date) {
         name = newName
         modifiedAt = date
     }
 
-    public func setColorHex(_ newColorHex: String, at date: Date) {
+    func setColorHex(_ newColorHex: String, at date: Date) {
         colorHex = newColorHex
         modifiedAt = date
     }
 
-    public func setJiraProjectKeys(_ keys: [String], at date: Date) {
+    func setJiraProjectKeys(_ keys: [String], at date: Date) {
         jiraProjectKeys = keys
         modifiedAt = date
     }
 
-    public func setArchived(_ archived: Bool, at date: Date) {
+    func setArchived(_ archived: Bool, at date: Date) {
         isArchived = archived
         modifiedAt = date
     }
 
-    public func setSortOrder(_ order: Int, at date: Date) {
+    func setSortOrder(_ order: Int, at date: Date) {
         sortOrder = order
         modifiedAt = date
     }
 
-    public func setCadence(_ cadence: ReportCadence, at date: Date) {
+    func setCadence(_ cadence: ReportCadence, at date: Date) {
         reportCadence = cadence
         modifiedAt = date
     }
 
-    public func setStaleThresholdDays(_ days: Int?, at date: Date) {
+    func setStaleThresholdDays(_ days: Int?, at date: Date) {
         staleThresholdDays = days
         modifiedAt = date
     }

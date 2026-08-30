@@ -653,6 +653,9 @@ context where exclusive access to those references is structurally guaranteed, w
 makes the `unsafe` honest. One rule, two independent workarounds; recorded here rather than
 twice.
 
+**Renamed by D-035 (M1-05):** the notification is now `.stenoDidWrite` and the
+token holder `WriteObservation`. Everything above still applies.
+
 ### D-032 — Reserved-hotkey detection carries a static default table
 **2026-08-27** · M1-03 · **Status:** accepted
 
@@ -683,6 +686,91 @@ cannot silently lose the hotkey.
 returns `noErr` regardless, and the other application simply wins the dispatch.
 `HotkeyConflictChecker`'s own doc comment states the limit; there is no fixture or unit test that
 could demonstrate covering it, because it isn't covered.
+
+### D-033 — `StatusService` is the only route to a status change
+**2026-08-28** · M1-05 · **Status:** accepted, closes D-019's mutation hole
+
+Status transitions go through `StatusService`, which appends the `statusChanged`
+event §3.3 requires in the same call. To make that structural rather than
+advisory, the domain mutators — `TaskItem.rename`/`.move`/`.setArchived`/`.setStatus`,
+`Project.rename`/`.setJiraProjectKeys`/`.setArchived`/`.setColorHex`/`.setSortOrder`/
+`.setCadence`/`.setStaleThresholdDays`, `Event.redact()`,
+`StandupReport.markUndone()` and `SourceRef.recordFetch(summary:at:)` — drop from
+`public` to `internal`. `Project.lastStandupAt` stays `public`: §10.1 gives it its own
+merge rule (later timestamp wins), which a plain property gets by construction
+and a mutator would get only by remembering.
+
+**Why:** `MainWindowModel` publishes live `@Model` objects, so view code holds a
+real `TaskItem`. With a `public setStatus` it could skip the event and have the
+next unrelated `save(context)` commit the change — the hole M0-05 left and D-019
+named. M2.5-02's merge *derives* `TaskItem.status` from the newest `statusChanged`
+event, so such a transition silently reverts after an import, months later,
+looking like data corruption. The reduction compiles because no file in the
+`Steno` target calls a mutator or constructs a model, and every test file uses
+`@testable import`.
+**Alternatives:** a doc comment asking view code not to call `setStatus` — a
+promise, where this branch's predecessor spent four review rounds on comments
+that promised things the code did not enforce.
+
+**The visibility widening this forced, recorded here rather than as its own
+entry.** Task 5's five status methods pushed `MainWindowModel.swift` past
+SwiftLint's `file_length` limit, so they live in
+`StenoKit/Features/MainWindow/MainWindowModel+Status.swift` instead, needing
+`StatusService` built over that file's own `context`, `now`, and `save`. Those
+three widened from `private` to `internal`, and `lastError` from `public
+private(set)` to `public internal(set)`. Every widening stops at `internal`, so
+the app target's access is unchanged and "views get no store access" still
+holds — that rule constrains the app target, not StenoKit's interior.
+
+### D-034 — The cycle shortcut skips BLOCKED
+**2026-08-28** · M1-05 · **Status:** accepted
+
+`Status.cycle` is `[.todo, .inProgress, .done]`, and ⌘⇧S walks it. `blocked` is
+reachable from the status control and from ⌘⇧B, never from the cycle. Cycling
+out of `blocked` goes to `inProgress`.
+
+**Why:** every transition appends an event, and M2-02 renders that log into a
+stand-up. Cycling all four would make TODO → DONE a three-press walk appending
+two events for states the user never meant to be in — individually truthful,
+collectively a description of work that did not happen. `blocked` is also the one
+status §3.3 pairs with a reason, which makes it a deliberate act rather than a
+waypoint. FR-3 requires a cycle shortcut and does not say what it cycles through,
+so this is a choice inside a silent spec, not a deviation from it.
+**Alternatives:** all four in declaration order (the event noise above); four
+direct shortcuts (⌃⌘1–4), rejected because FR-3 asks for a cycle specifically.
+
+### D-035 — `.stenoDidCapture` is renamed `.stenoDidWrite`
+**2026-08-28** · M1-05 · **Status:** accepted, renames D-031's notification
+
+One notification, posted by every writing service after a successful save.
+`CaptureService` and `StatusService` post it today; M1-06's notes will. D-031's
+reasoning is unchanged and still applies in full — only the name moved, along
+with `CaptureObservation` → `WriteObservation` and the file to `StenoKit/Support/`.
+
+**Why:** D-031's own doc comment said the notification was meant to cover "M1-05's
+and M1-06's future writes", but the name said capture, and a status change is not
+a capture.
+**Alternatives:** a second name alongside the first, which grows a registration
+per observer per feature and makes the first forgotten one a staleness bug that
+looks like SwiftData being flaky; or posting `.stenoDidCapture` from
+`StatusService`, which is free and makes the name assert something false.
+
+### D-036 — The blocked reason is offered after the transition, never before
+**2026-08-28** · M1-05 · **Status:** accepted
+
+Moving a task to BLOCKED commits the `statusChanged` event immediately; only then
+does a sheet offer an optional reason. Esc or empty input appends no
+`blockedReason` event, and the status has already changed either way.
+`StatusService.addBlockedReason(_:to:)` is a separate method rather than a
+parameter on `setStatus`.
+
+**Why:** §3.3 marks the reason optional, and M1-05's task file warns that making
+it mandatory adds friction at the moment the user is most frustrated. Committing
+first means the friction is zero even if they ignore the sheet. The parameter
+form was drafted and rejected: because the transition commits first, nothing
+would ever pass it, and it would ship as an unused argument.
+**Alternatives:** the service taking the reason inline (dead parameter); no UI at
+all until M1-06 (ships a capability nothing exercises).
 
 ---
 

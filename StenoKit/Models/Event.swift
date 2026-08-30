@@ -58,7 +58,7 @@ public final class Event {
     /// and is not itself undoable, and note correction is specified as
     /// redact-and-reappend. A reversible setter can be added by the task that
     /// needs one; it could not easily be taken away.
-    public func redact() {
+    func redact() {
         isRedacted = true
     }
 }

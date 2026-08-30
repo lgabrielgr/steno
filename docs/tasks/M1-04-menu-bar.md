@@ -36,11 +36,19 @@ inline status toggles, and a way into the main window.
 
 ## Notes for the spec/plan phase
 
-- If M1-05 has not merged yet, this task's inline toggles depend on its status path. Sequence
-  accordingly, or land the toggles here and let M1-05 absorb them — but do not write a second
-  status-mutation code path. §13's layer-separation instinct applies: one path, many surfaces.
+- **M1-05 merged first, so its status path exists.** The popover's inline toggles call
+  `StatusService.setStatus(_:on:)` through a view model; they do not mutate `TaskItem` and
+  cannot — its mutators are `internal` as of M1-05 (D-033). The popover also inherits
+  `StatusMenuItems` from `Steno/Features/MainWindow/StatusControl.swift`, and
+  `CaptureFieldView`'s `.bar` style from M1-03. Build none of those a second time.
 - "Today's in-progress tasks" needs a definition. In-progress across all projects, or the
   selected one? FR-1.2 does not say. Decide, state it in the PR body, and prefer the reading
   that keeps the popover glanceable at D18's scale.
 - The popover is the surface the user sees most often without opening the app. It should be
   fast and quiet — it is not a second main window.
+- **`.stenoDidWrite` does not cover project writes yet.** `MainWindowModel.perform` saves
+  `createProject`, `updateProject`, and `archive(projectID:)` without posting — it is the only
+  surface that shows projects today, so nothing depends on it. If the popover caches a project
+  list, do not assume this notification will keep it fresh. Adding the post to `perform` is this
+  task's call to make, not something M1-05 did for you: it would make `perform` re-enter
+  `reload()` through the observer before its own `reload()` runs, which needs its own analysis.

@@ -29,12 +29,12 @@ a keyboard shortcut and UI in every surface that shows a task.
 
 ## Acceptance criteria
 
-- [ ] Any status can move to any other status — no enforced workflow (§3.2, D11).
-- [ ] Every transition appends exactly one `statusChanged` event. No transition is silent.
-- [ ] Entering `done` sets `completedAt`; leaving `done` clears it. Tested.
-- [ ] `statusChangedAt` updates on every transition — M6-01's stale rule depends on it.
-- [ ] The four statuses are the only four (D11). No custom statuses, no workflow engine.
-- [ ] Cycling status is reachable by keyboard from a selected task.
+- [x] Any status can move to any other status — no enforced workflow (§3.2, D11).
+- [x] Every transition appends exactly one `statusChanged` event. No transition is silent.
+- [x] Entering `done` sets `completedAt`; leaving `done` clears it. Tested.
+- [x] `statusChangedAt` updates on every transition — M6-01's stale rule depends on it.
+- [x] The four statuses are the only four (D11). No custom statuses, no workflow engine.
+- [x] Cycling status is reachable by keyboard from a selected task.
 
 ## Notes for the spec/plan phase
 
@@ -55,3 +55,8 @@ a keyboard shortcut and UI in every surface that shows a task.
   and tests use `@testable import`) and makes the service the sole route by construction rather
   than by convention. Decide it here deliberately; M0-05 declined to change M0-03's API from a
   UI task.
+
+**Settled during implementation.** The cycle shortcut walks TODO → IN-PROGRESS →
+DONE and skips BLOCKED (D-034). The domain mutators dropped from `public` to
+`internal`, which this file asked to be decided deliberately (D-033). The blocked
+reason is offered after the transition, never as a precondition (D-036).

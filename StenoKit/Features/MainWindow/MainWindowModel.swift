@@ -11,7 +11,7 @@ import SwiftData
 /// a view never could be.
 ///
 /// **Cross-surface writes.** A manual fetch does not refresh when another
-/// surface writes, so this model observes `.stenoDidCapture` and reloads.
+/// surface writes, so this model observes `.stenoDidWrite` and reloads.
 /// M1-03's floating panel and M1-04's popover therefore reach it without
 /// either one knowing this type exists.
 @Observable
@@ -19,7 +19,12 @@ import SwiftData
 public final class MainWindowModel: MainWindowActions {
     public private(set) var projects: [Project] = []
     public private(set) var groups: [TaskGroup] = []
-    public private(set) var lastError: String?
+
+    /// `internal(set)` rather than `private(set)`: `MainWindowModel+Status.swift`
+    /// sets this too, and that split exists only to keep this file under
+    /// SwiftLint's `file_length` limit — it is not a widening of who may set
+    /// this from outside the module.
+    public internal(set) var lastError: String?
 
     public var selection: ProjectSelection = .all {
         didSet { if selection != oldValue { reload() } }
@@ -59,13 +64,20 @@ public final class MainWindowModel: MainWindowActions {
     /// way to create one implicitly.
     public var canCreateTask: Bool { !projects.isEmpty }
 
-    private let context: ModelContext
-    private let now: () -> Date
-    private let save: (ModelContext) throws -> Void
+    /// FR-3's status actions need a subject.
+    public var canChangeStatus: Bool { selectedTaskID != nil }
+
+    /// Not `private`: `MainWindowModel+Status.swift` builds a `StatusService`
+    /// over these three, the same way `captureService()` does in this file.
+    /// Internal, not public — the app target still cannot reach them, so
+    /// D-019's "views get no store access" is untouched outside this module.
+    let context: ModelContext
+    let now: () -> Date
+    let save: (ModelContext) throws -> Void
 
     /// Kept alive so the observation lives exactly as long as this model. See
-    /// `CaptureObservation` for why the token is not a plain stored property.
-    private var captureObservation: CaptureObservation?
+    /// `WriteObservation` for why the token is not a plain stored property.
+    private var writeObservation: WriteObservation?
 
     /// `now` is injected so the DONE window is testable without waiting.
     /// `save` is injected so the rollback path in `perform(_:_:)` is testable
@@ -91,9 +103,9 @@ public final class MainWindowModel: MainWindowActions {
         // alone rather than deduplicated: this observer exists for captures
         // from *other* surfaces (the floating panel, the popover), which have
         // no closure of their own to call.
-        captureObservation = CaptureObservation(
+        writeObservation = WriteObservation(
             NotificationCenter.default.addObserver(
-                forName: .stenoDidCapture, object: nil, queue: nil
+                forName: .stenoDidWrite, object: nil, queue: nil
             ) { [weak self] _ in
                 MainActor.assumeIsolated { self?.reload() }
             })
@@ -320,6 +332,11 @@ public final class MainWindowModel: MainWindowActions {
     }
 
     // MARK: - MainWindowActions
+    //
+    // The status actions (`setStatus`, `addBlockedReason`,
+    // `cycleStatusOnSelection`, `markSelectionBlocked`) live in
+    // `MainWindowModel+Status.swift`, not here — SwiftLint's `file_length`
+    // limit, not a change in what belongs in this section.
 
     public func newTask() {
         guard canCreateTask else { return }

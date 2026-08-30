@@ -17,31 +17,11 @@ private func makeService() throws -> (CaptureService, ModelContext) {
     return (CaptureService(context: context, now: { epoch }), context)
 }
 
-/// Counts posts synchronously. The post is made on the main actor with no
-/// delivery queue, so by the time `capture` returns the count is final —
-/// which is what makes these assertions deterministic rather than timed.
-@MainActor
-private final class PostCounter {
-    /// Named `posts`, not `count`: SwiftLint's `empty_count` rejects
-    /// `something.count == 0`, and `--strict` makes that a build failure.
-    private(set) var posts = 0
-    private var observation: CaptureObservation?
-
-    init() {
-        observation = CaptureObservation(
-            NotificationCenter.default.addObserver(
-                forName: .stenoDidCapture, object: nil, queue: nil
-            ) { [weak self] _ in
-                MainActor.assumeIsolated { self?.posts += 1 }
-            })
-    }
-}
-
 @Test("a successful capture posts exactly once")
 @MainActor
 func successfulCapturePostsOnce() throws {
     let (service, _) = try makeService()
-    let counter = PostCounter()
+    let counter = WriteCounter()
 
     try service.capture(text: "PAY-421 fix the retry handler", preferred: nil)
 
@@ -52,7 +32,7 @@ func successfulCapturePostsOnce() throws {
 @MainActor
 func emptyCaptureDoesNotPost() throws {
     let (service, _) = try makeService()
-    let counter = PostCounter()
+    let counter = WriteCounter()
 
     try service.capture(text: "   \n ", preferred: nil)
 
@@ -72,7 +52,7 @@ func failedSaveDoesNotPost() throws {
     struct SaveFailure: Error {}
     let service = CaptureService(
         context: context, now: { epoch }, save: { _ in throw SaveFailure() })
-    let counter = PostCounter()
+    let counter = WriteCounter()
 
     #expect(throws: SaveFailure.self) {
         try service.capture(text: "something", preferred: nil)

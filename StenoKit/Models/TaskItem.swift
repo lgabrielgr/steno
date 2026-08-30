@@ -47,17 +47,17 @@ public final class TaskItem {
         self.modifiedAt = createdAt
     }
 
-    public func rename(to newTitle: String, at date: Date) {
+    func rename(to newTitle: String, at date: Date) {
         title = newTitle
         modifiedAt = date
     }
 
-    public func move(toProject newProjectID: UUID, at date: Date) {
+    func move(toProject newProjectID: UUID, at date: Date) {
         projectID = newProjectID
         modifiedAt = date
     }
 
-    public func setArchived(_ archived: Bool, at date: Date) {
+    func setArchived(_ archived: Bool, at date: Date) {
         isArchived = archived
         modifiedAt = date
     }
@@ -73,14 +73,14 @@ public final class TaskItem {
     /// occur.
     ///
     /// **This does not append the `statusChanged` event**, which needs a
-    /// `ModelContext` that M0-04 owns. M1-05's status service is the sanctioned
-    /// caller and appends it. A transition that skips its event is a real bug
-    /// that surfaces much later as an inexplicable revert after an import
-    /// (§10.1) — so call the service, not this, once M1-05 exists.
+    /// `ModelContext`. `StatusService` is the only sanctioned caller and
+    /// appends it there. As of M1-05 this method is `internal`, so the app
+    /// target cannot reach it at all — the rule is enforced by the compiler
+    /// rather than by this comment (D-033).
     ///
     /// Does not stamp `modifiedAt`: status is derived from the event log at
     /// merge time, so it has no claim on the timestamp that arbitrates `title`.
-    public func setStatus(_ new: Status, at date: Date) {
+    func setStatus(_ new: Status, at date: Date) {
         guard new != status else { return }
         status = new
         statusChangedAt = date

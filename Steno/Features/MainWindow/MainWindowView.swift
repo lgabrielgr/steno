@@ -46,6 +46,16 @@ struct MainWindowView: View {
                 ) { model.createProject(named: $0) }
             case .newTask:
                 NewTaskSheet(model: model)
+            case .blockedReason(let id):
+                // §3.3's reason is optional, and the transition to BLOCKED has
+                // already committed by the time this appears — Esc declines to
+                // annotate, it does not undo. `TextEntrySheet` disables its
+                // confirm on empty input, so "no reason" costs one keystroke.
+                TextEntrySheet(
+                    title: "Why is this blocked?",
+                    placeholder: "Optional — waiting on what?",
+                    confirm: "Add Reason"
+                ) { model.addBlockedReason($0, to: id) }
             case .editProject(let id):
                 if let project = model.project(withID: id) {
                     ProjectEditSheet(

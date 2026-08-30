@@ -12,6 +12,12 @@ public enum ActiveSheet: Identifiable, Hashable, Sendable {
     /// Edit the named project — FR-3's project editing (REQUIREMENTS v1.11).
     case editProject(UUID)
 
+    /// §3.3's optional blocked reason, for the named task (M1-05).
+    ///
+    /// The transition has already committed when this appears, so dismissing
+    /// the sheet is not a cancellation — it is declining to annotate.
+    case blockedReason(UUID)
+
     public var id: Self { self }
 }
 
@@ -30,8 +36,14 @@ public protocol MainWindowActions: AnyObject {
     /// Task on this so they cannot disagree about when it is live.
     var canCreateTask: Bool { get }
 
+    /// FR-3's status shortcuts act on the selected task, so the menu gates on
+    /// this rather than offering an action with no subject.
+    var canChangeStatus: Bool { get }
+
     func newTask()
     func newProject()
     func selectNextProject()
     func selectPreviousProject()
+    func cycleStatusOnSelection()
+    func markSelectionBlocked()
 }
