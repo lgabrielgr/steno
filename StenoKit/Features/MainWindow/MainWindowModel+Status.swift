@@ -4,6 +4,15 @@ import Foundation
 /// file under SwiftLint's `file_length` limit. Same type, same rules: the
 /// view never sees a `ModelContext`, it calls the model, which holds the
 /// service — exactly as `captureService()` arranges for capture.
+///
+/// **A successful write here reloads twice: once via the `.stenoDidWrite`
+/// observer, once explicitly.** Deliberate, for the same reason the
+/// registration in `MainWindowModel` gives about the New Task sheet — that
+/// observer exists for writes from *other* surfaces, and a caller that leans
+/// on it to see its own write breaks silently the day the observer is scoped
+/// to ignore self-originated posts. `reload()` is idempotent and writes
+/// nothing, so the cost is one extra fetch over a dataset D18 caps.
+/// A write that did not happen reloads zero times — see the guards below.
 extension MainWindowModel {
     /// D-033's one path for status, over this window's context.
     private func statusService() -> StatusService {
@@ -16,11 +25,15 @@ extension MainWindowModel {
         do {
             let changed = try statusService().setStatus(new, on: task)
             lastError = nil
+            // Nothing written means nothing to fetch: a no-op transition saved
+            // no rows and posted no notification, so a reload here would refetch
+            // state that cannot have moved.
+            guard changed else { return }
             reload()
-            // Only on a real transition. Re-selecting BLOCKED on a task that is
-            // already blocked wrote nothing, so prompting for a reason would
-            // offer to annotate an event that does not exist.
-            if changed, new == .blocked { activeSheet = .blockedReason(taskID) }
+            // Reachable only on a real transition, because the no-op returned
+            // above — so this never offers to annotate an event that does not
+            // exist.
+            if new == .blocked { activeSheet = .blockedReason(taskID) }
         } catch {
             Log.app.error(
                 "could not change the status: \(String(describing: error), privacy: .public)")
@@ -36,8 +49,11 @@ extension MainWindowModel {
     public func addBlockedReason(_ text: String, to taskID: UUID) {
         guard let task = task(withID: taskID) else { return }
         do {
-            try statusService().addBlockedReason(text, to: task)
+            let added = try statusService().addBlockedReason(text, to: task)
             lastError = nil
+            // Same rule as `setStatus`: a rejected reason — blank after
+            // trimming, or the task is no longer blocked — wrote nothing.
+            guard added else { return }
             reload()
         } catch {
             Log.app.error(
