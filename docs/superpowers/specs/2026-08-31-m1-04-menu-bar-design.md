@@ -178,9 +178,13 @@ content, so an empty list and a list of six are both correctly sized and neither
 
 ### 4.1 Activation — the one deliberate deviation from M1-03
 
-Opening the popover calls `NSApp.activate(ignoringOtherApps: true)`, then
-`show(relativeTo:of:preferredEdge:)`, then `makeKey()` on the popover's window, and only then
-`model.prepareForShow()`.
+Opening the popover calls `model.prepareForShow()`, then
+`NSApp.activate(ignoringOtherApps: true)`, then `show(relativeTo:of:preferredEdge:)`, then
+`makeKey()` on the popover's window.
+
+The refresh goes first, matching `QuickCaptureController.show`: preparing after the show would
+render one frame with a stale chip, and FR-1.4's chip is a claim about where the task will
+land.
 
 `CapturePanel`'s doc comment says, emphatically, not to activate — and it is right for the
 panel. The two surfaces are opposites. The panel appears over the application the user is
@@ -193,6 +197,11 @@ reader does not "fix" one surface to match the other.
 
 `makeKey()` after `show` rather than relying on `.onAppear` alone: `CaptureFieldView` sets
 `@FocusState` in `onAppear`, and that only lands if the popover's window is key by then.
+
+`.onAppear` also needs help to fire more than once. The hosting controller is resident, so the
+field's view identity never changes and its focus would run on the first open of a launch and no
+other. `MenuBarModel` counts opens and the view keys the field on that count, which re-creates
+the *view* — never the model, so the draft is untouched — on every open.
 
 ### 4.2 Residency, and what an open actually costs
 
