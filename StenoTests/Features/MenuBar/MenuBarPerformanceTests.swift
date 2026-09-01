@@ -61,9 +61,18 @@ final class MenuBarPerformanceTests: XCTestCase {
     /// The ceiling below is deliberately loose. It exists to catch a fetch
     /// moving into a loop or a predicate turning into a full scan per row —
     /// not to police milliseconds on a machine already under test load.
-    /// Measured at 3.1 ms, worst of ten across three runs on this machine (the
-    /// average across the ten was 1.5 ms), for `prepareForShow()` against 1
-    /// project and 20 in-progress tasks — D18's ceiling.
+    ///
+    /// Observed, not fixed, for `prepareForShow()` against 1 project and 20
+    /// in-progress tasks: on the order of a few milliseconds per open.
+    /// Worst-of-ten across four runs on this machine — three in this session
+    /// (1.275 ms, 2.509 ms, 3.077 ms) plus one independent rerun during
+    /// review (3.56 ms) — with each run's own average, computed from its raw
+    /// ten values rather than xcodebuild's 3-decimal rounding, landing
+    /// between roughly 0.7 ms and 1.5 ms. Every run sits an order of
+    /// magnitude under the 50 ms ceiling below and three under §1.1's
+    /// ~3-second budget. Read this as the range one machine's noise
+    /// produced, not a constant — a single figure quoted as fixed is what
+    /// D-025 got wrong by 16x.
     @MainActor
     func testPreparingForShowAtD18ScaleIsInstant() throws {
         let directory = makeDirectory()
