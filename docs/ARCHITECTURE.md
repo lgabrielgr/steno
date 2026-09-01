@@ -141,7 +141,8 @@ tested without a window server, it does not belong in `Steno/`** (D-010, amendin
 
 ```
 StenoKit/         framework — everything testable
-  Support/        Logging.swift, ProjectPalette.swift, WriteNotifications.swift  (exists, M0-02/M1-02/M1-05)
+  Support/        Logging.swift, ProjectPalette.swift, WriteNotifications.swift,
+                  LoginItem.swift  (exists, M0-02/M1-02/M1-05/M1-04)
   Models/         SwiftData models, enums                (exists, M0-03)
   Persistence/    StenoStore — schema, store location    (exists, M0-04)
   Capture/        ref extraction (M1-01); routing, capture service (M1-02);
@@ -151,10 +152,11 @@ StenoKit/         framework — everything testable
   Portability/    export, import, merge                  (M2.5)
   AI/             AIProvider, AnthropicProvider          (M3)
   Sources/        SourceConnector, Jira, Confluence, MCP (M4, M5)
-  Features/       view models, by feature — MainWindow (M0-05), Capture (M1-02)
+  Features/       view models, by feature — MainWindow (M0-05), Capture (M1-02), MenuBar (M1-04)
 Steno/            application — views, windows, and @main, nothing else
   App/            @main, store failure scene, menu commands  (exists)
-  Features/       views, by feature — MainWindow (M0-05), Capture (M1-02, M1-03's panel)
+  Features/       views, by feature — MainWindow (M0-05), Capture (M1-02, M1-03's panel),
+                  MenuBar (M1-04)
   Steno.entitlements                                     (exists)
 StenoTests/       unhosted unit-test bundle; headless, network denied  (exists, M0-02)
 Scripts/
