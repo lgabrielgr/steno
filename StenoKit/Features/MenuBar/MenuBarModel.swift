@@ -57,8 +57,7 @@ public final class MenuBarModel {
     public init(
         context: ModelContext,
         now: @escaping () -> Date = Date.init,
-        save: @escaping (ModelContext) throws -> Void = { try $0.save() },
-        onCaptured: @escaping () -> Void = {}
+        save: @escaping (ModelContext) throws -> Void = { try $0.save() }
     ) {
         let box = ProjectBox()
         self.projectBox = box
@@ -71,8 +70,11 @@ public final class MenuBarModel {
             // The popover has no surface context to prefer, so FR-1.4's ladder
             // falls through to the ticket key and then to last-used.
             // `CaptureService.capture` names this surface explicitly.
-            preferred: { nil },
-            onCaptured: { _ in onCaptured() }
+            preferred: { nil }
+            // No `onCaptured:` hook. Nothing here needs one: the list refresh
+            // arrives through the `.stenoDidWrite` observer below, and the
+            // popover is closed by `CaptureFieldView.commit()` calling its
+            // `onDismiss`, which is the controller's own closure.
         )
         reload()
 
