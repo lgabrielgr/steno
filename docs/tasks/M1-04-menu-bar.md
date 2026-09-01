@@ -109,21 +109,23 @@ Deferred deliberately, not gaps the plan missed — recorded here so a later tas
 pre-existing behaviour for a regression it introduced.
 
 - **`MenuBarModel.lastError` has no in-popover Dismiss control.** It is cleared in two places —
-  `prepareForShow()` (`MenuBarModel.swift:116`) and `setStatus`'s success path (`:173`) — and set
-  in two: `setStatus`'s catch (`:180`) and a failed read inside the generic `fetch<T>` helper
-  (`:225`), which every `reload()` reaches through `fetchProjects()` and `fetchTasks()`. It is
-  read at `MenuBarPopoverView.swift:28`, which shows the message, and again at `:50`, which
+  `prepareForShow()` (`MenuBarModel.swift:117`) and `setStatus`'s success path (`:174`) — and set
+  in two: `setStatus`'s catch (`:181`) and a failed read inside the generic `fetch<T>` helper
+  (`:226`), which every `reload()` reaches through `fetchProjects()` and `fetchTasks()`. It is
+  read at `MenuBarPopoverView.swift:28`, which shows the message, and again at `:51`, which
   withholds "Nothing in progress." while it is set so a failed read cannot pass for an empty
-  store. Closing and reopening the popover is therefore the dismissal gesture, and it is the only
-  one: a message set while the popover is open stays on screen for the rest of that open, where
-  the main window's own error banner offers a Dismiss button. Note that the clear cannot move
-  into `reload()` — `setStatus`'s catch calls `reload()` immediately after setting the message
-  (`:180` then `:183`), so clearing there would erase it in the same call that set it, and
+  store. Closing and reopening the popover is one dismissal gesture; a successful status change is
+  the other, because `setStatus`'s success path clears the message too. Only a message left by a
+  failed read or a failed write, with the popover never closed and no other status change
+  succeeding since, stays on screen — where the main window's own error banner offers a Dismiss
+  button. Note that the clear cannot move into `reload()` — `setStatus`'s catch calls `reload()`
+  immediately after setting the message (`:181` then `:184`), so clearing there would erase it in
+  the same call that set it, and
   `MenuBarModelTests.aFailedStatusSaveIsReportedAndRefetched` asserts it survives exactly that
   reload. `prepareForShow()` is safe because nothing on the failure path calls it, which
   `MenuBarModelTests.reopeningThePopoverClearsAStaleError` pins.
 - **The `statusChangedAt` sort has no tiebreak.** `MenuBarModel.reload()` sorts live tasks by
-  `$0.statusChangedAt > $1.statusChangedAt` alone (`:120`), so two tasks transitioned in the same
+  `$0.statusChangedAt > $1.statusChangedAt` alone (`:139`), so two tasks transitioned in the same
   instant order arbitrarily between reloads, depending on the store's own fetch order.
 - **A store failure can leave a running process with no window and no status item.** On a store
   that fails to open, `StenoApp.init` sets `menuBar = nil` (`StenoApp.swift:97`), but
@@ -132,8 +134,8 @@ pre-existing behaviour for a regression it introduced.
   the app running with nothing on screen and no menu bar icon to reopen it from. Recoverable via
   the Dock icon — nothing sets `LSUIElement`, so AppKit's default reopen handling still applies.
 - **An unknown `taskID`, or a task whose project has since vanished, silently no-ops.**
-  `MenuBarModel.setStatus`'s guard (`:151`) returns with no `lastError` if the id is not found
-  among the tasks `reload()` last built, and that same `reload()`'s project join (`:125`) silently
+  `MenuBarModel.setStatus`'s guard (`:170`) returns with no `lastError` if the id is not found
+  among the tasks `reload()` last built, and that same `reload()`'s project join (`:144`) silently
   drops any task whose `projectID` no longer resolves. Neither is a regression — it matches
   `MainWindowModel+Status.setStatus`'s existing convention of a silent no-op — but it means a race
   between a delete elsewhere and a toggle here fails invisibly rather than with a message.

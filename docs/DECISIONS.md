@@ -886,11 +886,12 @@ discards the typed line. `MenuBarController` passes an `onDismiss` that only clo
 next open. FR-1.1 says only that `Esc` "dismisses without saving", which does not settle what
 happens to the text.
 
-**Why:** the popover cannot make `Esc` discard without also discarding on a stray click. Its
-`NSPopover` is `.transient`, and AppKit's own click-outside dismissal never runs through
-`onDismiss` — the only hook that covers it is `NSPopover.willCloseNotification`, which fires on
-*every* close. Resetting there would throw away a half-typed line whenever the user glanced at
-another window, which for a capture tool is data loss (§1.1). Keeping the draft makes the
+**Why:** the popover's two dismissals — `Esc` and a stray click — cannot be made to agree on
+discarding without a `willClose` hook. Its `NSPopover` is `.transient`, and AppKit's own
+click-outside dismissal never runs through `onDismiss` — the only hook that covers it is
+`NSPopover.willCloseNotification`, which fires on *every* close. Resetting there would throw away
+a half-typed line whenever the user glanced at another window, which for a capture tool is data
+loss (§1.1). Keeping the draft makes the
 popover's two dismissals agree with each other, which is what a user actually compares. The panel
 has no such constraint and the opposite pull: it is summoned over another app by a chord and
 dismissed straight back into it, so a line cancelled on Monday reappearing at an unrelated chord
