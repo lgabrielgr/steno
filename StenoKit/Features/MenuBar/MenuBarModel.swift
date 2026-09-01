@@ -103,12 +103,18 @@ public final class MenuBarModel {
         let projects = fetchProjects()
         projectBox.projects = projects
 
-        let byID = Dictionary(uniqueKeysWithValues: projects.map { ($0.id, $0) })
+        // `uniquingKeysWith:` rather than `uniqueKeysWithValues:`: `Project.id`
+        // carries no `@Attribute(.unique)`, so a duplicate id is representable
+        // in the store even though nothing in the app's own API constructs
+        // one. `uniqueKeysWithValues:` traps on a duplicate; degrading to
+        // "first one wins" keeps `reload()` — called on every popover open —
+        // from crashing on malformed data.
+        let byID = Dictionary(projects.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
         // Sorted before the project join so the two arrays below are built in
         // one pass and cannot fall out of order.
         let live =
             fetchTasks()
-            .filter { $0.status == .inProgress && byID[$0.projectID] != nil }
+            .filter { $0.status == .inProgress }
             .sorted { $0.statusChangedAt > $1.statusChangedAt }
 
         var nextTasks: [TaskItem] = []

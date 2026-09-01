@@ -149,3 +149,30 @@ func capturingThroughThePopoverRoutesByTicketKey() throws {
     #expect(tasks.count == 1)
     #expect(tasks.first?.projectID == payments.id)
 }
+
+/// The gap the keystroke-driven chip refresh leaves: the draft outlives the
+/// dismissal, so a project created while the popover was hidden changes what
+/// `CaptureService` will route with — but nothing types a character to
+/// re-derive the chip. Without an explicit refresh the popover shows no chip
+/// while the write routes to Payments, which is FR-1.4's promise breaking
+/// silently. Note the ordering: the draft is typed BEFORE the project exists.
+/// Ports `QuickCaptureModelTests.prepareForShowRefreshesTheChipForAnExistingDraft`.
+@MainActor
+@Test("preparing to show re-derives the chip for a draft typed before the project existed")
+func preparingForShowRefreshesTheChipForAnExistingDraft() throws {
+    let context = try makeContext()
+    let model = MenuBarModel(context: context, now: { origin })
+    model.prepareForShow()
+
+    model.field.text = "PAY-421 fix the retry handler"
+    #expect(model.field.chip == nil, "no Payments project exists yet")
+
+    // Written behind the model's back, the way another surface would.
+    try seedProject(context, "Payments", keys: ["PAY"], order: 0)
+
+    // No keystroke — this is the whole point.
+    model.prepareForShow()
+
+    let chip = try #require(model.field.chip)
+    #expect(chip.projectName == "Payments")
+}
