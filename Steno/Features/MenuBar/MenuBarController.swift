@@ -16,6 +16,18 @@ final class MenuBarController: NSObject {
     private let statusItem: NSStatusItem
     private let popover = NSPopover()
 
+    /// When the popover last closed, however it closed.
+    ///
+    /// Read by `toggle()`, which cannot otherwise tell a click that should
+    /// open the popover from the mouse-up of a click that just dismissed it —
+    /// see the comment there.
+    private var lastCloseAt: Date = .distantPast
+
+    /// The observation's token, kept because it is the only handle by which
+    /// the registration could ever be removed. Nothing removes it today: the
+    /// controller is built once in `StenoApp.init` and lives for the process.
+    private var closeObservation: (any NSObjectProtocol)?
+
     init(container: ModelContainer) {
         // `container.mainContext`, matching what `MainWindowView` and
         // `QuickCaptureModel` read, so a write here and the window's own
@@ -30,7 +42,9 @@ final class MenuBarController: NSObject {
         statusItem.button?.action = #selector(toggle)
 
         // `.transient` is what dismisses the popover on a click outside, with
-        // no delegate and no bookkeeping here.
+        // no delegate. The one piece of bookkeeping it costs is `lastCloseAt`
+        // below: that dismissal does not run through `hide()`, so `toggle()`
+        // would otherwise have no way to know it happened.
         popover.behavior = .transient
         let hosting = NSHostingController(
             rootView: MenuBarPopoverView(
@@ -47,10 +61,29 @@ final class MenuBarController: NSObject {
         // and a list of six are both sized correctly and neither scrolls.
         hosting.sizingOptions = [.preferredContentSize]
         popover.contentViewController = hosting
+
+        // Every close lands here — `hide()`, `Esc`, a successful capture, and
+        // the `.transient` dismissal AppKit performs on its own.
+        closeObservation = NotificationCenter.default.addObserver(
+            forName: NSPopover.didCloseNotification, object: popover, queue: nil
+        ) { [weak self] _ in
+            MainActor.assumeIsolated { self?.lastCloseAt = Date() }
+        }
     }
 
+    /// Clicking the icon closes an open popover and opens a closed one.
+    ///
+    /// **The timestamp is not paranoia.** A `.transient` popover closes on a
+    /// mouse-*down* outside itself, the status button is outside it, and
+    /// `NSStatusBarButton` sends its action on mouse-*up* — so if AppKit does
+    /// not swallow that mouse-down, the popover is already closed by the time
+    /// this runs and `isShown` alone would re-open it, making the icon look
+    /// dead. Whether AppKit swallows it is undocumented and has varied by
+    /// release; this guard is correct under both behaviours, because if the
+    /// click *is* swallowed the action never fires at all. It cannot be
+    /// exercised without a window server (D-010).
     @objc private func toggle() {
-        if popover.isShown {
+        if popover.isShown || Date().timeIntervalSince(lastCloseAt) < 0.2 {
             hide()
         } else {
             show()
@@ -71,12 +104,16 @@ final class MenuBarController: NSObject {
         // `NSApp.activate`, which `CapturePanel` deliberately refuses. The two
         // surfaces are opposites (D-038): the panel appears over the app the
         // user is working in, while the menu bar is reached by leaving it — so
-        // activation is what gets the field first responder without a second
-        // click, which §1.1 requires.
+        // activation is what lets the popover's window become key and receive
+        // the typing, which §1.1's "no second click" requires.
         NSApp.activate(ignoringOtherApps: true)
         popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
-        // `CaptureFieldView` takes focus in `.onAppear`, and that only lands
-        // if the popover's window is key by then.
+        // `NSApp.activate` above completes asynchronously and AppKit can hand
+        // key to another Steno window as the app activates, so the popover is
+        // not guaranteed to be key here. `makeKey()` asserts it, so the field
+        // SwiftUI focuses in `CaptureFieldView`'s `.onAppear` is the one that
+        // receives typing. Whether the popover would become key unaided needs
+        // a window server to settle; manual check 2 is what settles it.
         popover.contentViewController?.view.window?.makeKey()
     }
 

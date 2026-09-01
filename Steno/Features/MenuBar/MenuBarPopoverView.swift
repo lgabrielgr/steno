@@ -13,10 +13,16 @@ struct MenuBarPopoverView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             CaptureFieldView(field: model.field, onDismiss: onDismiss, style: .popover)
-                // Keyed on the open count so each open re-creates this view and
-                // re-runs its `.onAppear` focus. The hosting controller is
-                // resident, so without this the field is focused on the first
-                // open of a launch and no other — see `MenuBarModel.showCount`.
+                // Keyed on the open count so each open gets a fresh view
+                // identity, and with it a fresh `@FocusState`. A reused
+                // identity is what would make focus unreliable, by either of
+                // two routes: `.onAppear` may not be resent on a later show,
+                // and if `isFocused` survived the close still `true`, setting
+                // it `true` again changes nothing. A new identity moots both —
+                // the view is built, `.onAppear` runs, and `isFocused` goes
+                // false to true. Which route would have bitten needs a window
+                // server to settle; the model, and so the draft, is untouched
+                // either way.
                 .id(model.showCount)
 
             if let message = model.lastError {
