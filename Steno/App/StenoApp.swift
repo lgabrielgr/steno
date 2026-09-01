@@ -14,6 +14,10 @@ struct StenoApp: App {
     /// controller that goes out of scope takes the hotkey with it.
     private let quickCapture: QuickCaptureController?
 
+    /// Exists to keep the app alive when the last window closes, which is what
+    /// makes "the icon is present without the main window open" true.
+    @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
+
     init() {
         // os.Logger writes to the unified log, never to stdio — this line is
         // what makes `make run` self-evidencing that it execs the binary and
@@ -89,7 +93,13 @@ struct StenoApp: App {
     }
 
     var body: some Scene {
-        WindowGroup {
+        // `Window`, not `WindowGroup`. The main window is already
+        // single-instance in practice — `MainWindowCommands` replaces
+        // `.newItem`, so nothing opens a second — and `Window` is what makes
+        // reopening *the* window possible: a `WindowGroup` answers a reopen by
+        // minting another one (D-040). It also contributes its own Window-menu
+        // item, so the popover's button is not the only way back.
+        Window("Steno", id: MainWindowReveal.sceneID) {
             switch store {
             case .success(let container):
                 // No `.modelContainer(container)`: no view reaches the store
