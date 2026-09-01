@@ -35,17 +35,6 @@ public final class QuickCaptureModel {
     private let defaults: UserDefaults
     private let projectBox: ProjectBox
 
-    /// Holds the project list the field reads through.
-    ///
-    /// A separate object because `CaptureFieldModel` takes its projects as a
-    /// closure, and that closure has to be built during `init` — before `self`
-    /// can be captured. A box constructed as a local first, then stored,
-    /// sidesteps that without an implicitly unwrapped property.
-    @MainActor
-    final class ProjectBox {
-        var projects: [Project] = []
-    }
-
     public init(
         context: ModelContext,
         monitor: any GlobalHotkeyMonitor,

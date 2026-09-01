@@ -1,0 +1,167 @@
+import Foundation
+import SwiftData
+
+/// The menu bar popover's model: its capture field, the in-progress list, and
+/// the status action behind the rows' menus.
+///
+/// **It does not reach for `MainWindowModel`.** The popover must open, list,
+/// route and write when no main window exists at all — that is most of the
+/// point of a menu bar item. It shares the *code path* with the main window
+/// per D15, not the main window's state. The other direction is handled for
+/// it: `CaptureService` and `StatusService` post `.stenoDidWrite`, and this
+/// model reloads on it.
+@Observable
+@MainActor
+public final class MenuBarModel {
+    /// The shared capture field — the same type the main window's sheet and
+    /// M1-03's panel use, so FR-1.4's chip cannot drift between surfaces.
+    public let field: CaptureFieldModel
+
+    /// Every IN-PROGRESS task, across every non-archived project, newest
+    /// transition first (D-037).
+    public private(set) var rows: [MenuBarRow] = []
+
+    /// Set when a read or a status write failed. The popover shows it rather
+    /// than reverting a row silently.
+    public private(set) var lastError: String?
+
+    /// How many times the popover has been prepared for display.
+    ///
+    /// The view keys the capture field on this so that each open re-creates
+    /// the field's *view* — and therefore re-runs the `.onAppear` that takes
+    /// focus. The hosting controller is resident (design §4.2), so without a
+    /// changing identity `onAppear` fires on the first open only, and every
+    /// later open would present an unfocused field. §1.1 calls a capture field
+    /// that needs a click a defect, so this is not cosmetic.
+    public private(set) var showCount = 0
+
+    private let context: ModelContext
+    private let now: () -> Date
+    private let save: (ModelContext) throws -> Void
+    private let projectBox: ProjectBox
+
+    /// The same tasks `rows` describes, in the same order, kept for the status
+    /// action's lookup. Built in lockstep with `rows` so the two cannot
+    /// disagree about what is on screen.
+    private var tasks: [TaskItem] = []
+
+    /// Kept alive so the observation lives exactly as long as this model. See
+    /// `WriteObservation` for why the token is not a plain stored property.
+    private var writeObservation: WriteObservation?
+
+    /// `now` and `save` are injected for the reasons `MainWindowModel` gives:
+    /// timestamps assertable without waiting, and a save that can be made to
+    /// fail, which a real `ModelContext` cannot.
+    public init(
+        context: ModelContext,
+        now: @escaping () -> Date = Date.init,
+        save: @escaping (ModelContext) throws -> Void = { try $0.save() },
+        onCaptured: @escaping () -> Void = {}
+    ) {
+        let box = ProjectBox()
+        self.projectBox = box
+        self.context = context
+        self.now = now
+        self.save = save
+        self.field = CaptureFieldModel(
+            service: CaptureService(context: context, now: now, save: save),
+            projects: { box.projects },
+            // The popover has no surface context to prefer, so FR-1.4's ladder
+            // falls through to the ticket key and then to last-used.
+            // `CaptureService.capture` names this surface explicitly.
+            preferred: { nil },
+            onCaptured: { _ in onCaptured() }
+        )
+        reload()
+
+        // Registered last: `self` may only be captured once every stored
+        // property has a value. This is what makes a capture or a status
+        // change made in the main window show up here without either type
+        // knowing the other exists.
+        writeObservation = WriteObservation(
+            NotificationCenter.default.addObserver(
+                forName: .stenoDidWrite, object: nil, queue: nil
+            ) { [weak self] _ in
+                MainActor.assumeIsolated { self?.reload() }
+            })
+    }
+
+    /// Called on every open.
+    ///
+    /// Refetches so a task started elsewhere is listed, and re-derives the
+    /// chip because the draft survives a dismissal and the project list can
+    /// have changed underneath it — `QuickCaptureModel.prepareForShow`
+    /// documents that argument in full.
+    public func prepareForShow() {
+        showCount += 1
+        reload()
+        field.refreshChip()
+    }
+
+    /// Rebuild the list from the store.
+    public func reload() {
+        let projects = fetchProjects()
+        projectBox.projects = projects
+
+        let byID = Dictionary(uniqueKeysWithValues: projects.map { ($0.id, $0) })
+        // Sorted before the project join so the two arrays below are built in
+        // one pass and cannot fall out of order.
+        let live =
+            fetchTasks()
+            .filter { $0.status == .inProgress && byID[$0.projectID] != nil }
+            .sorted { $0.statusChangedAt > $1.statusChangedAt }
+
+        var nextTasks: [TaskItem] = []
+        var nextRows: [MenuBarRow] = []
+        for task in live {
+            guard let project = byID[task.projectID] else { continue }
+            nextTasks.append(task)
+            nextRows.append(
+                MenuBarRow(
+                    id: task.id,
+                    title: task.title,
+                    status: task.status,
+                    projectName: project.name,
+                    colorHex: project.colorHex))
+        }
+        tasks = nextTasks
+        rows = nextRows
+    }
+
+    private func fetchProjects() -> [Project] {
+        let descriptor = FetchDescriptor<Project>(
+            predicate: #Predicate { !$0.isArchived },
+            sortBy: [SortDescriptor(\.sortOrder), SortDescriptor(\.name)]
+        )
+        return fetch(descriptor, "load your projects")
+    }
+
+    /// Status is filtered in memory rather than in the `#Predicate`, matching
+    /// `MainWindowModel.fetchTasks` — D18 makes the fetch the cost, not the
+    /// filter — and because the predicate form does not exist. Both spellings
+    /// fail to compile, verified rather than assumed:
+    /// `$0.status == .inProgress` is "member access without an explicit base
+    /// is not supported in this predicate", and `$0.status == Status.inProgress`
+    /// is "key path cannot refer to enum case".
+    private func fetchTasks() -> [TaskItem] {
+        fetch(
+            FetchDescriptor<TaskItem>(predicate: #Predicate { !$0.isArchived }), "load your tasks")
+    }
+
+    /// A failed read must not look like an empty store: for a recall tool,
+    /// "nothing in progress" over a store that is full is the worst lie the
+    /// popover could tell.
+    private func fetch<T: PersistentModel>(
+        _ descriptor: FetchDescriptor<T>, _ what: String
+    ) -> [T] {
+        do {
+            return try context.fetch(descriptor)
+        } catch {
+            Log.app.error(
+                "could not \(what, privacy: .public): \(String(describing: error), privacy: .public)"
+            )
+            lastError = "Could not \(what)."
+            return []
+        }
+    }
+}
