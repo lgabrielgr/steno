@@ -36,10 +36,24 @@ struct MenuBarPopoverView: View {
             Divider()
 
             if model.rows.isEmpty {
-                Text("Nothing in progress.")
-                    .font(.callout)
-                    .foregroundStyle(.secondary)
-                    .padding(12)
+                // Only when the list is genuinely empty, not merely unread.
+                // `MenuBarModel.fetch` returns `[]` and sets `lastError` when a
+                // read fails, so "Nothing in progress." over a set `lastError`
+                // would be the lie that helper's comment forbids — the caption
+                // above already says what went wrong.
+                //
+                // `lastError` also carries `setStatus`'s write failures, where
+                // an empty list would be truthful, so this is slightly
+                // over-broad. It is nearly unreachable in practice: a failed
+                // write is rolled back in `StatusService` and refetched by
+                // `setStatus`'s catch, which puts the task it failed on back
+                // in the list.
+                if model.lastError == nil {
+                    Text("Nothing in progress.")
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                        .padding(12)
+                }
             } else {
                 // A plain VStack, not a `List`: D18 caps the whole dataset
                 // under 20 live tasks, and §2.1's "build the simple thing"

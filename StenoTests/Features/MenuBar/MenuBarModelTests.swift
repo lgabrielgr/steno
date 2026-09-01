@@ -193,6 +193,35 @@ func aFailedStatusSaveIsReportedAndRefetched() throws {
     #expect(model.rows.first(where: { $0.title == "retry handler" })?.status == .inProgress)
 }
 
+/// The popover has no Dismiss control, so reopening it is the only gesture
+/// that can clear a message. Without the clear in `prepareForShow()` a
+/// transient failure is on screen until the next *successful* status change —
+/// which, for a user who reacts by closing the popover and opening it again,
+/// looks like the app is stuck reporting an error that is over.
+///
+/// The clear is at the top of `prepareForShow()`, before its `reload()`, so a
+/// read that fails during that very reload still leaves its own message set.
+@MainActor
+@Test("reopening the popover clears a stale error")
+func reopeningThePopoverClearsAStaleError() throws {
+    struct SaveFailure: Error {}
+    let context = try makeContext()
+    let project = try seedProject(context, "Payments")
+    let task = try seedTask(context, "retry handler", in: project, status: .inProgress)
+    let model = MenuBarModel(
+        context: context, now: { origin }, save: { _ in throw SaveFailure() })
+
+    model.setStatus(.done, on: task.id)
+    #expect(model.lastError != nil, "the failing save should have reported")
+
+    model.prepareForShow()
+
+    #expect(model.lastError == nil)
+    // The reload inside prepareForShow() still ran: the rolled-back task is
+    // still listed, so the clear did not cost the refetch.
+    #expect(model.rows.map(\.title) == ["retry handler"])
+}
+
 @MainActor
 @Test("a capture through the popover routes on the ticket key, like every other surface")
 func capturingThroughThePopoverRoutesByTicketKey() throws {

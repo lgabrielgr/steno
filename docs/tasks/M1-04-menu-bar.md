@@ -92,17 +92,20 @@ GUI automation is unavailable in this environment, so everything below needs a p
 Deferred deliberately, not gaps the plan missed — recorded here so a later task does not mistake
 pre-existing behaviour for a regression it introduced.
 
-- **`MenuBarModel.lastError` is undismissable.** It is cleared only on `setStatus`'s success
-  path (`MenuBarModel.swift:155`); it is set in two places — `setStatus`'s catch (`:162`) and a
-  failed read inside the generic `fetch<T>` helper (`:201`), which every `reload()` reaches
-  through `fetchProjects()` and `fetchTasks()` — and read only at `MenuBarPopoverView.swift:28`.
-  Nothing else ever clears it. A transient read or write failure therefore leaves the message
-  showing until the next *successful* status change — the popover has no Dismiss control, where
-  the main window's own error banner has one. The obvious fix, clearing `lastError` at the top of
-  a successful `reload()`, is wrong: `setStatus`'s catch block calls `reload()` immediately after
-  setting the message (`:162` then `:165`), so that would erase the message in the same call that
-  set it. `MenuBarModelTests.aFailedStatusSaveIsReportedAndRefetched` asserts the message survives
-  exactly that reload, which is what would break.
+- **`MenuBarModel.lastError` has no in-popover Dismiss control.** It is cleared in two places —
+  `prepareForShow()` (`MenuBarModel.swift:116`) and `setStatus`'s success path (`:173`) — and set
+  in two: `setStatus`'s catch (`:180`) and a failed read inside the generic `fetch<T>` helper
+  (`:225`), which every `reload()` reaches through `fetchProjects()` and `fetchTasks()`. It is
+  read at `MenuBarPopoverView.swift:28`, which shows the message, and again at `:50`, which
+  withholds "Nothing in progress." while it is set so a failed read cannot pass for an empty
+  store. Closing and reopening the popover is therefore the dismissal gesture, and it is the only
+  one: a message set while the popover is open stays on screen for the rest of that open, where
+  the main window's own error banner offers a Dismiss button. Note that the clear cannot move
+  into `reload()` — `setStatus`'s catch calls `reload()` immediately after setting the message
+  (`:180` then `:183`), so clearing there would erase it in the same call that set it, and
+  `MenuBarModelTests.aFailedStatusSaveIsReportedAndRefetched` asserts it survives exactly that
+  reload. `prepareForShow()` is safe because nothing on the failure path calls it, which
+  `MenuBarModelTests.reopeningThePopoverClearsAStaleError` pins.
 - **The `statusChangedAt` sort has no tiebreak.** `MenuBarModel.reload()` sorts live tasks by
   `$0.statusChangedAt > $1.statusChangedAt` alone (`:120`), so two tasks transitioned in the same
   instant order arbitrarily between reloads, depending on the store's own fetch order.

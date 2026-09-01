@@ -22,7 +22,13 @@ public final class MenuBarModel {
     public private(set) var rows: [MenuBarRow] = []
 
     /// Set when a read or a status write failed. The popover shows it rather
-    /// than reverting a row silently.
+    /// than reverting a row silently, and — because a failed read returns an
+    /// empty array — it is also how the view knows an empty list may be
+    /// unread rather than genuinely empty. See `fetch(_:_:)`.
+    ///
+    /// Cleared by a status write that does not throw, and by the next
+    /// `prepareForShow()` — reopening the popover is the only dismissal
+    /// gesture this surface has.
     public private(set) var lastError: String?
 
     /// How many times the popover has been prepared for display.
@@ -96,8 +102,19 @@ public final class MenuBarModel {
     /// chip because the draft survives a dismissal and the project list can
     /// have changed underneath it — `QuickCaptureModel.prepareForShow`
     /// documents that argument in full.
+    ///
+    /// Clearing `lastError` here is what makes the message dismissable on a
+    /// surface with no Dismiss control: reopening the popover is the gesture.
+    /// It has to be *here* rather than in `reload()` — `setStatus`'s catch
+    /// calls `reload()` immediately after setting the message, so clearing
+    /// there would erase it in the same call that set it. Nothing calls
+    /// `prepareForShow()` on that path.
+    ///
+    /// **Before the `reload()`, not after**: a read that fails during this
+    /// very reload must keep the message it just set.
     public func prepareForShow() {
         showCount += 1
+        lastError = nil
         reload()
         field.refreshChip()
     }
@@ -191,6 +208,12 @@ public final class MenuBarModel {
     /// A failed read must not look like an empty store: for a recall tool,
     /// "nothing in progress" over a store that is full is the worst lie the
     /// popover could tell.
+    ///
+    /// The empty array below is therefore only half the contract. `lastError`
+    /// is the other half — it is what tells the view the list is *unread*
+    /// rather than empty, and `MenuBarPopoverView` withholds its empty-state
+    /// text while it is set. Returning `[]` without setting it would restore
+    /// exactly the lie this comment forbids.
     private func fetch<T: PersistentModel>(
         _ descriptor: FetchDescriptor<T>, _ what: String
     ) -> [T] {
