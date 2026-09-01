@@ -14,6 +14,10 @@ struct StenoApp: App {
     /// controller that goes out of scope takes the hotkey with it.
     private let quickCapture: QuickCaptureController?
 
+    /// FR-1.2's surface, held for the same reason: a released controller takes
+    /// the status item out of the menu bar with it.
+    private let menuBar: MenuBarController?
+
     /// Exists to keep the app alive when the last window closes, which is what
     /// makes "the icon is present without the main window open" true.
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
@@ -87,8 +91,10 @@ struct StenoApp: App {
             let controller = QuickCaptureController(container: container)
             controller.start()
             quickCapture = controller
+            menuBar = MenuBarController(container: container)
         } else {
             quickCapture = nil
+            menuBar = nil
         }
     }
 
