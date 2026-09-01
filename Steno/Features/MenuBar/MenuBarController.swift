@@ -16,11 +16,11 @@ final class MenuBarController: NSObject {
     private let statusItem: NSStatusItem
     private let popover = NSPopover()
 
-    /// When the popover last closed, however it closed.
+    /// When the popover last *began* closing, however it was closed.
     ///
-    /// Read by `toggle()`, which cannot otherwise tell a click that should
-    /// open the popover from the mouse-up of a click that just dismissed it —
-    /// see the comment there.
+    /// The start, not the finish: a close animates, and the timestamp has to
+    /// be recorded before the mouse-up that follows the dismissing mouse-down
+    /// or the guard it feeds is inert. See `toggle()`.
     private var lastCloseAt: Date = .distantPast
 
     /// The observation's token, kept because it is the only handle by which
@@ -62,10 +62,17 @@ final class MenuBarController: NSObject {
         hosting.sizingOptions = [.preferredContentSize]
         popover.contentViewController = hosting
 
-        // Every close lands here — `hide()`, `Esc`, a successful capture, and
-        // the `.transient` dismissal AppKit performs on its own.
+        // `willClose`, not `didClose`. Every close lands in both — `hide()`,
+        // `Esc`, a successful capture, and the `.transient` dismissal AppKit
+        // performs on its own — but `didClose` is posted after the close
+        // *completes*, and `popover.animates` defaults to `true`. The fade can
+        // outlast the mouse-up that follows the dismissing mouse-down, which
+        // would leave `lastCloseAt` unset at exactly the moment `toggle()`
+        // reads it, making the guard inert. `willClose` is posted when the
+        // close begins, so the stamp is already down by then. If a re-open is
+        // still seen by hand, `popover.animates = false` is the next lever.
         closeObservation = NotificationCenter.default.addObserver(
-            forName: NSPopover.didCloseNotification, object: popover, queue: nil
+            forName: NSPopover.willCloseNotification, object: popover, queue: nil
         ) { [weak self] _ in
             MainActor.assumeIsolated { self?.lastCloseAt = Date() }
         }
@@ -76,7 +83,7 @@ final class MenuBarController: NSObject {
     /// **The timestamp is not paranoia.** A `.transient` popover closes on a
     /// mouse-*down* outside itself, the status button is outside it, and
     /// `NSStatusBarButton` sends its action on mouse-*up* — so if AppKit does
-    /// not swallow that mouse-down, the popover is already closed by the time
+    /// not swallow that mouse-down, the popover is already closing by the time
     /// this runs and `isShown` alone would re-open it, making the icon look
     /// dead. Whether AppKit swallows it is undocumented and has varied by
     /// release; this guard is correct under both behaviours, because if the
@@ -105,7 +112,8 @@ final class MenuBarController: NSObject {
         // surfaces are opposites (D-038): the panel appears over the app the
         // user is working in, while the menu bar is reached by leaving it — so
         // activation is what lets the popover's window become key and receive
-        // the typing, which §1.1's "no second click" requires.
+        // the typing, without which §1.1's ~3-second budget would be spent on
+        // a second click into the field.
         NSApp.activate(ignoringOtherApps: true)
         popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
         // `NSApp.activate` above completes asynchronously and AppKit can hand
