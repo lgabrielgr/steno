@@ -17,6 +17,33 @@ enum CaptureFieldStyle {
     /// and `Return` on a surface whose stated requirement (FR-1.1) is that it
     /// works with no mouse at all.
     case bar
+    /// M1-04's menu bar popover: `.bar`'s behaviour, narrower chrome.
+    ///
+    /// Its own case rather than a width parameter on `.bar`: an associated
+    /// value turns every `style == .sheet` comparison in this file into a
+    /// pattern match for one number. A popover hangs under a 22-point status
+    /// item, so `.bar`'s 560 would be three times the width of what opened it.
+    case popover
+}
+
+extension CaptureFieldStyle {
+    /// The field's overall width. Applied outside the padding, so this is the
+    /// width of the whole surface.
+    var width: CGFloat {
+        switch self {
+        case .sheet: 420
+        case .bar: 560
+        case .popover: 360
+        }
+    }
+
+    var padding: CGFloat {
+        switch self {
+        case .sheet: 20
+        case .bar: 14
+        case .popover: 12
+        }
+    }
 }
 
 /// FR-1's capture field: one focused line, `Return` commits, `Esc` dismisses.
@@ -80,8 +107,8 @@ struct CaptureFieldView: View {
                     .accessibilityHidden(true)
             }
         }
-        .padding(style == .sheet ? 20 : 14)
-        .frame(width: style == .sheet ? 420 : 560)
+        .padding(style.padding)
+        .frame(width: style.width)
         // FR-1.1: focused the instant it appears, no click required.
         .onAppear { isFocused = true }
     }
