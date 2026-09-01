@@ -157,9 +157,14 @@ func aNoOpTransitionFromThePopoverWritesNothing() throws {
     let task = try seedTask(context, "retry handler", in: project, status: .inProgress)
     let model = MenuBarModel(context: context, now: { origin })
 
+    // Written behind the model's back, with no prepareForShow() or
+    // .stenoDidWrite in between — the model has no legitimate reason to have
+    // seen this. Only an unwarranted reload would surface it.
+    try seedTask(context, "started elsewhere", in: project, status: .inProgress)
+
     model.setStatus(.inProgress, on: task.id)
 
-    #expect(model.rows.count == 1)
+    #expect(model.rows.map(\.title) == ["retry handler"])
     #expect(try statusEvents(context).isEmpty)
 }
 
