@@ -27,11 +27,13 @@ public final class MenuBarModel {
 
     /// How many times the popover has been prepared for display.
     ///
-    /// The view keys the capture field on this so that each open re-creates
-    /// the field's *view* — and therefore re-runs the `.onAppear` that takes
-    /// focus. The hosting controller is resident (design §4.2), so without a
-    /// changing identity `onAppear` fires on the first open only, and every
-    /// later open would present an unfocused field. §1.1 calls a capture field
+    /// The view keys the capture field on this so that each open gives the
+    /// field a fresh identity, and with it a fresh `@FocusState`. A reused
+    /// identity is what would make focus unreliable, by either of two routes:
+    /// `.onAppear` may not be resent on a later show, and if `isFocused`
+    /// survived the close still `true`, setting it `true` again changes
+    /// nothing. A new identity moots both — the view is built, `.onAppear`
+    /// runs, and `isFocused` goes false to true. §1.1 calls a capture field
     /// that needs a click a defect, so this is not cosmetic.
     public private(set) var showCount = 0
 
