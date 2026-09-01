@@ -2,7 +2,9 @@ import AppKit
 import StenoKit
 
 /// Brings the main window forward from the three states FR-1.2's "Open Main
-/// Window" has to handle: closed, minimized, and on another Space.
+/// Window" has to handle: closed, minimized, and on another Space — the
+/// closed case provided `MainWindowView` has appeared at least once to stash
+/// `reopen`.
 ///
 /// The three need different things. Activation moves the user to the window's
 /// Space; `deminiaturize` handles the Dock; and a window the user closed with
@@ -18,11 +20,12 @@ enum MainWindowReveal {
     /// also match `CapturePanel`).
     static let identifier = NSUserInterfaceItemIdentifier("com.lgabrielgr.steno.mainWindow")
 
-    /// SwiftUI's `openWindow`, captured while the window exists.
+    /// SwiftUI's `openWindow`, wrapped in a closure and captured while the
+    /// window exists.
     ///
-    /// A stored `OpenWindowAction` rather than an environment read at the call
-    /// site: the popover's content is hosted outside the scene tree, so it has
-    /// no environment to read from.
+    /// A stored closure rather than an environment read at the call site: the
+    /// popover's content is hosted outside the scene tree, so it has no
+    /// environment to read from.
     @MainActor static var reopen: (() -> Void)?
 
     @MainActor
@@ -39,7 +42,12 @@ enum MainWindowReveal {
             return
         }
 
-        Log.app.info("reveal: no main window found; reopening the scene")
-        reopen?()
+        if let reopen {
+            Log.app.info("reveal: no main window found; reopening the scene")
+            reopen()
+        } else {
+            Log.app.error(
+                "reveal: no main window found and no reopen action stashed; nothing to show")
+        }
     }
 }

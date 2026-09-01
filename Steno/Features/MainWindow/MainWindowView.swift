@@ -1,4 +1,3 @@
-import AppKit
 import StenoKit
 import SwiftData
 import SwiftUI
