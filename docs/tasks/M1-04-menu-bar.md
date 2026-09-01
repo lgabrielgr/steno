@@ -92,15 +92,17 @@ GUI automation is unavailable in this environment, so everything below needs a p
 Deferred deliberately, not gaps the plan missed — recorded here so a later task does not mistake
 pre-existing behaviour for a regression it introduced.
 
-- **`MenuBarModel.lastError` is undismissable.** It is cleared only on `setStatus`'s success path
-  (`MenuBarModel.swift:155`) and set on its catch path (`:162`); nothing else writes it, and
-  `MenuBarPopoverView.swift:28` is its only reader. A transient read or write failure therefore
-  leaves the message showing until the next *successful* status change — the popover has no
-  Dismiss control, where the main window's own error banner has one. The obvious fix, clearing
-  `lastError` at the top of a successful `reload()`, is wrong: `setStatus`'s catch block calls
-  `reload()` immediately after setting the message (`:162` then `:165`), so that would erase the
-  message in the same call that set it. `MenuBarModelTests.aFailedStatusSaveIsReportedAndRefetched`
-  asserts the message survives exactly that reload, which is what would break.
+- **`MenuBarModel.lastError` is undismissable.** It is cleared only on `setStatus`'s success
+  path (`MenuBarModel.swift:155`); it is set in two places — `setStatus`'s catch (`:162`) and a
+  failed read inside the generic `fetch<T>` helper (`:201`), which every `reload()` reaches
+  through `fetchProjects()` and `fetchTasks()` — and read only at `MenuBarPopoverView.swift:28`.
+  Nothing else ever clears it. A transient read or write failure therefore leaves the message
+  showing until the next *successful* status change — the popover has no Dismiss control, where
+  the main window's own error banner has one. The obvious fix, clearing `lastError` at the top of
+  a successful `reload()`, is wrong: `setStatus`'s catch block calls `reload()` immediately after
+  setting the message (`:162` then `:165`), so that would erase the message in the same call that
+  set it. `MenuBarModelTests.aFailedStatusSaveIsReportedAndRefetched` asserts the message survives
+  exactly that reload, which is what would break.
 - **The `statusChangedAt` sort has no tiebreak.** `MenuBarModel.reload()` sorts live tasks by
   `$0.statusChangedAt > $1.statusChangedAt` alone (`:120`), so two tasks transitioned in the same
   instant order arbitrarily between reloads, depending on the store's own fetch order.
