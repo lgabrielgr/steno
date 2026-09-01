@@ -49,6 +49,11 @@ final class MenuBarController: NSObject {
         let hosting = NSHostingController(
             rootView: MenuBarPopoverView(
                 model: model,
+                // Close only — no `field.reset()`, unlike `QuickCaptureController`'s
+                // `onDismiss`. **D-043**: Esc keeps the popover's draft, because the
+                // `.transient` click-outside dismissal never reaches this closure and
+                // making the two agree by discarding would lose a draft to a stray
+                // click. Do not "fix" one site to match the other.
                 onDismiss: { [weak self] in self?.hide() },
                 onOpenMainWindow: { [weak self] in
                     // Close first, so the window does not arrive behind a

@@ -773,7 +773,7 @@ would ever pass it, and it would ship as an unused argument.
 all until M1-06 (ships a capability nothing exercises).
 
 ### D-037 — The popover lists every IN-PROGRESS task, no date filter
-**2026-08-31** · M1-04 · **Status:** accepted — closes O-6
+**2026-08-31** · M1-04 · **Status:** accepted — closes O-6; `REQUIREMENTS.md` FR-1.2 points here as of v1.13
 
 `MenuBarModel.reload()` lists every task with `status == .inProgress`, across every non-archived
 project, newest `statusChangedAt` first. There is no "today" or "this project" filter.
@@ -874,6 +874,31 @@ accidental.
 **Alternatives:** `Status.allCases` (reintroduces the coupling `TaskGrouping.order` already
 rejected); reusing `TaskGrouping.order` for the picker too (conflates "read order" with "workflow
 order", which happen to be needs that differ).
+
+### D-043 — `Esc` discards the panel's draft and keeps the popover's
+**2026-09-01** · M1-04 · **Status:** accepted
+
+The two surfaces that embed `CaptureFieldView` give `Esc` opposite meanings, deliberately.
+`QuickCaptureController` passes an `onDismiss` that calls `field.reset()`
+(`Steno/Features/Capture/QuickCaptureController.swift`), so `Esc` on M1-03's floating panel
+discards the typed line. `MenuBarController` passes an `onDismiss` that only closes the popover
+(`Steno/Features/MenuBar/MenuBarController.swift`), so `Esc` leaves the draft to be found on the
+next open. FR-1.1 says only that `Esc` "dismisses without saving", which does not settle what
+happens to the text.
+
+**Why:** the popover cannot make `Esc` discard without also discarding on a stray click. Its
+`NSPopover` is `.transient`, and AppKit's own click-outside dismissal never runs through
+`onDismiss` — the only hook that covers it is `NSPopover.willCloseNotification`, which fires on
+*every* close. Resetting there would throw away a half-typed line whenever the user glanced at
+another window, which for a capture tool is data loss (§1.1). Keeping the draft makes the
+popover's two dismissals agree with each other, which is what a user actually compares. The panel
+has no such constraint and the opposite pull: it is summoned over another app by a chord and
+dismissed straight back into it, so a line cancelled on Monday reappearing at an unrelated chord
+press on Tuesday would be the surprise. D15 asks for one capture *code path*, which both surfaces
+still share literally — it does not ask two different windows to answer a key the same way.
+**Alternatives:** discarding on both (needs the `willClose` reset above, and loses drafts to
+incidental closes); keeping on both (changes M1-03's shipped, tested `Esc` behaviour from inside
+M1-04, which is out of this task's scope and was not the panel's design intent).
 
 ---
 

@@ -86,6 +86,10 @@ GUI automation is unavailable in this environment, so everything below needs a p
       "closed" case takes the *first* branch instead of the reopen one, `makeKeyAndOrderFront`
       still does the right thing, and the log will not read the way an earlier design draft
       predicted. That is not a bug.
+- [ ] With the main window closed, open the **Window** menu. It contains a Steno item that
+      reopens the window. This is the stated fallback if "Open Main Window" misbehaves
+      (`StenoApp.swift`'s comment on the `Window` scene) and it has never been looked at — if the
+      menu has no such item, that comment is wrong and the popover's button is the only way back.
 - [ ] "Open Main Window" with the window **minimized**.
 - [ ] "Open Main Window" with the window **on another Space**.
 - [ ] Immediately after using "Open Main Window" (or any popover close), click the menu bar icon

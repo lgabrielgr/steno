@@ -41,6 +41,10 @@ final class QuickCaptureController {
                     // Fires on Esc and on a successful Return (`CaptureFieldView.commit()`
                     // calls `onDismiss` too). `reset()` is the actual discard for Esc; on
                     // Return it's a harmless no-op, since `commit()` already reset the field.
+                    //
+                    // **D-043: the menu bar popover deliberately does not do this.** Its
+                    // `onDismiss` only closes, so Esc there keeps the draft. Do not
+                    // "fix" one site to match the other — the difference is the decision.
                     model?.field.reset()
                     NotificationCenter.default.post(name: .capturePanelShouldHide, object: nil)
                 },

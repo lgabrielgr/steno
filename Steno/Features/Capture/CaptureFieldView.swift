@@ -21,8 +21,11 @@ enum CaptureFieldStyle {
     ///
     /// Its own case rather than a width parameter on `.bar`: an associated
     /// value turns every `style == .sheet` comparison in this file into a
-    /// pattern match for one number. A popover hangs under a 22-point status
-    /// item, so `.bar`'s 560 would be three times the width of what opened it.
+    /// pattern match for one number. The width differs because a popover hangs
+    /// off a status item about as wide as the menu bar is tall
+    /// (`NSStatusItem.squareLength`), where `.bar` is a free-floating panel
+    /// near the middle of the screen with nothing to sit under; `.bar`'s 560
+    /// would dwarf the icon this one appears from.
     case popover
 }
 

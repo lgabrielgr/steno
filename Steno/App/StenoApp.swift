@@ -103,8 +103,11 @@ struct StenoApp: App {
         // single-instance in practice — `MainWindowCommands` replaces
         // `.newItem`, so nothing opens a second — and `Window` is what makes
         // reopening *the* window possible: a `WindowGroup` answers a reopen by
-        // minting another one (D-040). It also contributes its own Window-menu
-        // item, so the popover's button is not the only way back.
+        // minting another one (D-040). A `Window` scene is also expected to
+        // contribute its own Window-menu item, which would make the popover's
+        // button not the only way back — expected, not observed: nobody has
+        // been able to look at the menu here, so M1-04's manual pass checks it
+        // rather than this comment asserting it.
         Window("Steno", id: MainWindowReveal.sceneID) {
             switch store {
             case .success(let container):
