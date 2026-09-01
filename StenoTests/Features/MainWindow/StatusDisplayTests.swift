@@ -12,3 +12,16 @@ func statusDisplayNames() {
     // than silently rendering an unlabelled group. D11 says there is no fifth.
     #expect(Status.allCases.count == 4)
 }
+
+@Test("the picker's order is named, not inherited from the enum")
+func statusMenuOrderIsNamed() {
+    #expect(Status.menuOrder == [.todo, .inProgress, .blocked, .done])
+    // Every case appears exactly once, so a fifth status added to the enum
+    // fails here rather than quietly missing from every picker. The literal
+    // above is what makes reordering `Status` a test failure instead of a
+    // silent reshuffle of the menu under the user's cursor.
+    #expect(Set(Status.menuOrder) == Set(Status.allCases))
+    #expect(Status.menuOrder.count == Status.allCases.count)
+    // Deliberately different from the window's section order (D-042).
+    #expect(Status.menuOrder != TaskGrouping.order)
+}
