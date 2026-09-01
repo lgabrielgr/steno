@@ -42,6 +42,18 @@ fail, not because they were watched: criterion 3 by `MenuBarModelTests` (its fai
 no-op tests were both hardened to pin the model's state, not just the surface symptom), and
 criterion 5 by `MenuBarPerformanceTests` plus an unchanged re-run of `CapturePerformanceTests`.
 
+Criterion 5's evidence is specifically this. The resident `MenuBarModel` observes `.stenoDidWrite`,
+which `CaptureService` posts synchronously before `capture()` returns, so **every** capture — from
+the hotkey panel, the New Task sheet, or the popover — now pays one `MenuBarModel.reload()`, opened
+popover or not. `CapturePerformanceTests` cannot see that cost, because nothing there is observing.
+`MenuBarPerformanceTests.testCaptureWithNoMenuBarModelObserving` and
+`testCaptureWithTheMenuBarModelObserving` measure the same capture both ways against the same
+fixture: over five isolated runs the observer costs roughly **0.2–1.4 ms per capture**, near 0.9 ms
+at the median, on captures that themselves take about 2 ms warm. Three orders of magnitude inside
+§1.1's ~3-second budget, so the tick stands. Those are ranges from one machine, not constants —
+the test's own doc comment carries the full figures and why the worst-of-ten numbers must not be
+compared across the two cases.
+
 ## Manual verification
 
 GUI automation is unavailable in this environment, so everything below needs a person. Run
