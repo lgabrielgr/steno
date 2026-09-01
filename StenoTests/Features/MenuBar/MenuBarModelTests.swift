@@ -133,6 +133,55 @@ func aWriteFromAnotherSurfaceRefreshesTheList() throws {
 }
 
 @MainActor
+@Test("setting a status appends its event and drops the row")
+func settingStatusAppendsItsEventAndDropsTheRow() throws {
+    let context = try makeContext()
+    let project = try seedProject(context, "Payments")
+    let task = try seedTask(context, "retry handler", in: project, status: .inProgress)
+    let model = MenuBarModel(context: context, now: { origin })
+    #expect(model.rows.count == 1)
+
+    model.setStatus(.done, on: task.id)
+
+    #expect(task.status == .done)
+    #expect(model.rows.isEmpty)
+    #expect(model.lastError == nil)
+    #expect(try statusEvents(context).count == 1)
+}
+
+@MainActor
+@Test("setting the status a task already has writes nothing")
+func aNoOpTransitionFromThePopoverWritesNothing() throws {
+    let context = try makeContext()
+    let project = try seedProject(context, "Payments")
+    let task = try seedTask(context, "retry handler", in: project, status: .inProgress)
+    let model = MenuBarModel(context: context, now: { origin })
+
+    model.setStatus(.inProgress, on: task.id)
+
+    #expect(model.rows.count == 1)
+    #expect(try statusEvents(context).isEmpty)
+}
+
+@MainActor
+@Test("a failed status save is reported and the row is refetched")
+func aFailedStatusSaveIsReportedAndRefetched() throws {
+    struct SaveFailure: Error {}
+    let context = try makeContext()
+    let project = try seedProject(context, "Payments")
+    let task = try seedTask(context, "retry handler", in: project, status: .inProgress)
+    let model = MenuBarModel(
+        context: context, now: { origin }, save: { _ in throw SaveFailure() })
+
+    model.setStatus(.done, on: task.id)
+
+    #expect(model.lastError == "Could not change the status. Your change was not saved.")
+    // The rollback restores the store; this is the fetch that restores the row.
+    #expect(model.rows.map(\.title) == ["retry handler"])
+    #expect(model.rows.first?.status == .inProgress)
+}
+
+@MainActor
 @Test("a capture through the popover routes on the ticket key, like every other surface")
 func capturingThroughThePopoverRoutesByTicketKey() throws {
     let context = try makeContext()

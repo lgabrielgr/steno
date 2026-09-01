@@ -134,6 +134,36 @@ public final class MenuBarModel {
         rows = nextRows
     }
 
+    /// D-033's one path for status, over this surface's context.
+    ///
+    /// **Blocking here does not offer D-036's reason sheet** (D-039). §3.3
+    /// makes the reason optional, a sheet would dismiss the `.transient`
+    /// popover that spawned it, and the detail pane still offers it.
+    ///
+    /// A successful write reloads twice — once here, once via the
+    /// `.stenoDidWrite` observer — for the reason `MainWindowModel+Status`
+    /// gives: that observer exists for writes from *other* surfaces, and a
+    /// caller that leans on it to see its own write breaks silently the day it
+    /// is scoped to ignore self-originated posts. `reload()` is idempotent.
+    public func setStatus(_ new: Status, on taskID: UUID) {
+        guard let task = tasks.first(where: { $0.id == taskID }) else { return }
+        do {
+            let changed = try StatusService(context: context, now: now, save: save)
+                .setStatus(new, on: task)
+            lastError = nil
+            // Nothing written means nothing to fetch.
+            guard changed else { return }
+            reload()
+        } catch {
+            Log.app.error(
+                "could not change the status: \(String(describing: error), privacy: .public)")
+            lastError = "Could not change the status. Your change was not saved."
+            // Not cosmetic: `rollback()` leaves the held task reporting the
+            // rejected status, and this fetch is what refreshes it.
+            reload()
+        }
+    }
+
     private func fetchProjects() -> [Project] {
         let descriptor = FetchDescriptor<Project>(
             predicate: #Predicate { !$0.isArchived },
