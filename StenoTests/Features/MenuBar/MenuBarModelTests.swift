@@ -178,12 +178,19 @@ func aFailedStatusSaveIsReportedAndRefetched() throws {
     let model = MenuBarModel(
         context: context, now: { origin }, save: { _ in throw SaveFailure() })
 
+    // Written behind the model's back, with no prepareForShow() or
+    // .stenoDidWrite in between — the failing setStatus call never posts
+    // .stenoDidWrite, so only the catch block's own reload() can surface this.
+    try seedTask(context, "started elsewhere", in: project, status: .inProgress)
+
     model.setStatus(.done, on: task.id)
 
     #expect(model.lastError == "Could not change the status. Your change was not saved.")
-    // The rollback restores the store; this is the fetch that restores the row.
-    #expect(model.rows.map(\.title) == ["retry handler"])
-    #expect(model.rows.first?.status == .inProgress)
+    // The rollback restores the store; this is the fetch that restores the row
+    // — and surfaces the task seeded behind the model's back, which only a
+    // reload can find.
+    #expect(Set(model.rows.map(\.title)) == ["retry handler", "started elsewhere"])
+    #expect(model.rows.first(where: { $0.title == "retry handler" })?.status == .inProgress)
 }
 
 @MainActor
