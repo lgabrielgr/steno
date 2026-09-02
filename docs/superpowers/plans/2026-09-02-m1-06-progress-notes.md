@@ -1978,12 +1978,14 @@ import Foundation
 /// this supplies the two things it deliberately does not hold — the selected
 /// task and the visible timeline — and reloads when it says to.
 ///
-/// **Every path that can fail reloads.** `NoteService`'s `rollback()` keeps a
-/// refused write off disk but leaves the held `Event` reporting the rejected
-/// `isRedacted`, and only a refetch restores it. Skipping the reload after a
-/// failure hides a note the store still has — worse than the status case
-/// `+Status.swift` documents, because a note simply vanishes rather than
-/// visibly reverting.
+/// **Every path that can fail reloads**, because what `rollback()` leaves
+/// behind depends on the shape of the transaction and no caller should have to
+/// know which it got. Measured during M1-06: a failed `redact(_:)` — a pure
+/// mutation — leaves the held `Event` still reporting the rejected
+/// `isRedacted`, matching `+Status.swift`; a failed `correct(_:to:on:)`, whose
+/// transaction also carries an insert, re-faults the held object back to its
+/// clean stored value. Reloading is correct under both, and a caller that
+/// reasons about only one of them is right by accident.
 extension MainWindowModel {
     /// FR-3 gates its shortcuts on having a subject.
     public var canAddNote: Bool { selectedTaskID != nil }
@@ -2056,11 +2058,12 @@ Correctability is refreshed wherever the timeline changes, including the
 no-selection branch, so a stale Correct affordance cannot outlive the row it
 belongs to.
 
-Every failure path reloads. NoteService's rollback() keeps a refused write off
-disk but leaves the held Event reporting the rejected isRedacted - measured,
-not assumed - and only a refetch restores it. Skipping the reload there hides
-a note the store still has, which is worse than the status case
-+Status.swift documents: a status visibly reverts, a note simply vanishes.
+Every failure path reloads. What rollback() leaves behind depends on the shape
+of the transaction, and no caller should have to know which it got: a failed
+redact() leaves the held Event still reporting the rejected isRedacted, while a
+failed correct(), whose transaction also carries an insert, re-faults it back to
+the clean stored value. Both were measured. Reloading is correct under either,
+and skipping it on the redact path hides a note the store still has.
 
 canAddNote and addNoteToSelection join MainWindowActions so the next task's
 menu item cannot silently do nothing."
