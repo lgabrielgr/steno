@@ -229,3 +229,28 @@ func redactingStopsACorrectionOfTheSameRow() throws {
     #expect(composer.mode == .adding)
     #expect(composer.text.isEmpty)
 }
+
+@MainActor
+@Test("a failed redact still asks the window to refetch, and reports itself")
+func aFailedRedactReportsItself() throws {
+    var shouldFail = false
+    let fixture = try makeComposer(failing: { shouldFail })
+    let composer = fixture.composer
+    let task = fixture.task
+    let context = fixture.context
+    composer.text = "a mistake"
+    _ = composer.commit(on: task, in: [])
+    let note = try #require(try timeline(context, task).first)
+    composer.beginCorrection(of: note.id, in: [note])
+    let counter = WriteCounter()
+    shouldFail = true
+
+    #expect(composer.redact(note.id, in: [note]))
+
+    // Same rule as a failed commit: true means "refetch", not "it worked".
+    #expect(composer.lastError != nil)
+    // The throwing guard exits before the mode-reset line runs, so a
+    // correction in flight when the redact fails is still in flight after.
+    #expect(composer.mode == .correcting(eventID: note.id))
+    #expect(counter.posts == 0)
+}
