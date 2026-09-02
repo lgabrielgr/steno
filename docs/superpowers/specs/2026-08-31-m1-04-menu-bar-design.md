@@ -407,3 +407,14 @@ launch-at-login hook; the tests above.
 things in the popover and this builds those three; its "today's in-progress tasks" is silent on
 the set, which is why `DECISIONS.md` carries O-6 as an implementer's call rather than a spec
 defect. FR-6's Settings list keeps launch-at-login, and this task ships no setting.
+
+**Update, later in the branch: that call did not survive final review.** The reasoning above —
+that FR-1.2's silence on the set makes this an implementer's call, not a spec defect — was correct
+about O-6 but missed a second-order problem: FR-1.2 read on its own, with `DECISIONS.md` unread,
+would lead a future implementer straight to a date filter, since "today's" is the plain reading of
+the words actually in the requirement. The fix landed as a pointer rather than a rewrite — FR-1.2's
+wording is unchanged, but it now names `DECISIONS.md` D-037 as the reading to use — in
+`docs/REQUIREMENTS.md` v1.13 (changelog entry same version), with D-037 carrying the return
+pointer. So `docs/REQUIREMENTS.md` *is* amended by this PR after all; the paragraph above is left
+as written because it records what this design believed at the time, not because it is still
+true.
