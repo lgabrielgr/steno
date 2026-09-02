@@ -78,19 +78,25 @@ GUI automation is unavailable in this environment, so everything below needs a p
 - [ ] Toggle a row to BLOCKED. The status changes and **no** reason sheet appears (D-039).
 - [ ] "Open Main Window" with the window **closed**. Check the log line —
       `/usr/bin/log show --last 5m --info --predicate 'subsystem == "com.lgabrielgr.steno"' | grep reveal` —
-      and require it to read `reveal: bringing the existing main window forward`. If it instead
-      reads `no main window found`, `WindowTagger` never stamped the identifier on the `NSWindow`
-      (it stamps in `updateNSView`, which requires the view to actually be attached to a window),
-      and every reveal is silently falling through to the reopen branch. Note also: a `Window`
-      scene's `NSWindow` can survive ⌘W and stay in `NSApp.windows` — if it does here, the
-      "closed" case takes the *first* branch instead of the reopen one, `makeKeyAndOrderFront`
-      still does the right thing, and the log will not read the way an earlier design draft
-      predicted. That is not a bug.
+      but judge this case by whether the window actually comes forward, not by which line it logs.
+      Whether a `Window` scene's `NSWindow` survives ⌘W and stays in `NSApp.windows` is something
+      nobody in this environment has been able to determine, so **either** log line is consistent
+      with correct behaviour here: `reveal: bringing the existing main window forward` if the
+      `NSWindow` survived closing, or `no main window found` (falling through to the reopen
+      branch) if it did not — both end with the window on screen, which is the only thing this
+      step is checking. This case cannot tell you whether `WindowTagger` stamped the identifier;
+      the minimized case below is the one that can.
 - [ ] With the main window closed, open the **Window** menu. It contains a Steno item that
       reopens the window. This is the stated fallback if "Open Main Window" misbehaves
       (`StenoApp.swift`'s comment on the `Window` scene) and it has never been looked at — if the
       menu has no such item, that comment is wrong and the popover's button is the only way back.
-- [ ] "Open Main Window" with the window **minimized**.
+- [ ] "Open Main Window" with the window **minimized**. Unlike the closed case, a minimized
+      window is definitely still in `NSApp.windows`, so this is the real discriminator: the log
+      **must** read `reveal: bringing the existing main window forward`. If it instead reads
+      `no main window found`, `WindowTagger` never stamped the identifier on the `NSWindow` (it
+      stamps in `updateNSView`, which requires the view to actually be attached to a window), and
+      every reveal is silently falling through to the reopen branch — a real defect here, not the
+      "not a bug" case above.
 - [ ] "Open Main Window" with the window **on another Space**.
 - [ ] Immediately after using "Open Main Window" (or any popover close), click the menu bar icon
       within about 200ms. It is a no-op. Deliberate — the transient-toggle guard's window after
