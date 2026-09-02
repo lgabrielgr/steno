@@ -145,7 +145,7 @@ func settingStatusAppendsItsEventAndDropsTheRow() throws {
 
     #expect(task.status == .done)
     #expect(model.rows.isEmpty)
-    #expect(model.lastError == nil)
+    #expect(model.writeError == nil)
     #expect(try statusEvents(context).count == 1)
 }
 
@@ -185,7 +185,7 @@ func aFailedStatusSaveIsReportedAndRefetched() throws {
 
     model.setStatus(.done, on: task.id)
 
-    #expect(model.lastError == "Could not change the status. Your change was not saved.")
+    #expect(model.writeError == "Could not change the status. Your change was not saved.")
     // The rollback restores the store; this is the fetch that restores the row
     // — and surfaces the task seeded behind the model's back, which only a
     // reload can find.
@@ -194,13 +194,15 @@ func aFailedStatusSaveIsReportedAndRefetched() throws {
 }
 
 /// The popover has no Dismiss control, so reopening it is the only gesture
-/// that can clear a message. Without the clear in `prepareForShow()` a
-/// transient failure is on screen until the next *successful* status change —
-/// which, for a user who reacts by closing the popover and opening it again,
-/// looks like the app is stuck reporting an error that is over.
+/// that can clear a stale `writeError`. Without the clear in
+/// `prepareForShow()` a transient failure is on screen until the next
+/// *successful* status change — which, for a user who reacts by closing the
+/// popover and opening it again, looks like the app is stuck reporting an
+/// error that is over.
 ///
-/// The clear is at the top of `prepareForShow()`, before its `reload()`, so a
-/// read that fails during that very reload still leaves its own message set.
+/// `writeError` is cleared at the top of `prepareForShow()`, before its
+/// `reload()` — that reload owns `readError` alone, so this test does not
+/// depend on the two clears racing.
 @MainActor
 @Test("reopening the popover clears a stale error")
 func reopeningThePopoverClearsAStaleError() throws {
@@ -212,13 +214,47 @@ func reopeningThePopoverClearsAStaleError() throws {
         context: context, now: { origin }, save: { _ in throw SaveFailure() })
 
     model.setStatus(.done, on: task.id)
-    #expect(model.lastError != nil, "the failing save should have reported")
+    #expect(model.writeError != nil, "the failing save should have reported")
 
     model.prepareForShow()
 
-    #expect(model.lastError == nil)
+    #expect(model.writeError == nil)
     // The reload inside prepareForShow() still ran: the rolled-back task is
     // still listed, so the clear did not cost the refetch.
+    #expect(model.rows.map(\.title) == ["retry handler"])
+}
+
+/// Pins the split from a single `lastError` to `readError`/`writeError`: a
+/// read failure must not survive a `reload()` that goes on to succeed.
+/// `failFetch` is the seam that makes a fetch throw without a store that can
+/// actually fail — see its doc comment on `MenuBarModel.init`.
+@MainActor
+@Test("a failed read is cleared by the next successful reload")
+func aFailedReadIsClearedByTheNextSuccessfulReload() throws {
+    struct ReadFailure: Error {}
+    final class FailSwitch {
+        var shouldFail = false
+    }
+    let context = try makeContext()
+    let project = try seedProject(context, "Payments")
+    try seedTask(context, "retry handler", in: project, status: .inProgress)
+    let failSwitch = FailSwitch()
+    let model = MenuBarModel(
+        context: context, now: { origin },
+        failFetch: {
+            if failSwitch.shouldFail { throw ReadFailure() }
+        })
+    #expect(model.rows.map(\.title) == ["retry handler"])
+    #expect(model.readError == nil)
+
+    failSwitch.shouldFail = true
+    model.reload()
+    #expect(model.readError != nil, "the injected failure should have reported")
+
+    failSwitch.shouldFail = false
+    model.reload()
+
+    #expect(model.readError == nil)
     #expect(model.rows.map(\.title) == ["retry handler"])
 }
 

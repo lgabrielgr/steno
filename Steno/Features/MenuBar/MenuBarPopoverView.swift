@@ -25,30 +25,43 @@ struct MenuBarPopoverView: View {
                 // either way.
                 .id(model.showCount)
 
-            if let message = model.lastError {
-                Label(message, systemImage: "exclamationmark.triangle.fill")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .padding(.horizontal, 12)
-                    .padding(.bottom, 8)
+            // Two independent messages, not one: a read failure and a write
+            // failure can be true at the same time — e.g. a status write just
+            // failed, and the reload its own catch triggers then fails too —
+            // and each has its own clearing rule (`MenuBarModel.readError`,
+            // `.writeError`). Showing both when both are set is the honest
+            // rendering of that; showing only one would silently drop
+            // whichever it didn't pick.
+            if model.readError != nil || model.writeError != nil {
+                VStack(alignment: .leading, spacing: 2) {
+                    if let message = model.readError {
+                        Label(message, systemImage: "exclamationmark.triangle.fill")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                    if let message = model.writeError {
+                        Label(message, systemImage: "exclamationmark.triangle.fill")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                .padding(.horizontal, 12)
+                .padding(.bottom, 8)
             }
 
             Divider()
 
             if model.rows.isEmpty {
-                // Only when the list is genuinely empty, not merely unread.
-                // `MenuBarModel.fetch` returns `[]` and sets `lastError` when a
-                // read fails, so "Nothing in progress." over a set `lastError`
-                // would be the lie that helper's comment forbids — the caption
-                // above already says what went wrong.
-                //
-                // `lastError` also carries `setStatus`'s write failures, where
-                // an empty list would be truthful, so this is slightly
-                // over-broad. It is nearly unreachable in practice: a failed
-                // write is rolled back in `StatusService` and refetched by
-                // `setStatus`'s catch, which puts the task it failed on back
-                // in the list.
-                if model.lastError == nil {
+                // Only when the list is genuinely unread, not merely empty.
+                // `MenuBarModel.fetch` returns `[]` and sets `readError` when
+                // a read fails, so "Nothing in progress." over a set
+                // `readError` would be the lie that helper's comment forbids —
+                // the caption above already says what went wrong. A set
+                // `writeError` does not gate this: a write failure is rolled
+                // back and refetched by `setStatus`'s own catch, so the list
+                // on screen is accurate and "Nothing in progress." may be
+                // exactly true.
+                if model.readError == nil {
                     Text("Nothing in progress.")
                         .font(.callout)
                         .foregroundStyle(.secondary)

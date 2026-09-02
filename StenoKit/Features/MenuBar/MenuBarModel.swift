@@ -21,15 +21,31 @@ public final class MenuBarModel {
     /// transition first (D-037).
     public private(set) var rows: [MenuBarRow] = []
 
-    /// Set when a read or a status write failed. The popover shows it rather
-    /// than reverting a row silently, and — because a failed read returns an
-    /// empty array — it is also how the view knows an empty list may be
-    /// unread rather than genuinely empty. See `fetch(_:_:)`.
+    /// Set when the most recent `reload()` failed to read from the store.
+    /// Cleared at the top of every `reload()`, so a later successful reload
+    /// clears it purely by running — no separate dismissal path is needed.
+    /// The popover shows it rather than reverting the list silently, and —
+    /// because a failed read still returns `[]` — it is also how the view
+    /// knows an empty list may be unread rather than genuinely empty. See
+    /// `fetch(_:_:)`.
     ///
-    /// Cleared by a status write that does not throw, and by the next
-    /// `prepareForShow()` — reopening the popover is the only dismissal
-    /// gesture this surface has.
-    public private(set) var lastError: String?
+    /// Kept apart from `writeError`: the two used to share one property, and
+    /// a successful `reload()` triggered by another surface's write could
+    /// clear a write failure's message before the user had seen it, or a
+    /// stale read failure could survive a `reload()` that just fixed it,
+    /// depending on which happened to write last. Splitting them makes each
+    /// one's clearing rule a fact about its own owner rather than a race.
+    public private(set) var readError: String?
+
+    /// Set when the most recent `setStatus` write failed. Cleared by a later
+    /// `setStatus` call that succeeds, and by `prepareForShow()` — reopening
+    /// the popover is the only dismissal gesture this surface has.
+    ///
+    /// **Not cleared by `reload()`.** `setStatus`'s catch sets this and then
+    /// calls `reload()` immediately to restore the rolled-back row; if
+    /// `reload()` cleared it, that same call would erase the message it was
+    /// just asked to show. See `readError` for the property this replaced.
+    public private(set) var writeError: String?
 
     /// How many times the popover has been prepared for display.
     ///
@@ -46,6 +62,7 @@ public final class MenuBarModel {
     private let context: ModelContext
     private let now: () -> Date
     private let save: (ModelContext) throws -> Void
+    private let failFetch: () throws -> Void
     private let projectBox: ProjectBox
 
     /// The same tasks `rows` describes, in the same order, kept for the status
@@ -60,16 +77,26 @@ public final class MenuBarModel {
     /// `now` and `save` are injected for the reasons `MainWindowModel` gives:
     /// timestamps assertable without waiting, and a save that can be made to
     /// fail, which a real `ModelContext` cannot.
+    ///
+    /// `failFetch` is the same idea applied to reads: `fetch<T>` calls it
+    /// immediately before `context.fetch`, and it defaults to a no-op, so a
+    /// real caller sees no change. It is not generic over `T` — a fetch
+    /// failure a test wants to inject does not depend on which model type is
+    /// being read, and a property typed over `T` cannot be stored on a
+    /// non-generic class. Calling it *before* the real fetch, rather than
+    /// wrapping the result, keeps it from having to fabricate a `[T]`.
     public init(
         context: ModelContext,
         now: @escaping () -> Date = Date.init,
-        save: @escaping (ModelContext) throws -> Void = { try $0.save() }
+        save: @escaping (ModelContext) throws -> Void = { try $0.save() },
+        failFetch: @escaping () throws -> Void = {}
     ) {
         let box = ProjectBox()
         self.projectBox = box
         self.context = context
         self.now = now
         self.save = save
+        self.failFetch = failFetch
         self.field = CaptureFieldModel(
             service: CaptureService(context: context, now: now, save: save),
             projects: { box.projects },
@@ -103,24 +130,29 @@ public final class MenuBarModel {
     /// have changed underneath it — `QuickCaptureModel.prepareForShow`
     /// documents that argument in full.
     ///
-    /// Clearing `lastError` here is what makes the message dismissable on a
+    /// Clearing `writeError` here is what makes that message dismissable on a
     /// surface with no Dismiss control: reopening the popover is the gesture.
     /// It has to be *here* rather than in `reload()` — `setStatus`'s catch
-    /// calls `reload()` immediately after setting the message, so clearing
+    /// calls `reload()` immediately after setting the message, so clearing it
     /// there would erase it in the same call that set it. Nothing calls
     /// `prepareForShow()` on that path.
     ///
-    /// **Before the `reload()`, not after**: a read that fails during this
-    /// very reload must keep the message it just set.
+    /// `readError` needs no explicit clear: `reload()`, called below, clears
+    /// it at its own top.
     public func prepareForShow() {
         showCount += 1
-        lastError = nil
+        writeError = nil
         reload()
         field.refreshChip()
     }
 
     /// Rebuild the list from the store.
+    ///
+    /// Clears `readError` first, so a reload that goes on to fail sets it
+    /// again but one that succeeds leaves it cleared — the property is owned
+    /// entirely by this method, with no other clearing path to race against.
     public func reload() {
+        readError = nil
         let projects = fetchProjects()
         projectBox.projects = projects
 
@@ -171,14 +203,14 @@ public final class MenuBarModel {
         do {
             let changed = try StatusService(context: context, now: now, save: save)
                 .setStatus(new, on: task)
-            lastError = nil
+            writeError = nil
             // Nothing written means nothing to fetch.
             guard changed else { return }
             reload()
         } catch {
             Log.app.error(
                 "could not change the status: \(String(describing: error), privacy: .public)")
-            lastError = "Could not change the status. Your change was not saved."
+            writeError = "Could not change the status. Your change was not saved."
             // Not cosmetic: `rollback()` leaves the held task reporting the
             // rejected status, and this fetch is what refreshes it.
             reload()
@@ -209,21 +241,26 @@ public final class MenuBarModel {
     /// "nothing in progress" over a store that is full is the worst lie the
     /// popover could tell.
     ///
-    /// The empty array below is therefore only half the contract. `lastError`
+    /// The empty array below is therefore only half the contract. `readError`
     /// is the other half — it is what tells the view the list is *unread*
     /// rather than empty, and `MenuBarPopoverView` withholds its empty-state
     /// text while it is set. Returning `[]` without setting it would restore
     /// exactly the lie this comment forbids.
+    ///
+    /// `failFetch()` runs before the real fetch so a test can make this throw
+    /// without a store that can actually fail — see its doc comment on
+    /// `init`.
     private func fetch<T: PersistentModel>(
         _ descriptor: FetchDescriptor<T>, _ what: String
     ) -> [T] {
         do {
+            try failFetch()
             return try context.fetch(descriptor)
         } catch {
             Log.app.error(
                 "could not \(what, privacy: .public): \(String(describing: error), privacy: .public)"
             )
-            lastError = "Could not \(what)."
+            readError = "Could not \(what)."
             return []
         }
     }
