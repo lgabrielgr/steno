@@ -293,7 +293,7 @@ func redactingTwiceWritesOnce() throws {
 // MARK: - Failure
 
 @MainActor
-@Test("a failed correction rolls back on disk, and the held reference agrees")
+@Test("a failed correction rolls back: the replacement is discarded, the original stays on disk")
 func aFailedCorrectionRollsBack() throws {
     let (task, context) = try makeTask()
     var clock = origin
@@ -314,33 +314,29 @@ func aFailedCorrectionRollsBack() throws {
     }
 
     // `commit()` has already rolled back. Measured, not assumed: the
-    // replacement insert is discarded and the stored row is clean...
+    // replacement insert is discarded and the stored row is clean — refetched
+    // from the context, which is the only thing the product actually
+    // guarantees.
     let stored = try allEvents(context)
     #expect(stored.count == 1)
     #expect(try #require(stored.first).isRedacted == false)
     #expect(try #require(stored.first).body == "fixed PAY-42")
 
-    // ...and here the held reference agrees with the store, rather than
-    // staying stale at the rejected value.
-    //
-    // `redact(_:)`'s own failure path (a pure `isRedacted` mutation, no
-    // insert — see `redactFailedSaveLeavesTheHeldReferenceClean` below) ends
-    // up here too, matching the store. `StatusService.setStatus`'s
-    // structurally similar pure-mutation rollback does not — it stays stale
-    // (`StatusServiceTests.failedSaveLeavesHeldReferenceStaleUntilRefetch`,
-    // still passing). No single rule (mutation vs. insert, model type)
-    // predicts all three, so `NoteService.commit()`'s doc comment states the
-    // fact rather than a theory: what a held reference reports after a
-    // failed rollback cannot be predicted, only that the store itself is
-    // always clean. Task 8 must reload on every failure path regardless —
-    // exactly as the brief already prescribes — never on the strength of
-    // which way this assertion happens to go.
-    #expect(original.isRedacted == false)
+    // Deliberately not asserted here: what `original.isRedacted` reports.
+    // Measured twice, two different ways, two contradictory but each
+    // internally deterministic answers — it depends on what else is running
+    // in the same test process, not on anything `NoteService` controls. A
+    // SwiftData implementation detail with no product requirement behind it
+    // does not belong in this suite; asserting it would let an unrelated
+    // future test change the answer and fail this one with a message that
+    // points at correction logic that is fine. This is exactly why every
+    // failure path reloads instead of trusting the object it already holds —
+    // a caller cannot know which answer it got, so it never asks.
 }
 
 @MainActor
-@Test("a failed redact leaves the store clean, and here the held reference agrees too")
-func redactFailedSaveLeavesTheHeldReferenceClean() throws {
+@Test("a failed redact rolls back: nothing new is written, the store is clean")
+func redactFailedSaveRollsBack() throws {
     let (task, context) = try makeTask()
     var shouldFail = false
     let service = NoteService(
@@ -358,19 +354,14 @@ func redactFailedSaveLeavesTheHeldReferenceClean() throws {
         try service.redact(note)
     }
 
-    // Measured against `make test` — this project's only verification
-    // harness (CLAUDE.md §9.5) — not a synthetic single-test probe: run
-    // alone in an otherwise-empty file this same rollback leaves `note`
-    // stale at `isRedacted == true`, matching `StatusService`'s pattern. Run
-    // as part of the full suite, as it always actually runs, it does not —
-    // reproduced identically across repeated full-suite runs. Whatever
-    // decides it is outside this task's scope and outside `NoteService`;
-    // what is asserted here is only what `make test` deterministically
-    // shows. See `NoteService.commit()`'s doc comment: no theory tried
-    // predicts every case, so none is asserted — only "reload regardless."
     let stored = try allEvents(context)
     #expect(stored.count == 1)
     #expect(try #require(stored.first).isRedacted == false)
-    #expect(note.isRedacted == false)
     #expect(counter.posts == 0)
+
+    // Deliberately not asserted here: what `note.isRedacted` reports. Same
+    // reasoning as `aFailedCorrectionRollsBack` above — measured twice, two
+    // contradictory but each internally deterministic answers, varying with
+    // test-suite composition rather than with this code. Nothing the product
+    // needs depends on it, so it is not part of what this test checks.
 }
