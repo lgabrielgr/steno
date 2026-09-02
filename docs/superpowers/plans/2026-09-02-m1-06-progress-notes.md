@@ -2423,28 +2423,54 @@ In `docs/tasks/README.md`:
   makes this PR responsible for it.
 - Tick **M1-06**'s row and append ` — PR #N` once the PR number exists.
 
-- [ ] **Step 3: Tick M1-06's acceptance criteria that automated tests actually cover**
+- [ ] **Step 3: Tick M1-04's three remaining acceptance criteria**
+
+The user ran M1-04's manual GUI checklist on **2026-09-02** and reported all three passing. In
+`docs/tasks/M1-04-menu-bar.md`, tick:
+
+```markdown
+- [x] The icon persists across relaunch and is present without the main window open.
+- [x] The popover's quick-add goes through the M1-02 path — verified by the auto-routing chip
+      behaving identically to the main window.
+- [x] "Open Main Window" works when the window is closed, minimized, or on another Space.
+```
+
+Then amend the prose immediately below the criteria list, which currently begins "The other three
+await the manual pass below" — that is no longer true. Say instead that the manual pass was run by
+the user on 2026-09-02 and all three passed, so M1-04's criteria are complete. Leave the existing
+explanation of *why* criteria 3 and 5 were ticked from automated evidence alone; it is still
+accurate and still worth reading.
+
+Tick the checklist items in M1-04's "Manual verification" section too, so the file does not show a
+completed pass sitting above an untouched checklist.
+
+**Do not** invent detail about what the user observed. They confirmed the three criteria passed;
+they did not report per-step findings, so the open questions that section raises — whether a
+`Window` scene's `NSWindow` survives ⌘W, whether the Window menu carries a Steno item — stay open
+unless they say otherwise.
+
+- [ ] **Step 4: Tick M1-06's acceptance criteria that automated tests actually cover**
 
 In `docs/tasks/M1-06-progress-notes.md`, tick criteria 1–5 and cite the test that proves each.
 **Leave criterion 6 (`N` opens note entry) unticked** — it is a GUI behaviour, no agent in this
 environment can drive the GUI, and `.onKeyPress` scoping is precisely the kind of thing that
 typechecks and still misbehaves. Add a "Manual verification" section for it, matching M1-04's.
 
-- [ ] **Step 4: Amend FR-2 in REQUIREMENTS.md**
+- [ ] **Step 5: Amend FR-2 in REQUIREMENTS.md**
 
 Change *"append a new `note` event carrying the corrected body"* to *"append a new event **of the
 same kind**, carrying the corrected body"*. Bump the version and add a changelog line at the top,
 as the existing entries do. This is required rather than optional: CLAUDE.md says a PR that quietly
 contradicts REQUIREMENTS.md is worse than one that pauses to ask.
 
-- [ ] **Step 5: Final verification**
+- [ ] **Step 6: Final verification**
 
 ```bash
 make format && make build && make test && make lint
 git status   # Steno.xcodeproj and Local.xcconfig must NOT appear
 ```
 
-- [ ] **Step 6: Open the PR — and do not merge it**
+- [ ] **Step 7: Open the PR — and do not merge it**
 
 The body must carry:
 1. **Both spec deviations**, with their reasoning: the replacement's kind (§9.1 of the spec, amended
@@ -2455,8 +2481,9 @@ The body must carry:
    covers the UI.
 4. **The `MainWindowModel` split** (Task 1) as a no-behaviour-change refactor, so a reviewer knows
    to skim it rather than re-review moved code.
-5. **A question for the user**: three of M1-04's five acceptance criteria are still unticked pending
-   its manual GUI pass. Ask whether that checklist was run rather than assuming.
+5. **M1-04's criteria are now complete**: the user ran its manual GUI checklist on 2026-09-02 and
+   all three outstanding criteria passed. This PR ticks them (Step 3) along with M1-04's README
+   row, which is the CLAUDE.md step-4 sweep M1-04's own PR could not perform.
 
 ```bash
 git push -u origin feat/progress-notes
