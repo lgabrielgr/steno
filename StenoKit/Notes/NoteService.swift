@@ -147,10 +147,22 @@ public struct NoteService {
 
     /// Save, roll back on failure, and tell the other surfaces.
     ///
-    /// **`rollback()` keeps a failed redaction off disk but does not restore
-    /// the in-memory object** — the held `Event` still reports
-    /// `isRedacted == true` until a fetch refreshes it. Callers must reload on
-    /// the error path, or the timeline hides a note the store still has.
+    /// **What a held object reports after a failed `rollback()` is not
+    /// reliably predictable, measured directly rather than assumed.** The
+    /// stored value is always correctly rolled back — a fresh fetch is
+    /// trustworthy. The *held* object is not: `redact()`'s failure path (a
+    /// pure `isRedacted` mutation, no insert) leaves the held `Event`
+    /// matching the clean stored value, while `StatusService.setStatus`'s
+    /// structurally similar pure-mutation rollback (on a `TaskItem`) leaves
+    /// its held object stale at the rejected value —
+    /// `StatusServiceTests.failedSaveLeavesHeldReferenceStaleUntilRefetch`
+    /// pins that contrast and still passes. `correct()`'s failure path (a
+    /// mutation plus a replacement insert) also ends up matching the clean
+    /// stored value. No theory tried so far (mutation vs. insert, model type)
+    /// predicts all three consistently, so none is asserted here. Callers
+    /// must reload on every failure path regardless — the held object cannot
+    /// be trusted either way, and there is no rule for which way it will be
+    /// wrong.
     private func commit() throws {
         do {
             try save(context)

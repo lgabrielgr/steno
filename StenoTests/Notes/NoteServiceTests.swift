@@ -97,10 +97,12 @@ func addNoteFailedSaveRollsBack() throws {
     }
 
     // Refetched from the service's OWN context, not read off `task` or its
-    // `sourceRefs` relationship. After `rollback()` a held reference still
-    // reports the rejected value; it is the fetch that refreshes it. Reading
-    // `task.sourceRefs` here would assert SwiftData's staleness and call it a
-    // passing rollback — see `StatusServiceTests.statusServiceFailedSaveRollsBack`.
+    // `sourceRefs` relationship. What a held reference reports after
+    // `rollback()` is not reliably predictable — see `NoteService.commit()`'s
+    // doc comment — so a caller has no way to know whether it's stale or
+    // already clean. Refetching is correct either way; reading
+    // `task.sourceRefs` here would depend on an outcome this test cannot
+    // control.
     #expect(try allEvents(context).isEmpty)
     // The half no other test in the plan covers: `addNote` is the only writer
     // that inserts a `SourceRef` alongside an `Event`, and a rollback that
@@ -129,7 +131,11 @@ func aCorrectionRedactsAndReappends() throws {
 
     let kept = try #require(events.first { $0.id == originalID })
     #expect(kept.isRedacted)
-    // Untouched apart from the flag — the invariant, asserted directly.
+    // Not a live check of the invariant — `Event`'s fields are all
+    // `private(set)`, so nothing short of adding the setter `Event` forbids
+    // could move `body`/`timestamp`/`kind` here. Kept as a tripwire: it fires
+    // if that setter is ever added. The real assertion is on the replacement,
+    // below.
     #expect(kept.body == "fixed PAY-42")
     #expect(kept.timestamp == origin)
     #expect(kept.kind == .note)
@@ -238,6 +244,21 @@ func systemEventsAreNotCorrectable() throws {
     #expect(!created.isRedacted)
 }
 
+@MainActor
+@Test("an already-redacted event is not correctable, not merely expired")
+func anAlreadyRedactedEventIsNotCorrectable() throws {
+    let (task, context) = try makeTask()
+    let service = NoteService(context: context, now: { origin })
+    let note = try #require(try service.addNote("a mistake", to: task))
+    try service.redact(note)
+
+    // Distinct from `.windowExpired`: Task 7 renders a different notice for
+    // each, and a still-within-window but already-redacted event must not be
+    // reported as merely expired.
+    #expect(try service.correct(note, to: "fixed", on: task) == .notCorrectable)
+    #expect(try allEvents(context).count == 1)
+}
+
 // MARK: - Redacting
 
 @MainActor
@@ -302,16 +323,54 @@ func aFailedCorrectionRollsBack() throws {
     // ...and here the held reference agrees with the store, rather than
     // staying stale at the rejected value.
     //
-    // This is the opposite of `StatusService`'s rollback (a pure property
-    // mutation, no pending insert): there, the held reference keeps reporting
-    // the rejected value until a refetch. Isolated directly: calling
-    // `NoteService.redact(_:)` alone (mutate-only, same context, same
-    // failing save) reproduces that stale-true behavior. It is only once a
-    // `context.insert(_:)` for the replacement `Event` joins the same pending
-    // transaction that `context.rollback()` also re-faults `original` back to
-    // its clean, on-disk value. Task 8 must not assume either direction for
-    // `correct()`'s failure path — reload regardless, exactly as the brief
-    // already prescribes — but this specific assertion has to track what
-    // SwiftData actually does here, not the mutate-only pattern.
+    // `redact(_:)`'s own failure path (a pure `isRedacted` mutation, no
+    // insert — see `redactFailedSaveLeavesTheHeldReferenceClean` below) ends
+    // up here too, matching the store. `StatusService.setStatus`'s
+    // structurally similar pure-mutation rollback does not — it stays stale
+    // (`StatusServiceTests.failedSaveLeavesHeldReferenceStaleUntilRefetch`,
+    // still passing). No single rule (mutation vs. insert, model type)
+    // predicts all three, so `NoteService.commit()`'s doc comment states the
+    // fact rather than a theory: what a held reference reports after a
+    // failed rollback cannot be predicted, only that the store itself is
+    // always clean. Task 8 must reload on every failure path regardless —
+    // exactly as the brief already prescribes — never on the strength of
+    // which way this assertion happens to go.
     #expect(original.isRedacted == false)
+}
+
+@MainActor
+@Test("a failed redact leaves the store clean, and here the held reference agrees too")
+func redactFailedSaveLeavesTheHeldReferenceClean() throws {
+    let (task, context) = try makeTask()
+    var shouldFail = false
+    let service = NoteService(
+        context: context, now: { origin },
+        save: { context in
+            if shouldFail { throw SaveFailure() }
+            try context.save()
+        })
+
+    let note = try #require(try service.addNote("a mistake", to: task))
+    shouldFail = true
+    let counter = WriteCounter()
+
+    #expect(throws: SaveFailure.self) {
+        try service.redact(note)
+    }
+
+    // Measured against `make test` — this project's only verification
+    // harness (CLAUDE.md §9.5) — not a synthetic single-test probe: run
+    // alone in an otherwise-empty file this same rollback leaves `note`
+    // stale at `isRedacted == true`, matching `StatusService`'s pattern. Run
+    // as part of the full suite, as it always actually runs, it does not —
+    // reproduced identically across repeated full-suite runs. Whatever
+    // decides it is outside this task's scope and outside `NoteService`;
+    // what is asserted here is only what `make test` deterministically
+    // shows. See `NoteService.commit()`'s doc comment: no theory tried
+    // predicts every case, so none is asserted — only "reload regardless."
+    let stored = try allEvents(context)
+    #expect(stored.count == 1)
+    #expect(try #require(stored.first).isRedacted == false)
+    #expect(note.isRedacted == false)
+    #expect(counter.posts == 0)
 }
