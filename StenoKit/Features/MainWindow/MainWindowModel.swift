@@ -149,12 +149,11 @@ public final class MainWindowModel: MainWindowActions {
         groups.lazy.flatMap(\.tasks).first { $0.id == id }
     }
 
+    /// The redaction exclusion lives in `EventQueries`, not here: §3.3 hides a
+    /// redacted event from summaries too, so M2-01's gathering and M3-03's
+    /// prompt read the same rule rather than each restating it.
     private func fetchEvents(forTaskID id: UUID) -> [Event]? {
-        let descriptor = FetchDescriptor<Event>(
-            predicate: #Predicate { $0.taskID == id && !$0.isRedacted },
-            sortBy: [SortDescriptor(\.timestamp, order: .reverse)]
-        )
-        return fetchOrNil(descriptor, "load the timeline")
+        fetchOrNil(EventQueries.timeline(forTaskID: id), "load the timeline")
     }
 
     /// Fetch, or surface the failure. A failed fetch must not look like an
