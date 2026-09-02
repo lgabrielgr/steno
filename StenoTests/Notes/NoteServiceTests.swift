@@ -83,3 +83,28 @@ func extractionRunsOverNoteBodiesAndDedupes() throws {
     try service.addNote("still on PAY-421, nearly done", to: task)
     #expect(task.sourceRefs?.count == 1)
 }
+
+@MainActor
+@Test("a failed save leaves no event, no ref, and no post")
+func addNoteFailedSaveRollsBack() throws {
+    let (task, context) = try makeTask()
+    let counter = WriteCounter()
+    let service = NoteService(
+        context: context, now: { withinWindow }, save: { _ in throw SaveFailure() })
+
+    #expect(throws: SaveFailure.self) {
+        try service.addNote("fixed PAY-42", to: task)
+    }
+
+    // Refetched from the service's OWN context, not read off `task` or its
+    // `sourceRefs` relationship. After `rollback()` a held reference still
+    // reports the rejected value; it is the fetch that refreshes it. Reading
+    // `task.sourceRefs` here would assert SwiftData's staleness and call it a
+    // passing rollback — see `StatusServiceTests.statusServiceFailedSaveRollsBack`.
+    #expect(try allEvents(context).isEmpty)
+    // The half no other test in the plan covers: `addNote` is the only writer
+    // that inserts a `SourceRef` alongside an `Event`, and a rollback that
+    // undid the event but left the ref behind would be a silent leak.
+    #expect(try context.fetch(FetchDescriptor<SourceRef>()).isEmpty)
+    #expect(counter.posts == 0)
+}
