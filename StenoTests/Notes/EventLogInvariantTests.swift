@@ -39,7 +39,9 @@ func appendOnlyHoldsAcrossEveryWritePath() throws {
     try statuses.setStatus(.inProgress, on: task)
     let note = try #require(try notes.addNote("first note about PAY-421", to: task))
     try statuses.setStatus(.blocked, on: task)
-    try statuses.addBlockedReason("waiting on infra", to: task)
+    try expectingAppendOnly(context) {
+        try statuses.addBlockedReason("waiting on infra", to: task)
+    }
     let reason = try #require(try allEvents(context).first { $0.kind == .blockedReason })
 
     clock = withinWindow
@@ -101,6 +103,14 @@ func theInvariantGuardCatchesDeletion() throws {
 func theInvariantGuardAcceptsARedaction() throws {
     // `EventSnapshot` omits `isRedacted`, so the one permitted write is
     // invisible to the comparison and passes cleanly.
+    //
+    // This only pins the *shape* of that permission: two independently-built
+    // snapshots with no `isRedacted` field are equal by construction whenever
+    // their other fields match, so this test cannot exercise an actual flip
+    // from `false` to `true` — nor could it, without the setter `Event`'s doc
+    // comment forbids. A real redaction surviving the guard is covered by
+    // `appendOnlyHoldsAcrossEveryWritePath`, which drives `notes.redact`
+    // through `expectingAppendOnly` against a live, fetched context.
     try expectAppendOnly(
         before: sampleSnapshot(body: "same"), after: sampleSnapshot(body: "same"))
 }
