@@ -12,6 +12,8 @@ struct MainWindowView: View {
         _model = State(initialValue: MainWindowModel(context: container.mainContext))
     }
 
+    @Environment(\.openWindow) private var openWindow
+
     var body: some View {
         NavigationSplitView {
             SidebarView(model: model)
@@ -21,6 +23,14 @@ struct MainWindowView: View {
             TaskDetailView(model: model, taskID: model.selectedTaskID)
         }
         .frame(minWidth: 900, minHeight: 520)
+        // Both halves of what `MainWindowReveal` needs: a way to find this
+        // window while it exists, and a way to reopen it once the user has
+        // closed it. The popover is hosted outside the scene tree, so it has
+        // no environment of its own to read `openWindow` from.
+        .background(WindowTagger(identifier: MainWindowReveal.identifier))
+        .onAppear {
+            MainWindowReveal.reopen = { openWindow(id: MainWindowReveal.sceneID) }
+        }
         .focusedSceneValue(\.mainWindowActions, model)
         .safeAreaInset(edge: .top) {
             // An inline row, not an alert: a modal interruption during capture

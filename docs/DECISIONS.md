@@ -772,6 +772,135 @@ would ever pass it, and it would ship as an unused argument.
 **Alternatives:** the service taking the reason inline (dead parameter); no UI at
 all until M1-06 (ships a capability nothing exercises).
 
+### D-037 — The popover lists every IN-PROGRESS task, no date filter
+**2026-08-31** · M1-04 · **Status:** accepted — closes O-6; `REQUIREMENTS.md` FR-1.2 points here as of v1.13
+
+`MenuBarModel.reload()` lists every task with `status == .inProgress`, across every non-archived
+project, newest `statusChangedAt` first. There is no "today" or "this project" filter.
+
+**Why:** a task started Monday and still running Thursday is exactly what gets reported at
+stand-up, so a date filter would hide the thing the popover exists to surface. Scoping to "the
+selected project" has no meaning here either — the popover has no project selection of its own,
+and the point of a menu-bar-wide view is that it is not scoped to whatever the main window
+happens to have open. D18 caps the whole dataset under 20 live tasks, so "every project" costs
+nothing to render and stays glanceable.
+**Alternatives:** filtering to tasks transitioned today (loses Monday's still-running task, the
+case that matters most); scoping to the main window's currently-selected project (the popover
+would then depend on main-window state it is built to work without — `MenuBarModel` explicitly
+does not reach for `MainWindowModel`).
+
+### D-038 — The menu bar activates Steno; the capture panel does not
+**2026-08-31** · M1-04 · **Status:** accepted
+
+`MenuBarController.show()` calls `NSApp.activate(ignoringOtherApps: true)` before showing the
+popover. `CapturePanel` (M1-03, D-030) deliberately never does.
+
+**Why:** the two surfaces are opposites. The hotkey panel appears *over* whatever app the user is
+already in — activating would visibly steal their place, which D-030 rejects outright. The menu
+bar item is reached only by the user first leaving their app to look at the menu bar, so there is
+no place left to steal; activation is what then lets the popover's window become key and focuses
+the field without an extra click, which §1.1's capture-latency budget would otherwise spend on
+one. Knowingly contradicts `CapturePanel`'s "do not activate" posture — recorded here so a future
+reader sees an argument, not an inconsistency.
+**Alternatives:** never activating, matching `CapturePanel` (the popover could show without
+becoming key, leaving the field unfocused and reintroducing the click §1.1 forbids).
+
+### D-039 — Blocking from the popover commits without offering the reason
+**2026-08-31** · M1-04 · **Status:** accepted
+
+`MenuBarModel.setStatus` calls `StatusService.setStatus` directly and never opens D-036's
+blocked-reason sheet, even when the transition is into `.blocked`.
+
+**Why:** §3.3 already makes the reason optional, so skipping it loses nothing required. A sheet
+would have to dismiss the `.transient` `NSPopover` that spawned it — two floating pieces of UI
+fighting over the same dismissal — and the main window's detail pane still offers the reason for
+anyone who wants to add one after the fact.
+**Alternatives:** opening the sheet over the popover (the dismissal conflict above); dropping
+BLOCKED from the popover's inline menu entirely (removes a status the user may legitimately want
+to set from the surface they use most).
+
+### D-040 — The main window becomes a `Window` scene, and the app outlives it
+**2026-08-31** · M1-04 · **Status:** accepted
+
+`StenoApp.body` declares `Window("Steno", id: MainWindowReveal.sceneID)` instead of a
+`WindowGroup`, and `AppDelegate.applicationShouldTerminateAfterLastWindowClosed` returns `false`.
+
+**Why:** M1-04's first acceptance criterion — the icon persists and is present without the main
+window open — is a claim about process lifetime, so it has to be stated somewhere rather than
+left to a framework default that macOS is free to change. `Window` is also what makes "Open Main
+Window" able to *reopen* a closed window at all: a `WindowGroup` answers a reopen request by
+minting a second instance, which is wrong for a window that is already effectively
+single-instance (`MainWindowCommands` already replaces `.newItem`).
+**Alternatives:** `WindowGroup` (the second-instance problem above); leaving
+`applicationShouldTerminateAfterLastWindowClosed` at its default `true` (the app would quit on
+⌘W, taking the menu bar icon with it — the opposite of the criterion this task owns).
+
+### D-041 — Launch at login ships as a hook with no caller
+**2026-08-31** · M1-04 · **Status:** accepted
+
+`StenoKit/Support/LoginItem.swift` ships a `LoginItem` protocol and `SystemLoginItem`, its
+`SMAppService`-backed implementation. Nothing in the running app calls `enable()`.
+
+**Why:** FR-6 owns the launch-at-login *setting*, and places it in M1-08's Settings Capture pane.
+Registering the user for launch-at-login without their asking is a product decision this task has
+no standing to make unilaterally. Shipping the type now, unused, means M1-08 adds a pane over an
+existing capability rather than designing the type under its own deadline — the same posture
+`QuickCaptureModel.rebind` already established for a different capability.
+**Alternatives:** waiting for M1-08 to add both the type and the pane together (defers no risk,
+but means M1-08 designs a `SMAppService` wrapper from scratch instead of wiring a UI to one
+already reviewed); calling `enable()` unconditionally at launch (the unrequested registration
+this decision exists to avoid).
+**What is not tested:** the real `SystemLoginItem` — `LoginItemTests.swift` exercises only a fake
+double, because `SMAppService.mainApp.register()` from an unhosted headless test bundle would be
+a side effect on the developer's own machine, registering the test runner's bundle for login.
+
+### D-042 — The status picker's order is named, not inherited from the enum
+**2026-08-31** · M1-04 · **Status:** accepted
+
+`Status.menuOrder` (`StenoKit/Features/MainWindow/Status+Display.swift`) is a named
+`[.todo, .inProgress, .blocked, .done]`, distinct from `TaskGrouping.order`'s
+`[.inProgress, .blocked, .todo, .done]`. `StatusMenuItems` renders `menuOrder`, and both the main
+window's `StatusControl` and M1-04's popover row menu render `StatusMenuItems`.
+
+**Why:** `TaskGrouping.order` already refuses to let a list's section order fall out of `Status`'s
+declaration order, on the grounds that reordering the enum for an unrelated reason must not
+silently reorder the user's window. The popover becoming the *second* surface to render
+`StatusMenuItems` is what makes the same argument bite for the picker: an accidental reorder would
+now move items under the user's cursor in two places at once instead of one. The two orders are
+deliberately different — `TaskGrouping.order` answers "what to look at first" for a list of
+sections, `menuOrder` reads best in workflow order for a picker — and naming both, rather than
+letting the picker borrow the list's order, is what makes that difference visible instead of
+accidental.
+**Alternatives:** `Status.allCases` (reintroduces the coupling `TaskGrouping.order` already
+rejected); reusing `TaskGrouping.order` for the picker too (conflates "read order" with "workflow
+order", which happen to be needs that differ).
+
+### D-043 — `Esc` discards the panel's draft and keeps the popover's
+**2026-09-01** · M1-04 · **Status:** accepted
+
+The two surfaces that embed `CaptureFieldView` give `Esc` opposite meanings, deliberately.
+`QuickCaptureController` passes an `onDismiss` that calls `field.reset()`
+(`Steno/Features/Capture/QuickCaptureController.swift`), so `Esc` on M1-03's floating panel
+discards the typed line. `MenuBarController` passes an `onDismiss` that only closes the popover
+(`Steno/Features/MenuBar/MenuBarController.swift`), so `Esc` leaves the draft to be found on the
+next open. FR-1.1 says only that `Esc` "dismisses without saving", which does not settle what
+happens to the text.
+
+**Why:** the popover's two dismissals — `Esc` and a stray click — cannot be made to agree on
+discarding without a `willClose` hook. Its `NSPopover` is `.transient`, and AppKit's own
+click-outside dismissal never runs through `onDismiss` — the only hook that covers it is
+`NSPopover.willCloseNotification`, which fires on *every* close. Resetting there would throw away
+a half-typed line whenever the user glanced at another window, which for a capture tool is data
+loss (§1.1). Keeping the draft makes the
+popover's two dismissals agree with each other, which is what a user actually compares. The panel
+has no such constraint and the opposite pull: it is summoned over another app by a chord and
+dismissed straight back into it, so a line cancelled on Monday reappearing at an unrelated chord
+press on Tuesday would be the surprise. D15 asks for one capture *code path*, which both surfaces
+still share literally — it does not ask two different windows to answer a key the same way.
+**Alternatives:** discarding on both (needs the `willClose` reset above, and loses drafts to
+incidental closes); keeping on both (changes M1-03's shipped, tested `Esc` behaviour from inside
+M1-04, which is out of this task's scope and was not the panel's design intent).
+
 ---
 
 ## Open — decided by the task that owns them
@@ -782,7 +911,6 @@ its PR body, and adds an entry above.
 | # | Question | Owning task |
 |---|---|---|
 | O-5 | Where "last-used project" is stored, and its behavior on first ever launch | `M1-02` |
-| O-6 | Does the menu bar popover show in-progress tasks across all projects, or only the selected one? FR-1.2 doesn't say | `M1-04` |
 | O-7 | Whether integration *configuration* (site URLs, MCP definitions minus secrets) is exported by M2.5-01 or added by M4-04/M5-02 | `M2.5-01` |
 | O-8 | How import merges the two mutable boolean flags, `Event.isRedacted` and `StandupReport.isUndone` — §10.1's union-by-UUID default has no rule for them and neither model carries `modifiedAt` | `M2.5-02` |
 | O-9 | Whether the hotkey chord in `UserDefaults` is carried by §10's export | `M2.5-01` |

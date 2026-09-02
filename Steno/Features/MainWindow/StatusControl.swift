@@ -12,9 +12,12 @@ struct StatusMenuItems: View {
     let onSelect: (Status) -> Void
 
     var body: some View {
-        // `id: \.self` because `Status` is not `Identifiable`; it is a raw
-        // `String` enum, so it is `Hashable` for free.
-        ForEach(Status.allCases, id: \.self) { status in
+        // `Status.menuOrder`, not `allCases`: the order the user sees is a
+        // decision, and `TaskGrouping.order` already refuses to inherit one
+        // from the enum's declaration order for the same reason. `id: \.self`
+        // because `Status` is not `Identifiable`; it is a raw `String` enum,
+        // so it is `Hashable` for free.
+        ForEach(Status.menuOrder, id: \.self) { status in
             Button {
                 onSelect(status)
             } label: {

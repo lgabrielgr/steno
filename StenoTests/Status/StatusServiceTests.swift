@@ -22,8 +22,11 @@ private func makeTask(_ status: Status = .todo) throws -> (TaskItem, ModelContex
 @MainActor
 private func events(_ context: ModelContext, _ kind: EventKind) throws -> [Event] {
     // Filtered in memory rather than in a `#Predicate`: D18 caps the dataset,
-    // and a predicate over an enum-typed property is the kind of thing that
-    // compiles and then fails at fetch time.
+    // and a predicate over an enum-typed property does not compile at all, in
+    // either spelling — `$0.kind == .statusChanged` gives "Member access
+    // without an explicit base is not supported in this predicate", and
+    // `$0.kind == EventKind.statusChanged` gives "key path cannot refer to
+    // enum case".
     try context.fetch(FetchDescriptor<Event>()).filter { $0.kind == kind }
 }
 

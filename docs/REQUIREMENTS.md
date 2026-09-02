@@ -1,12 +1,13 @@
 # REQUIREMENTS.md — Steno
 
-**Status:** Draft v1.12
-**Date:** 2026-08-27
+**Status:** Draft v1.13
+**Date:** 2026-09-01
 **Audience:** Engineering agents in future sessions. This document is the source of truth for task generation and implementation.
 
 > **Steno** — a stenographer records what was said, verbatim, without editorializing. That is the product in one word: an accurate record of what you did, lightly organized, never embellished.
 
 **Changelog**
+- *v1.13* — FR-1.2's "today's in-progress tasks" now points at `DECISIONS.md` D-037, which resolved it to *every* in-progress task with no date filter. A task started Monday and still running Thursday is exactly what gets reported at stand-up, so a date filter would hide the case the popover exists to surface. The wording is unchanged and the pointer carries the reading, because FR-1.2 read on its own would have a later reader implement the filter that M1-04 deliberately does not have. Found while implementing M1-04.
 - *v1.12* — Corrected §9.3. It claimed FR-1's global hotkey requires Accessibility permission, granted by TCC against the code signature. It does not: `RegisterEventHotKey` is not TCC-gated, unlike the `NSEvent` global monitor and `CGEventTap` alternatives. The stable-signing conclusion is unchanged and its reasoning is now correct. Left uncorrected, M1-03 would have shipped a permissions subsystem for a state that cannot occur, plus a banner on the launch path of a feature whose whole argument is that it interrupts nothing. Found while implementing M1-03.
 - *v1.11* — FR-3 gains project editing. FR-1.4 routes captures on `Project.jiraProjectKeys`, but no requirement granted any way to set them: projects are created with `[]` and nothing could change it, so auto-routing and its chip would have shipped unreachable in the running app. Found while implementing M1-02, which adds the editor.
 - *v1.10* — Corrected §3.4's `identifier` column. "PR number" was not a viable identifier: §3.4 makes a ref unique per `(taskID, kind, identifier)`, so two pull requests numbered 421 in different repositories collapse into one row and the second reference is silently dropped. The identifier is now required to be unique within its kind, and GitHub's is repo-qualified (`acme/api#421`). Found while designing M1-01.
@@ -209,7 +210,7 @@ The single most important feature. Three entry points, one shared code path.
 
 **FR-1.1 — Global hotkey.** A system-wide hotkey (default `⌥Space`, user-configurable, must detect and warn on conflicts) opens a small floating window above all apps. Text field is focused on open. `Return` saves and dismisses. `Esc` dismisses without saving.
 
-**FR-1.2 — Menu bar item.** A persistent menu bar icon. Clicking opens a popover with: the quick-add field, today's in-progress tasks with inline status toggles, and a "Open Main Window" action.
+**FR-1.2 — Menu bar item.** A persistent menu bar icon. Clicking opens a popover with: the quick-add field, today's in-progress tasks with inline status toggles, and a "Open Main Window" action. "Today's" is every in-progress task, with no date filter — see `DECISIONS.md` D-037 for why.
 
 **FR-1.3 — Main window.** Full task management UI (see FR-3).
 
