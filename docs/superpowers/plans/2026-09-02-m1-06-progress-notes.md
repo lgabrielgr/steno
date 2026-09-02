@@ -68,9 +68,11 @@ Four design changes, found by building the code rather than describing it.
 
 Two measured facts to carry into implementation:
 
-- **`context.rollback()` leaves the held object stale.** After a failed correction the in-memory
-  `Event` still reports `isRedacted == true` while a fetch of the same row returns `false`, and the
-  replacement insert is discarded. Verified by running it. This is why every failure path reloads.
+- **What `context.rollback()` leaves in a held object is not dependable.** Measured twice during
+  implementation, with contradictory, each-internally-deterministic results that tracked test-suite
+  composition rather than the code under test. What *is* dependable: the store is left clean and the
+  replacement insert discarded. No test asserts the held reference, and no comment offers a mechanism
+  for it. This is why every failure path reloads — a caller cannot know which answer it got.
 - **`.onKeyPress(KeyEquivalent("n"))` typechecks at the macOS 14.0 floor.**
 
 ---
@@ -1395,7 +1397,8 @@ doc comment forbids."
 lets Task 8 declare it a `let` in `init` rather than an optional assigned after `self` exists.
 
 Both `commit` and `redact` return **whether the window must refetch** — `true` after a write *and
-after a failure*, because `rollback()` leaves the held `Event` stale.
+after a failure*, because what a rollback leaves in the objects the window still holds is not
+dependable, so the window must not reason about it.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -1774,10 +1777,11 @@ public final class NoteComposerModel {
     /// Write the draft. Never throws — a composer has nowhere to propagate to.
     ///
     /// Returns whether the window must refetch. `true` after a write **and
-    /// after a failure**: `rollback()` keeps a refused redaction off disk but
-    /// leaves the in-memory `Event` reporting `isRedacted == true`, and only a
-    /// refetch restores it. Skipping the reload there hides a note the store
-    /// still has.
+    /// after a failure**: a rollback keeps the refused write off disk, but what
+    /// it leaves in the `Event` objects this window still holds is not
+    /// dependable — measured, and it varied. Refetching is the only state worth
+    /// trusting, so the failure path asks for one rather than reasoning about
+    /// what survived.
     @discardableResult
     public func commit(on task: TaskItem?, in events: [Event]) -> Bool {
         guard let task, canCommit else { return false }
@@ -1878,8 +1882,10 @@ window both keep the text, because in neither case did the user say to throw
 it away.
 
 commit and redact return whether the window must refetch - true after a write
-AND after a failure. rollback() keeps a refused write off disk but leaves the
-held Event reporting the rejected isRedacted, and only a refetch restores it."
+AND after a failure. A rollback keeps the refused write off disk, but what it
+leaves in the Event objects the window still holds is not dependable - measured,
+and it varied with test composition rather than with the code. Refetching is the
+only state worth trusting."
 ```
 
 ---
