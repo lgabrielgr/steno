@@ -1,6 +1,23 @@
 import Foundation
 import SwiftData
 
+/// What an attempted correction did (FR-2).
+///
+/// Four cases rather than a `Bool` because the UI's response differs in each:
+/// expiry keeps the user's draft and offers to append it, `notCorrectable` is a
+/// programming error the UI should never have offered, and `unchanged` is a
+/// no-op worth no message at all.
+public enum CorrectionOutcome: Equatable, Sendable {
+    /// The original was redacted and a replacement appended.
+    case corrected
+    /// Blank, or byte-identical to the original. Nothing was written.
+    case unchanged
+    /// Past FR-2's window. Nothing was written; the caller still holds the text.
+    case windowExpired
+    /// Not a user-authored kind, or already redacted. Nothing was written.
+    case notCorrectable
+}
+
 /// The one path for notes and their correction (FR-2, §3.3).
 ///
 /// A sibling of `StatusService`, not an extension of it: `addBlockedReason`
@@ -53,6 +70,60 @@ public struct NoteService {
         insertNewRefs(from: trimmed, on: task)
         try commit()
         return event
+    }
+
+    /// FR-2's grace-period "edit", which is not an edit.
+    ///
+    /// Redacts `event` and appends a **new** row carrying the corrected body,
+    /// the **original's timestamp**, and the **original's kind**.
+    ///
+    /// The timestamp is FR-2's own requirement: it keeps the note where the
+    /// user expects it in the timeline instead of jumping to the top
+    /// mid-correction. It also means the window does not restart — eligibility
+    /// measures from `event.timestamp`, so no chain of corrections reaches past
+    /// five minutes from the first write.
+    ///
+    /// **The kind is a deliberate widening of FR-2**, which says "a new `note`
+    /// event" because it predates `blockedReason` being correctable. Hard-coding
+    /// `.note` would relabel a corrected blocked reason, changing what §3.3 says
+    /// the row means and what M2-02 renders it under.
+    public func correct(
+        _ event: Event, to text: String, on task: TaskItem
+    ) throws -> CorrectionOutcome {
+        guard event.kind.isUserAuthored, !event.isRedacted else { return .notCorrectable }
+        guard
+            NoteCorrection.isCorrectable(
+                kind: event.kind, timestamp: event.timestamp, isRedacted: event.isRedacted,
+                at: now())
+        else { return .windowExpired }
+
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        // An emptied correction is **not** silently converted into a redaction.
+        // Making the destructive, one-way operation the outcome of clearing a
+        // text field is exactly the surprise `Event` has no `unredact()` to
+        // recover from.
+        guard !trimmed.isEmpty, trimmed != event.body else { return .unchanged }
+
+        event.redact()
+        context.insert(
+            Event(
+                taskID: event.taskID, timestamp: event.timestamp, kind: event.kind, body: trimmed))
+        insertNewRefs(from: trimmed, on: task)
+        try commit()
+        return .corrected
+    }
+
+    /// §3.3's soft delete: hide the event, retain the row.
+    ///
+    /// Returns whether it wrote. `false` rather than a throw for an ineligible
+    /// event matches `StatusService.setStatus`'s no-op contract — nothing
+    /// written, nothing for the caller to reload.
+    @discardableResult
+    public func redact(_ event: Event) throws -> Bool {
+        guard event.kind.isUserAuthored, !event.isRedacted else { return false }
+        event.redact()
+        try commit()
+        return true
     }
 
     /// FR-1.5 over a note body, deduped against what the task already has.
