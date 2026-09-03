@@ -43,6 +43,22 @@ struct TaskListView: View {
                 }
             }
         }
+        // FR-2's "one keystroke": bare `N`, scoped to this column.
+        //
+        // **Not a menu key equivalent.** The main menu gets first crack at
+        // key-downs and `NSTextView` does not consume plain characters as key
+        // equivalents, so `N` in the Task menu would fire while the user typed
+        // "n" into the capture field, the New Task sheet, or the note composer
+        // — the §1.1 degradation this repo forbids. `.onKeyPress` routes
+        // through the responder chain instead, so it fires only while focus is
+        // somewhere in this `Group`'s subtree — the task list, or either
+        // `ContentUnavailableView` — and never while any of those other fields
+        // has it. ⌘⇧A in the Task menu is the discoverable equivalent.
+        .onKeyPress(KeyEquivalent("n")) {
+            guard model.canAddNote else { return .ignored }
+            model.addNoteToSelection()
+            return .handled
+        }
         .navigationSplitViewColumnWidth(min: 260, ideal: 320)
         .toolbar {
             Button {

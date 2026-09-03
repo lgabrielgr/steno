@@ -31,7 +31,16 @@ public final class MainWindowModel: MainWindowActions {
     }
 
     public var selectedTaskID: UUID? {
-        didSet { if selectedTaskID != oldValue { reloadSelectedTaskEvents() } }
+        didSet {
+            guard selectedTaskID != oldValue else { return }
+            // A draft belongs to the task it was typed against. Carrying it
+            // across a selection change would let the next ⌘↩ file one task's
+            // prose on another — and in `.correcting` mode, file a correction
+            // of one task's note as a new note on a different task. The user
+            // navigating away is the discard; see `cancel()`'s third case.
+            noteComposer.cancel()
+            reloadSelectedTaskEvents()
+        }
     }
 
     /// The selected task's timeline, newest first, redacted events excluded.
@@ -59,6 +68,12 @@ public final class MainWindowModel: MainWindowActions {
     /// Which modal is on screen, if any. See `ActiveSheet` for why this is one
     /// optional rather than a `Bool` per sheet.
     public var activeSheet: ActiveSheet?
+
+    /// FR-2's note composer. A `let` built in `init`, holding no reference back
+    /// to this model — its inputs arrive as parameters from
+    /// `MainWindowModel+Notes`, which is what lets it be a `let` at all rather
+    /// than an optional assigned after `self` becomes available.
+    public let noteComposer: NoteComposerModel
 
     /// FR-1.4: a task needs a project to belong to, and this window offers no
     /// way to create one implicitly.
@@ -90,6 +105,8 @@ public final class MainWindowModel: MainWindowActions {
         self.context = context
         self.now = now
         self.save = save
+        self.noteComposer = NoteComposerModel(
+            service: NoteService(context: context, now: now, save: save), now: now)
         reload()
 
         // Registered last, deliberately: `self` may only be captured once
@@ -134,11 +151,16 @@ public final class MainWindowModel: MainWindowActions {
         guard let id = selectedTaskID else {
             selectedTaskEvents = []
             selectedTaskTimelineFailed = false
+            noteComposer.refreshCorrectability(in: [])
             return
         }
         let loaded = fetchEvents(forTaskID: id)
         selectedTaskTimelineFailed = loaded == nil
         selectedTaskEvents = loaded ?? []
+        // FR-2's window is a function of the clock, so this is refreshed on a
+        // timer as well (see `TaskDetailView`) — but it must also be correct
+        // the instant the timeline changes, which is here.
+        noteComposer.refreshCorrectability(in: selectedTaskEvents)
     }
 
     public func project(withID id: UUID) -> Project? {
@@ -149,12 +171,11 @@ public final class MainWindowModel: MainWindowActions {
         groups.lazy.flatMap(\.tasks).first { $0.id == id }
     }
 
+    /// The redaction exclusion lives in `EventQueries`, not here: §3.3 hides a
+    /// redacted event from summaries too, so M2-01's gathering and M3-03's
+    /// prompt read the same rule rather than each restating it.
     private func fetchEvents(forTaskID id: UUID) -> [Event]? {
-        let descriptor = FetchDescriptor<Event>(
-            predicate: #Predicate { $0.taskID == id && !$0.isRedacted },
-            sortBy: [SortDescriptor(\.timestamp, order: .reverse)]
-        )
-        return fetchOrNil(descriptor, "load the timeline")
+        fetchOrNil(EventQueries.timeline(forTaskID: id), "load the timeline")
     }
 
     /// Fetch, or surface the failure. A failed fetch must not look like an
@@ -176,7 +197,7 @@ public final class MainWindowModel: MainWindowActions {
     /// treat "the read failed" as "there is nothing there". See
     /// `createProject(named:)`, where conflating the two mints a project whose
     /// `sortOrder` and colour collide with one already stored.
-    private func fetchOrNil<T: PersistentModel>(
+    func fetchOrNil<T: PersistentModel>(
         _ descriptor: FetchDescriptor<T>,
         _ what: String
     ) -> [T]? {
@@ -231,106 +252,6 @@ public final class MainWindowModel: MainWindowActions {
         }
     }
 
-    // MARK: - Writing
-
-    /// A capture service over this window's context, for the capture sheet.
-    ///
-    /// The view never touches the context itself — it gets a service that
-    /// already holds one, so D-019's rule (no `@Query`, no
-    /// `@Environment(\.modelContext)`) is untouched.
-    public func captureService() -> CaptureService {
-        CaptureService(context: context, now: now, save: save)
-    }
-
-    /// FR-1.4 rung 2, exposed for the capture sheet. See `preferredProjectID`.
-    public var preferredProjectIDForCapture: UUID? { preferredProjectID() }
-
-    public func createProject(named name: String) {
-        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return }
-
-        // The max must run over *all* projects, archived included — `projects`
-        // is the visible set, and if the highest-sortOrder project is
-        // archived, taking the max of the visible set would let the next
-        // project reuse both its order and (via ProjectPalette) its colour.
-        //
-        // Fail closed if that read fails: `[]` would yield order 0 and mint a
-        // project colliding with a stored one, which is the write-side version
-        // of the lie `perform(_:_:)`'s rollback exists to prevent (D-018).
-        // `lastError` is already set by the fetch, so the user sees why.
-        guard let allProjects = fetchOrNil(FetchDescriptor<Project>(), "load your projects") else {
-            return
-        }
-        let order = (allProjects.map(\.sortOrder).max() ?? -1) + 1
-        let stamp = now()
-        perform("create the project") {
-            self.context.insert(
-                Project(
-                    name: trimmed,
-                    colorHex: ProjectPalette.hex(forIndex: order),
-                    sortOrder: order,
-                    modifiedAt: stamp
-                )
-            )
-        }
-    }
-
-    /// Edit a project's name and its Jira key prefixes — what FR-1.4 routes on,
-    /// unreachable before this method (M1-02 design doc §7). Keys arrive
-    /// comma-separated; normalising here keeps `ProjectRouter` typing-agnostic.
-    public func updateProject(id: UUID, name: String, jiraKeys: String) {
-        guard let project = projects.first(where: { $0.id == id }) else { return }
-        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return }
-
-        let keys = Self.normalisedKeys(jiraKeys)
-        let stamp = now()
-        perform("save the project") {
-            project.rename(to: trimmed, at: stamp)
-            project.setJiraProjectKeys(keys, at: stamp)
-        }
-    }
-
-    /// `" pay , BILL,pay,, "` → `["PAY", "BILL"]`. Internal so `@testable
-    /// import` can exercise the rule without a container.
-    static func normalisedKeys(_ raw: String) -> [String] {
-        var seen: Set<String> = []
-        var result: [String] = []
-        for piece in raw.split(separator: ",") {
-            let key = piece.trimmingCharacters(in: .whitespaces).uppercased()
-            guard !key.isEmpty, seen.insert(key).inserted else { continue }
-            result.append(key)
-        }
-        return result
-    }
-
-    /// FR-1.4 rung 2: this surface's own context.
-    ///
-    /// Under "All" the window has no opinion about where a task belongs, so it
-    /// says so with `nil` and the ladder falls through to the last-used
-    /// project — rather than asserting the first project, which is what
-    /// D-021's stand-in did before this task retired it.
-    private func preferredProjectID() -> UUID? {
-        switch selection {
-        case .project(let id): id
-        case .all: nil
-        }
-    }
-
-    /// §3.1: archived projects are hidden, never deleted. There is no delete.
-    public func archive(projectID: UUID) {
-        guard let project = projects.first(where: { $0.id == projectID }) else { return }
-
-        let stamp = now()
-        let saved = perform("archive the project") { project.setArchived(true, at: stamp) }
-
-        // Only after the save is known to have succeeded. `rollback()` can undo
-        // the `isArchived` mutation, but it cannot undo a selection change — so
-        // moving the selection first would leave a failed archive showing "All"
-        // while the project is still in the sidebar.
-        if saved, selection == .project(projectID) { selection = .all }
-    }
-
     // MARK: - MainWindowActions
     //
     // The status actions (`setStatus`, `addBlockedReason`,
@@ -375,7 +296,7 @@ public final class MainWindowModel: MainWindowActions {
     /// Returns whether the save succeeded, so callers can make follow-up state
     /// changes conditional on it — `rollback()` restores the store, not the UI.
     @discardableResult
-    private func perform(_ what: String, _ mutation: () -> Void) -> Bool {
+    func perform(_ what: String, _ mutation: () -> Void) -> Bool {
         mutation()
         var saved = true
         do {

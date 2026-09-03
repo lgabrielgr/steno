@@ -38,6 +38,23 @@ private func createTask(_ model: MainWindowModel, titled title: String) throws -
     return task
 }
 
+/// The id of the task with `title`, for tests that juggle two of them.
+/// Not named `taskID`: a local `let taskID` elsewhere in this file would
+/// shadow it, and Swift 6 reports that as "failed to produce diagnostic for
+/// expression" rather than as the shadowing it is.
+@MainActor
+private func idOfTask(in model: MainWindowModel, titled title: String) -> UUID? {
+    model.groups.flatMap(\.tasks).first { $0.title == title }?.id
+}
+
+/// Refetched from the store, never read off objects the model still holds:
+/// what a rollback leaves in memory is not dependable (see
+/// `MainWindowModel+Notes`), so only the store settles who owns a note.
+@MainActor
+private func notes(_ context: ModelContext, on subject: UUID) throws -> [Event] {
+    try context.fetch(EventQueries.timeline(forTaskID: subject)).filter { $0.kind == .note }
+}
+
 @MainActor
 @Test("a new task lands in the TODO group")
 func createdTaskIsTodo() throws {
@@ -255,4 +272,57 @@ func deselectingClearsWithoutFailure() throws {
     // renders different copy for each, so the distinction has to hold.
     #expect(model.selectedTaskEvents.isEmpty)
     #expect(!model.selectedTaskTimelineFailed)
+}
+
+@MainActor
+@Test("switching tasks discards a pending draft instead of filing it elsewhere")
+func switchingTasksDiscardsThePendingDraft() throws {
+    let (model, context) = try makeModel()
+    model.createProject(named: "Payments")
+    try createTask(model, titled: "Fix the retry handler")
+    try createTask(model, titled: "Chase the flaky test")
+    let author = try #require(idOfTask(in: model, titled: "Fix the retry handler"))
+    let bystander = try #require(idOfTask(in: model, titled: "Chase the flaky test"))
+
+    model.selectedTaskID = author
+    model.noteComposer.text = "Repro'd the race"
+    model.selectedTaskID = bystander
+    model.commitNote()
+
+    // The composer holds no task of its own, so a draft that survived the
+    // selection change would be filed against whatever is selected at ⌘↩.
+    #expect(try notes(context, on: bystander).isEmpty)
+    #expect(try notes(context, on: author).isEmpty)
+    #expect(model.noteComposer.text.isEmpty)
+}
+
+@MainActor
+@Test("switching tasks mid-correction files nothing on the newly selected task")
+func switchingTasksMidCorrectionFilesNothing() throws {
+    let (model, context) = try makeModel()
+    model.createProject(named: "Payments")
+    try createTask(model, titled: "Fix the retry handler")
+    try createTask(model, titled: "Chase the flaky test")
+    let author = try #require(idOfTask(in: model, titled: "Fix the retry handler"))
+    let bystander = try #require(idOfTask(in: model, titled: "Chase the flaky test"))
+
+    model.selectedTaskID = author
+    model.noteComposer.text = "Repro'd the race"
+    model.commitNote()
+    let note = try #require(model.selectedTaskEvents.first { $0.kind == .note })
+    model.beginNoteCorrection(of: note.id)
+    model.noteComposer.text = "Repro'd the race, it's in the retry handler"
+
+    model.selectedTaskID = bystander
+
+    // Two presses, because a correction carried across the change is worse
+    // than a plain draft: the first ⌘↩ cannot find the event in this task's
+    // timeline and drops to adding, and the second files the other task's
+    // corrected prose here as a new note.
+    model.commitNote()
+    model.commitNote()
+
+    #expect(try notes(context, on: bystander).isEmpty)
+    #expect(try notes(context, on: author).map(\.body) == ["Repro'd the race"])
+    #expect(model.noteComposer.mode == .adding)
 }

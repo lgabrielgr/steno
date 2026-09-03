@@ -9,8 +9,8 @@ import SwiftUI
 /// otherwise re-declare its own — the divergence the task file warns about.
 ///
 /// **Extending this is the whole point.** M1-05 added "Cycle Status" and
-/// "Mark Blocked"; M1-06 adds "Add Note": one method on `MainWindowActions`,
-/// one `Button` here.
+/// "Mark Blocked"; M1-06 added "Add Note" — one `Button` here, against one
+/// method and one gating property on `MainWindowActions`.
 struct MainWindowCommands: Commands {
     @FocusedValue(\.mainWindowActions) private var actions: (any MainWindowActions)?
 
@@ -41,6 +41,13 @@ struct MainWindowCommands: Commands {
             Button("Mark Blocked") { actions?.markSelectionBlocked() }
                 .keyboardShortcut("b", modifiers: [.command, .shift])
                 .disabled(actions?.canChangeStatus != true)
+
+            // FR-2's note entry, reachable from anywhere in the window. The
+            // bare `N` the requirement suggests lives on the task list instead
+            // — see `TaskListView` for why it cannot be a menu key equivalent.
+            Button("Add Note") { actions?.addNoteToSelection() }
+                .keyboardShortcut("a", modifiers: [.command, .shift])
+                .disabled(actions?.canAddNote != true)
         }
 
         // FR-3 lists "switch project" among the actions needing a shortcut,

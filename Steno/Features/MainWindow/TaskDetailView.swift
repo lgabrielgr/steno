@@ -1,3 +1,4 @@
+import Combine
 import StenoKit
 import SwiftUI
 
@@ -10,8 +11,12 @@ import SwiftUI
 /// (D-033).
 ///
 /// The timeline is not empty, though the task file said it would be: §3.3
-/// requires a `created` event on every task, so there is always exactly one
-/// row here today. M1-06 adds note entry, the correction window, and redaction.
+/// requires a `created` event on every task, so there is always at least one
+/// row here. M1-06 added the rest of what this pane shows: `NoteComposerView`
+/// above the timeline for FR-2's note entry, `TimelineRowView` per row for the
+/// correction and redaction affordances, and the timer below, which re-asks
+/// which rows are still correctable so the "Correct" affordance disappears
+/// when FR-2's five-minute window closes on the clock.
 struct TaskDetailView: View {
     let model: MainWindowModel
     let taskID: UUID?
@@ -28,6 +33,9 @@ struct TaskDetailView: View {
                     }
 
                     Divider()
+
+                    // FR-2's note entry, above the timeline it writes into.
+                    NoteComposerView(composer: model.noteComposer) { model.commitNote() }
 
                     Text("Timeline")
                         .font(.headline)
@@ -53,18 +61,29 @@ struct TaskDetailView: View {
                         .foregroundStyle(.secondary)
                     } else {
                         ForEach(events) { event in
-                            VStack(alignment: .leading, spacing: 2) {
-                                Text(event.body)
-                                Text(event.timestamp, format: .dateTime)
-                                    .font(.caption)
-                                    .foregroundStyle(.secondary)
-                            }
-                            .frame(maxWidth: .infinity, alignment: .leading)
+                            TimelineRowView(
+                                event: event,
+                                isCorrectable: model.noteComposer.correctableEventIDs.contains(
+                                    event.id),
+                                onCorrect: { model.beginNoteCorrection(of: event.id) },
+                                onRedact: { model.redactEvent(event.id) }
+                            )
                         }
                     }
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(20)
+            }
+            // FR-2's window closes on the clock, not on user action, so
+            // something has to tick for the "Correct" affordance to vanish.
+            // A Combine publisher rather than a `Timer` on the model: it is
+            // owned by the view that needs it and dies with it, so there is no
+            // lifetime to manage — and in Swift 6 a `@MainActor` class cannot
+            // invalidate a timer from its own nonisolated `deinit` anyway.
+            // The recompute it drives is pure and unit-tested; only this
+            // scheduling is not.
+            .onReceive(Timer.publish(every: 15, on: .main, in: .common).autoconnect()) { _ in
+                model.refreshNoteCorrectability()
             }
         } else {
             ContentUnavailableView("No task selected", systemImage: "sidebar.right")

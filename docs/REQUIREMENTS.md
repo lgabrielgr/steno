@@ -1,12 +1,13 @@
 # REQUIREMENTS.md — Steno
 
-**Status:** Draft v1.13
-**Date:** 2026-09-01
+**Status:** Draft v1.14
+**Date:** 2026-09-02
 **Audience:** Engineering agents in future sessions. This document is the source of truth for task generation and implementation.
 
 > **Steno** — a stenographer records what was said, verbatim, without editorializing. That is the product in one word: an accurate record of what you did, lightly organized, never embellished.
 
 **Changelog**
+- *v1.14* — FR-2's redact-and-reappend now says the replacement is "a new event **of the same kind**" rather than "a new `note` event". FR-2 was written when `note` was the only correctable kind; M1-05 then added `blockedReason`, which the user also types free-hand and can therefore mistype. Read literally, the old wording relabelled a corrected blocked reason as a note — changing what the row *means*, not just what it says, and losing the fact that the prose was a blocking explanation from every timeline and report that reads `kind`. The redact-and-reappend mechanism, the original timestamp, and the append-only invariant are all unchanged. Found while implementing M1-06; the implementation choice is `DECISIONS.md` D-046, which points here.
 - *v1.13* — FR-1.2's "today's in-progress tasks" now points at `DECISIONS.md` D-037, which resolved it to *every* in-progress task with no date filter. A task started Monday and still running Thursday is exactly what gets reported at stand-up, so a date filter would hide the case the popover exists to surface. The wording is unchanged and the pointer carries the reading, because FR-1.2 read on its own would have a later reader implement the filter that M1-04 deliberately does not have. Found while implementing M1-04.
 - *v1.12* — Corrected §9.3. It claimed FR-1's global hotkey requires Accessibility permission, granted by TCC against the code signature. It does not: `RegisterEventHotKey` is not TCC-gated, unlike the `NSEvent` global monitor and `CGEventTap` alternatives. The stable-signing conclusion is unchanged and its reasoning is now correct. Left uncorrected, M1-03 would have shipped a permissions subsystem for a state that cannot occur, plus a banner on the launch path of a feature whose whole argument is that it interrupts nothing. Found while implementing M1-03.
 - *v1.11* — FR-3 gains project editing. FR-1.4 routes captures on `Project.jiraProjectKeys`, but no requirement granted any way to set them: projects are created with `[]` and nothing could change it, so auto-routing and its chip would have shipped unreachable in the running app. Found while implementing M1-02, which adds the editor.
@@ -234,7 +235,7 @@ Create `SourceRef` records automatically. **No special syntax is required from t
 - Adding a note appends a `note` event with the current timestamp.
 - Notes are visible as a reverse-chronological timeline on the task.
 - Notes are **not editable** after a grace period of 5 minutes (typo window). After that, only redaction is available.
-- **The grace-period "edit" is not a mutation.** It is implemented as redact-and-reappend: set `isRedacted` on the original event and append a new `note` event carrying the corrected body. The append-only invariant (§3.3, §13) therefore has **no exceptions** anywhere in the system — no code path ever writes to an existing `Event` row except to flip `isRedacted`. The UI may present this as ordinary editing; the storage layer must not implement it as such.
+- **The grace-period "edit" is not a mutation.** It is implemented as redact-and-reappend: set `isRedacted` on the original event and append a new event **of the same kind**, carrying the corrected body. The append-only invariant (§3.3, §13) therefore has **no exceptions** anywhere in the system — no code path ever writes to an existing `Event` row except to flip `isRedacted`. The UI may present this as ordinary editing; the storage layer must not implement it as such.
 - The reappended event should carry the *original* timestamp, not the correction's, so the timeline doesn't reorder under the user mid-correction.
 - Note entry must be reachable in one keystroke from a selected task (suggested: `N`).
 
