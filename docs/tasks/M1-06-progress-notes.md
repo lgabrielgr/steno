@@ -36,11 +36,14 @@ window implemented as redaction rather than mutation.
       original timestamp — so the timeline does not reorder under the user mid-correction.
 - [x] After 5 minutes, editing is unavailable and only redaction is offered.
 - [x] Redacted events are hidden from the timeline and from summaries, but the rows still exist.
-- [ ] `N` (or the chosen key) opens note entry for the selected task.
+- [x] `N` (or the chosen key) opens note entry for the selected task.
 
-Criteria 1–5 are ticked against named tests, listed below. Criterion 6 stays open: it is GUI
-behaviour, no agent in this environment can drive the GUI, and `.onKeyPress` scoping is precisely
-the kind of thing that typechecks and still misbehaves. See **Manual verification**.
+Criteria 1–5 are ticked against named tests, listed below. **Criterion 6 was ticked by the user's
+manual pass on 2026-09-03**, not by a test — no agent in this environment can drive the GUI, and
+`.onKeyPress` scoping is precisely the kind of thing that typechecks and still misbehaves. The
+hypothesis that `List`'s type-select would swallow the keystroke did not hold: bare `N` focuses the
+composer, and it does not fire while typing "n" into the capture field, the New Task sheet, or the
+composer itself. See **Manual verification**.
 
 **1 — Adding a note appends a `note` event; the timeline shows it newest-first.**
 `NoteServiceTests.addingANoteAppendsOneEvent` pins the append: one row, `kind == .note`, the body
@@ -105,7 +108,11 @@ GUI automation is unavailable in this environment, so everything below needs a p
 `Steno/` is covered by any test** (D-010) — the whole SwiftUI layer's automated evidence is that it
 compiles and lints. Run `make run` and work down the list; it is ordered to find problems fastest.
 
-Item 1 comes first because it decides whether acceptance criterion 6 is met at all.
+**Run 2026-09-03 by the user: all six items passed**, plus the two closing questions. One cosmetic
+defect was found and fixed in the same pass — the placeholder's `.padding(.top, 8)` sat it 8pt below
+the insertion point, so the caret floated above the words it was meant to precede.
+
+Item 1 came first because it decided whether acceptance criterion 6 was met at all.
 
 1. **Does bare `N` fire at all?** `.onKeyPress` is attached to the task column's outer `Group`
    (`TaskListView.swift:57`), but the focused view is the `List`, which on macOS is

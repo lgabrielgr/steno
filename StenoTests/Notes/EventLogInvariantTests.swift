@@ -35,10 +35,20 @@ func appendOnlyHoldsAcrossEveryWritePath() throws {
     let notes = NoteService(context: context, now: { clock })
     let statuses = StatusService(context: context, now: { clock })
 
-    // A log carrying one of every kind this milestone can produce.
-    try statuses.setStatus(.inProgress, on: task)
-    let note = try #require(try notes.addNote("first note about PAY-421", to: task))
-    try statuses.setStatus(.blocked, on: task)
+    // A log carrying one of every kind this milestone can produce. The seeding
+    // writes are guarded too: `created` already exists by this point, so each
+    // has a prior row it could corrupt, and the test's claim is *every* write
+    // path — not every write method sampled once somewhere.
+    try expectingAppendOnly(context) {
+        try statuses.setStatus(.inProgress, on: task)
+    }
+    try expectingAppendOnly(context) {
+        _ = try notes.addNote("first note about PAY-421", to: task)
+    }
+    let note = try #require(try allEvents(context).first { $0.kind == .note })
+    try expectingAppendOnly(context) {
+        try statuses.setStatus(.blocked, on: task)
+    }
     try expectingAppendOnly(context) {
         try statuses.addBlockedReason("waiting on infra", to: task)
     }

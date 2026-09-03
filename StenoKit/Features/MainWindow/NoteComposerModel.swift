@@ -84,7 +84,16 @@ public final class NoteComposerModel {
                 kind: event.kind, timestamp: event.timestamp, isRedacted: event.isRedacted,
                 at: now())
         else {
-            notice = "That note can no longer be corrected — ⌘↩ adds a new note instead."
+            // Deliberately says nothing about what ⌘↩ will do, and deliberately
+            // leaves `mode` alone. This can fire while the composer is already
+            // correcting a *different* event: the user starts correcting X,
+            // then clicks `Correct` on an older row Y whose window has closed.
+            // Promising "⌘↩ adds a new note" would be false in that case —
+            // ⌘↩ would still commit the correction of X — and dropping to
+            // `.adding` to make the promise true would silently abandon the
+            // correction the user is in the middle of. Refusing Y is the whole
+            // job here; X is none of its business.
+            notice = "That note can no longer be corrected."
             return
         }
 
@@ -121,8 +130,17 @@ public final class NoteComposerModel {
 
     /// Write the draft. Never throws — a composer has nowhere to propagate to.
     ///
-    /// Returns whether the window must refetch. `true` after a write **and
-    /// after a failure**: a rollback keeps the refused write off disk, but what
+    /// Returns whether the window must refetch. **`false` only when nothing
+    /// was attempted** — no task, or a draft `canCommit` rejects. Every other
+    /// path returns `true`, including the ones that write nothing: a refusal
+    /// (`.unchanged`, `.windowExpired`, `.notCorrectable`, or the event having
+    /// vanished from the timeline) leaves the store untouched, but the
+    /// composer has just changed what it displays, and `reload()` is idempotent
+    /// — asking for one that was not strictly needed is cheaper than making
+    /// each caller reason about which refusals moved the store.
+    ///
+    /// It is also `true` after a failure: a rollback keeps the refused write
+    /// off disk, but what
     /// it leaves in the `Event` objects this window still holds is not
     /// dependable — measured, and it varied. Refetching is the only state worth
     /// trusting, so the failure path asks for one rather than reasoning about

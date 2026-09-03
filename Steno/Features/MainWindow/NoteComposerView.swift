@@ -30,15 +30,23 @@ struct NoteComposerView: View {
             }
 
             // `TextEditor` has no placeholder of its own, hence the overlay.
+            //
+            // The leading 5 is `NSTextView`'s `lineFragmentPadding`, which is
+            // what insets the real text from the box's edge. There is no
+            // matching top inset — the first line starts flush — so the
+            // placeholder takes none either. An earlier `.padding(.top, 8)`
+            // put the placeholder 8pt below the insertion point, which was
+            // visible as a caret floating above the words it was meant to sit
+            // in front of.
             TextEditor(text: $composer.text)
                 .font(.body)
                 .frame(minHeight: 58, maxHeight: 120)
                 .overlay(alignment: .topLeading) {
                     if composer.text.isEmpty {
                         Text("Add a note…")
+                            .font(.body)
                             .foregroundStyle(.tertiary)
                             .padding(.leading, 5)
-                            .padding(.top, 8)
                             .allowsHitTesting(false)
                     }
                 }

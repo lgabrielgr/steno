@@ -90,6 +90,13 @@ public struct NoteService {
     public func correct(
         _ event: Event, to text: String, on task: TaskItem
     ) throws -> CorrectionOutcome {
+        // The replacement is filed under `event.taskID` while extracted refs
+        // are attached to `task`, so a mismatched pair would split one
+        // correction across two tasks — the event on one, its `SourceRef`s on
+        // the other. Unreachable through the only caller, which draws the
+        // event from the selected task's own timeline; this makes it
+        // unreachable through any caller.
+        guard event.taskID == task.id else { return .notCorrectable }
         guard event.kind.isUserAuthored, !event.isRedacted else { return .notCorrectable }
         guard
             NoteCorrection.isCorrectable(

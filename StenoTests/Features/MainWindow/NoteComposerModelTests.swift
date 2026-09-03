@@ -283,3 +283,45 @@ func refusedCorrectionPostsANotice() throws {
     composer.beginCorrection(of: UUID(), in: [note])
     #expect(composer.notice != nil)
 }
+
+@MainActor
+@Test("a refusal while correcting another row leaves that correction alone")
+func aRefusalDoesNotDisturbACorrectionInProgress() throws {
+    let fixture = try makeComposer()
+    let composer = fixture.composer
+    let task = fixture.task
+    let context = fixture.context
+    let clock = fixture.clock
+
+    // An older row, then a newer one. Only the older will go stale.
+    composer.text = "stale row"
+    _ = composer.commit(on: task, in: [])
+    clock.instant = origin.addingTimeInterval(200)
+    composer.text = "fresh row"
+    _ = composer.commit(on: task, in: [])
+    let events = try timeline(context, task)
+    let stale = try #require(events.first { $0.body == "stale row" })
+    let fresh = try #require(events.first { $0.body == "fresh row" })
+
+    // Correcting the fresh row, mid-edit.
+    composer.beginCorrection(of: fresh.id, in: events)
+    composer.text = "fresh row, edited"
+
+    // Now the older row's window closes and the user clicks its `Correct`,
+    // which is still on screen until the next tick.
+    clock.instant = origin.addingTimeInterval(301)
+    composer.beginCorrection(of: stale.id, in: events)
+
+    // The refusal is about `stale` and says nothing about ⌘↩, because ⌘↩ still
+    // belongs to the correction of `fresh` that is already under way.
+    #expect(composer.notice != nil)
+    #expect(composer.mode == .correcting(eventID: fresh.id))
+    #expect(composer.text == "fresh row, edited")
+
+    // And ⌘↩ does what the composer still says it is doing.
+    _ = composer.commit(on: task, in: events)
+    let after = try timeline(context, task)
+    #expect(after.contains { $0.body == "fresh row, edited" })
+    #expect(after.contains { $0.body == "stale row" })
+    #expect(!after.contains { $0.body == "fresh row" })
+}
