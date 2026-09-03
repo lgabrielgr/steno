@@ -40,10 +40,17 @@ public protocol MainWindowActions: AnyObject {
     /// this rather than offering an action with no subject.
     var canChangeStatus: Bool { get }
 
+    /// FR-2's note entry needs a task to attach to, so the menu gates on this
+    /// for the reason above.
+    var canAddNote: Bool { get }
+
     func newTask()
     func newProject()
     func selectNextProject()
     func selectPreviousProject()
     func cycleStatusOnSelection()
     func markSelectionBlocked()
+
+    /// FR-2: focus the note composer for the selected task. Writes nothing.
+    func addNoteToSelection()
 }

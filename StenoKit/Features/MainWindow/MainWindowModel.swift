@@ -60,6 +60,12 @@ public final class MainWindowModel: MainWindowActions {
     /// optional rather than a `Bool` per sheet.
     public var activeSheet: ActiveSheet?
 
+    /// FR-2's note composer. A `let` built in `init`, holding no reference back
+    /// to this model — its inputs arrive as parameters from
+    /// `MainWindowModel+Notes`, which is what lets it be a `let` at all rather
+    /// than an optional assigned after `self` becomes available.
+    public let noteComposer: NoteComposerModel
+
     /// FR-1.4: a task needs a project to belong to, and this window offers no
     /// way to create one implicitly.
     public var canCreateTask: Bool { !projects.isEmpty }
@@ -90,6 +96,8 @@ public final class MainWindowModel: MainWindowActions {
         self.context = context
         self.now = now
         self.save = save
+        self.noteComposer = NoteComposerModel(
+            service: NoteService(context: context, now: now, save: save), now: now)
         reload()
 
         // Registered last, deliberately: `self` may only be captured once
@@ -134,11 +142,16 @@ public final class MainWindowModel: MainWindowActions {
         guard let id = selectedTaskID else {
             selectedTaskEvents = []
             selectedTaskTimelineFailed = false
+            noteComposer.refreshCorrectability(in: [])
             return
         }
         let loaded = fetchEvents(forTaskID: id)
         selectedTaskTimelineFailed = loaded == nil
         selectedTaskEvents = loaded ?? []
+        // FR-2's window is a function of the clock, so this is refreshed on a
+        // timer as well (see `TaskDetailView`) — but it must also be correct
+        // the instant the timeline changes, which is here.
+        noteComposer.refreshCorrectability(in: selectedTaskEvents)
     }
 
     public func project(withID id: UUID) -> Project? {
