@@ -901,6 +901,172 @@ still share literally — it does not ask two different windows to answer a key 
 incidental closes); keeping on both (changes M1-03's shipped, tested `Esc` behaviour from inside
 M1-04, which is out of this task's scope and was not the panel's design intent).
 
+### D-044 — Correction is redact-and-reappend, in its own service
+**2026-09-02** · M1-06 · **Status:** accepted
+
+`NoteService` (`StenoKit/Notes/NoteService.swift`) is a sibling of `StatusService`, not an
+extension of it. It owns all three note writes — `addNote`, `correct`, `redact` — and is the only
+route to any of them.
+
+**Why:** `StatusService.addBlockedReason` guards on `status == .blocked`, which is right for
+*writing* a reason and wrong for *correcting* one. A user who blocks a task, mistypes the reason,
+unblocks, and then notices the typo must still be able to fix it inside FR-2's five minutes, and
+under `StatusService`'s guard they could not. Correction is a property of the event, not of the
+task's current status, so it needs an owner whose guards are about events.
+**Alternatives:** extending `StatusService` (inherits the wrong guard, as above); putting the
+rule on `MainWindowModel` (M2-01 needs redaction for FR-4.1's undo and has no main window to
+borrow it from, so the rule would have to move out again one milestone later).
+
+### D-045 — `EventKind.isUserAuthored` decides correction and redaction scope
+**2026-09-02** · M1-06 · **Status:** accepted
+
+`note` and `blockedReason` are correctable and redactable; `created`, `statusChanged`, and
+`externalUpdate` are neither (`StenoKit/Models/EventKind.swift`, consumed by
+`NoteCorrection.isCorrectable`).
+
+**Why:** those two are the kinds the user typed prose into, and prose is the only thing a typo
+window is for. Redacting a `statusChanged` would corrupt what M2-01 and M2.5-02 derive status
+history from; redacting `created` would leave a task with no origin row in its own timeline. The
+line is "did a human write this body", and `isUserAuthored` states it once instead of letting each
+call site enumerate kinds.
+**Alternatives:** notes only (leaves M1-05's `blockedReason` — which the user types free-hand into
+a sheet, and can therefore fat-finger — permanently uncorrectable); every kind (the corruption
+above).
+
+### D-046 — The replacement carries the original's kind, not `.note`
+**2026-09-02** · M1-06 · **Status:** accepted — amends `REQUIREMENTS.md` FR-2 (v1.14)
+
+Correcting a `blockedReason` appends a `blockedReason`, not a `note`.
+
+**Why and full statement:** [`REQUIREMENTS.md` FR-2](REQUIREMENTS.md#fr-2-progress-notes-p0). FR-2
+was written when `note` was the only correctable kind and says "append a new `note` event"; taken
+literally it relabels a corrected blocked reason as a note, which changes what the row *means*
+rather than what it says. The spec carries this one, per the "What goes where" rule above; this
+entry is the pointer.
+
+### D-047 — The five-minute window measures from the event's own timestamp, and does not restart
+**2026-09-02** · M1-06 · **Status:** accepted
+
+`NoteCorrection.isCorrectable` compares `now` against the event's own `timestamp`. Because a
+replacement inherits the original's timestamp (FR-2), correcting a correction does not buy another
+five minutes: at T+4m a correction is still editable, and at T+6m it is not, even though it was
+written two minutes ago.
+
+**Why:** it is free. FR-2 already requires the replacement to carry the original timestamp so the
+timeline does not reorder mid-correction, and once it does, "age of the event" and "age of the
+original" are the same number. It is also the behaviour that matches the requirement's intent — a
+typo window, not a rolling edit lease that a user could hold open indefinitely by correcting a
+correction every four minutes.
+**Alternatives:** restarting the window on each correction (unrepresentable without a new `Event`
+field to hold the write time separately from the display timestamp, and §3.3's append-only model is
+not worth widening for it); measuring from the *task's* `modifiedAt` (a note does not stamp it —
+see `NoteServiceTests.aNoteDoesNotStampModifiedAt` — and should not).
+
+### D-048 — FR-2's bare `N` is scoped to the task list, with ⌘⇧A in the menu
+**2026-09-02** · M1-06 · **Status:** accepted
+
+`N` is an `.onKeyPress` on the task column (`Steno/Features/MainWindow/TaskListView.swift`), live
+only while that column has focus and a task is selected. The menu carries ⌘⇧A ("Add Note") as the
+globally-live equivalent (`Steno/App/MainWindowCommands.swift`).
+
+**Why:** a plain-letter *menu* key equivalent is global to the window. SwiftUI would match `n`
+before the focused text field saw it, which means typing the letter "n" into the quick-capture
+field, the New Task sheet, or the note composer itself would instead open a note composer. §1.1
+makes the capture field's keystroke handling a P0 concern, so a shortcut that can eat a character
+out of it is not shippable. Scoping to the task list keeps FR-2's one-keystroke affordance where
+FR-2 puts it — "from a selected task" — and the menu item gives the same action a discoverable,
+modifier-guarded route.
+**Alternatives:** a bare `N` menu command (the hijack above); no bare key at all, menu only (drops
+the one-keystroke affordance FR-2 asks for).
+**Not verified:** whether the bare `N` fires at all. The focused view is a `List`, which on macOS
+is `NSTableView`-backed and does type-select on plain characters; if it consumes the keydown, the
+ancestor's handler never runs. This is a hypothesis, not a measurement — see M1-06's manual
+verification section, item 1.
+
+### D-049 — Orphan `SourceRef` rows from a redacted note are left in place
+**2026-09-02** · M1-06 · **Status:** open — deferred to M5
+
+Redacting a note does not remove the `SourceRef` rows that note's body created, so a task can
+carry a ref whose only mention has been redacted away.
+
+**Why deferred:** reconciling them would add the app's first delete path for a persisted row, and
+would add it immediately beside the invariant this task exists to defend — a delete helper sitting
+one file away from "nothing is ever deleted" is exactly the shape a later reader misapplies. It
+would also discard `cachedSummary` and `lastFetchedAt`, which §10.1 preserves across import, on a
+ref that a *different* note may still mention. Nothing observes the orphan today: refs render as
+cards with no back-pointer to the event that created them, so an orphan is indistinguishable from
+a ref the user still wants. **Owner: M5**, where fetched external state makes a dead ref visible.
+**Alternatives:** deleting the ref on redaction (the delete path above, plus it drops refs other
+live notes still mention); reference-counting refs against live events (real machinery, no
+observable payoff before M5).
+
+### D-050 — `MainWindowModel`'s project actions move to `+Projects.swift`
+**2026-09-02** · M1-06 · **Status:** accepted
+
+`createProject`, `updateProject`, and `archive(projectID:)` move verbatim from
+`MainWindowModel.swift` to `MainWindowModel+Projects.swift`. No behaviour change, no signature
+change.
+
+**Why:** `MainWindowModel.swift` stood at 396 lines against SwiftLint's 400-line ceiling under
+`--strict`, and M1-06 had to add note actions to it. Splitting first keeps that addition from being
+a lint failure dressed as a design decision, and it makes the notes diff readable — a reviewer can
+skim the move and read the new code. Projects were chosen as the half to move because they are the
+model's most self-contained group: nothing in the notes or status paths calls them.
+**Alternatives:** raising the limit (the ceiling is doing its job); splitting notes out instead
+(the notes code is new in this PR, so moving old code out gives the better diff).
+
+### D-051 — After a failed save, what a held `Event` or `TaskItem` object reports is not dependable
+**2026-09-02** · M1-06 · **Status:** accepted — recorded as a **hazard**, not a design choice
+
+This is not a decision anyone made; it is a property of SwiftData that M1-06 measured and could not
+predict. After `context.rollback()`, whether an in-memory object still shows the rejected change or
+has reverted to the stored value is **not something this codebase can rely on**.
+
+**Why it is recorded:** M1-06 measured the post-rollback state of a held reference twice, in two
+separate fix rounds, and got contradictory answers. Each run was internally deterministic and each
+was reproducible on demand — but the result tracked the *composition of the test suite*, an
+isolated single-test run and a full `make test` disagreeing, rather than anything about the code
+under test. No predictive rule was found, and none is claimed here.
+**Consequence, already shipped:** M1-06 asserts only what the product actually guarantees — that
+the store is left clean and that no `.stenoDidWrite` was posted
+(`NoteServiceTests.aFailedCorrectionRollsBack`, `.redactFailedSaveRollsBack`,
+`.addNoteFailedSaveRollsBack`) — and every failure path in `MainWindowModel+Notes.swift` refetches
+rather than reasoning about what survived.
+**Alternatives:** picking one of the two measured directions and pinning it in a test (converts an
+undefined SwiftData implementation detail into an assertion any future unrelated test can break,
+with a failure message pointing at correction logic that is fine); fixing the two pre-existing
+sites below (widens this PR into M1-05's territory).
+
+Two pre-existing sites carry the older, stronger claim and are **known-suspect and deliberately
+left untouched**, so that the next person to trip over one finds this explanation instead of
+re-deriving it:
+
+- `StenoTests/Status/StatusServiceTests.swift:168` — `failedSaveLeavesHeldReferenceStaleUntilRefetch`.
+  Currently green. If it ever fails, this is why: it pins undefined behaviour, not a requirement.
+- `StenoKit/Features/MainWindow/MainWindowModel+Status.swift:41` — a comment asserting that
+  "`rollback()` leaves the held task reporting the rejected status". Untested in either direction.
+  The `reload()` it justifies is still correct; only the stated reason is suspect.
+
+### D-052 — Changing the selected task discards the note draft
+**2026-09-02** · M1-06 · **Status:** accepted
+
+`MainWindowModel.selectedTaskID`'s `didSet` calls `noteComposer.cancel()`, clearing the text and
+returning the composer to `.adding`.
+
+**Why:** the composer is one instance for the whole window, but `commitNote()` resolves its subject
+from the *current* selection. Without this, a note typed against task A and committed after
+clicking task B is filed on B — and for a recall tool whose entire output is per-task attribution
+at stand-up, misfiled prose is a data defect, not a UI annoyance. A correction carried across the
+change is worse still: the first ⌘↩ cannot find the event in the new task's timeline and silently
+drops to adding, so the second files task A's corrected prose onto task B as a fresh note. Found in
+Task 9's review; pinned by `MainWindowModelTasksTests.switchingTasksDiscardsThePendingDraft` and
+`.switchingTasksMidCorrectionFilesNothing`, both verified by mutation.
+**Alternatives:** `.id(taskID)` on the composer view (does not work — it resets `@State` and
+`@FocusState`, while `text` and `mode` live on the model, which is what survives); giving the
+composer a per-task identity and refusing a mismatched commit (more machinery, and it strands the
+user holding a draft they cannot commit anywhere).
+**Cost accepted:** a user who types, switches task to look something up, and switches back loses
+the draft.
 ---
 
 ## Open — decided by the task that owns them
@@ -914,6 +1080,7 @@ its PR body, and adds an entry above.
 | O-7 | Whether integration *configuration* (site URLs, MCP definitions minus secrets) is exported by M2.5-01 or added by M4-04/M5-02 | `M2.5-01` |
 | O-8 | How import merges the two mutable boolean flags, `Event.isRedacted` and `StandupReport.isUndone` — §10.1's union-by-UUID default has no rule for them and neither model carries `modifiedAt` | `M2.5-02` |
 | O-9 | Whether the hotkey chord in `UserDefaults` is carried by §10's export | `M2.5-01` |
+| O-10 | Whether a `SourceRef` orphaned by a redacted note is reconciled, and how — stated in full as **D-049** above, which M1-06 left open rather than deciding blind | `M5` |
 
 ## Product questions — not for agents to decide
 

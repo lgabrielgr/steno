@@ -27,20 +27,26 @@ inline status toggles, and a way into the main window.
 
 ## Acceptance criteria
 
-- [ ] The icon persists across relaunch and is present without the main window open.
-- [ ] The popover's quick-add goes through the M1-02 path — verified by the auto-routing chip
+- [x] The icon persists across relaunch and is present without the main window open.
+- [x] The popover's quick-add goes through the M1-02 path — verified by the auto-routing chip
       behaving identically to the main window.
 - [x] Inline status toggles update the task and append a `statusChanged` event.
-- [ ] "Open Main Window" works when the window is closed, minimized, or on another Space.
+- [x] "Open Main Window" works when the window is closed, minimized, or on another Space.
 - [x] Capture latency has not regressed against the M1-02 measurement.
 
-The other three await the manual pass below — no agent in this environment can drive the GUI
-(TCC blocks `screencapture`, Screen Recording is denied to `osascript`), so no user-visible
-behaviour listed above has actually been observed running. The two ticked above are ticked
-because they are exercised by automated tests that were strengthened until they could actually
-fail, not because they were watched: criterion 3 by `MenuBarModelTests` (its failed-save and
-no-op tests were both hardened to pin the model's state, not just the surface symptom), and
-criterion 5 by `MenuBarPerformanceTests` plus an unchanged re-run of `CapturePerformanceTests`.
+**All five are now met.** The user ran the manual GUI pass below on **2026-09-02** and reported
+criteria 1, 2 and 4 — the three that needed a person — passing. Those three are ticked on that
+report; M1-06's PR carries the tick, because M1-04's own PR (#16, `8edf106`) merged before the pass
+was run and CLAUDE.md step 4 makes the next PR responsible for the sweep.
+
+Criteria 3 and 5 were ticked earlier from automated evidence alone, and that reasoning is still
+worth reading. No agent in this environment can drive the GUI (TCC blocks `screencapture`, Screen
+Recording is denied to `osascript`), so at the time nothing listed above had been observed running.
+Those two were ticked because they are exercised by automated tests that were strengthened until
+they could actually fail, not because they were watched: criterion 3 by `MenuBarModelTests` (its
+failed-save and no-op tests were both hardened to pin the model's state, not just the surface
+symptom), and criterion 5 by `MenuBarPerformanceTests` plus an unchanged re-run of
+`CapturePerformanceTests`.
 
 Criterion 5's evidence is specifically this. The resident `MenuBarModel` observes `.stenoDidWrite`,
 which `CaptureService` posts synchronously before `capture()` returns, so **every** capture — from
@@ -59,24 +65,31 @@ compared across the two cases.
 GUI automation is unavailable in this environment, so everything below needs a person. Run
 `make run` and work down the list — it is ordered to find problems fastest.
 
-- [ ] Quit and relaunch. The icon is in the menu bar, with no window open.
-- [ ] Close the main window with ⌘W. The icon is still there and the app is still running.
-- [ ] Click the icon. The popover opens and the field is focused — type without clicking first.
-- [ ] Close and reopen it. The field is focused **again** (the `showCount` fix). **If clicking the
+**Run by the user on 2026-09-02.** They reported acceptance criteria 1, 2 and 4 passing. They did
+not report per-step findings, so where a step below raises a question nobody in this environment
+could settle — whether a `Window` scene's `NSWindow` survives ⌘W, whether the **Window** menu
+carries a Steno item — the tick records that the step was run and did not block the criterion it
+serves. It is **not** an answer to the question, and those questions stay open. Anyone who needs
+one answered should re-run that step and look specifically.
+
+- [x] Quit and relaunch. The icon is in the menu bar, with no window open.
+- [x] Close the main window with ⌘W. The icon is still there and the app is still running.
+- [x] Click the icon. The popover opens and the field is focused — type without clicking first.
+- [x] Close and reopen it. The field is focused **again** (the `showCount` fix). **If clicking the
       icon while the popover is open re-opens it instead of closing it**, the cause is
       `NSPopover.willCloseNotification` arriving too late, not the `.id(model.showCount)` key —
       `popover.animates = false` is the next lever to try, not the focus key.
-- [ ] Type text with a ticket key matching a project. The chip names the same project the main
+- [x] Type text with a ticket key matching a project. The chip names the same project the main
       window's New Task sheet names for the same text — this is criterion 2.
-- [ ] `Return`. The popover closes; the task is in the main window under TODO.
-- [ ] `Esc` on a half-typed line. The popover closes; reopening shows the draft still there.
-- [ ] Click away mid-typing. Same — the draft survives.
-- [ ] Set a task to IN-PROGRESS in the main window. It appears in the popover without reopening.
-- [ ] Toggle a row to DONE from the popover. The row leaves the list, and the task's timeline in
+- [x] `Return`. The popover closes; the task is in the main window under TODO.
+- [x] `Esc` on a half-typed line. The popover closes; reopening shows the draft still there.
+- [x] Click away mid-typing. Same — the draft survives.
+- [x] Set a task to IN-PROGRESS in the main window. It appears in the popover without reopening.
+- [x] Toggle a row to DONE from the popover. The row leaves the list, and the task's timeline in
       the main window shows one `statusChanged` event. (Criterion 3 is already covered by
       `MenuBarModelTests`; this step is a sanity check against the real app, not new evidence.)
-- [ ] Toggle a row to BLOCKED. The status changes and **no** reason sheet appears (D-039).
-- [ ] "Open Main Window" with the window **closed**. Check the log line —
+- [x] Toggle a row to BLOCKED. The status changes and **no** reason sheet appears (D-039).
+- [x] "Open Main Window" with the window **closed**. Check the log line —
       `/usr/bin/log show --last 5m --info --predicate 'subsystem == "com.lgabrielgr.steno"' | grep reveal` —
       but judge this case by whether the window actually comes forward, not by which line it logs.
       Whether a `Window` scene's `NSWindow` survives ⌘W and stays in `NSApp.windows` is something
@@ -86,26 +99,27 @@ GUI automation is unavailable in this environment, so everything below needs a p
       branch) if it did not — both end with the window on screen, which is the only thing this
       step is checking. This case cannot tell you whether `WindowTagger` stamped the identifier;
       the minimized case below is the one that can.
-- [ ] With the main window closed, open the **Window** menu. It contains a Steno item that
+- [x] With the main window closed, open the **Window** menu. It contains a Steno item that
       reopens the window. This is the stated fallback if "Open Main Window" misbehaves
-      (`StenoApp.swift`'s comment on the `Window` scene) and it has never been looked at — if the
-      menu has no such item, that comment is wrong and the popover's button is the only way back.
-- [ ] "Open Main Window" with the window **minimized**. Unlike the closed case, a minimized
+      (`StenoApp.swift`'s comment on the `Window` scene) — if the menu has no such item, that comment
+      is wrong and the popover's button is the only way back. The 2026-09-02 pass did not report on
+      this either way, so the comment is still unconfirmed.
+- [x] "Open Main Window" with the window **minimized**. Unlike the closed case, a minimized
       window is definitely still in `NSApp.windows`, so this is the real discriminator: the log
       **must** read `reveal: bringing the existing main window forward`. If it instead reads
       `no main window found`, `WindowTagger` never stamped the identifier on the `NSWindow` (it
       stamps in `updateNSView`, which requires the view to actually be attached to a window), and
       every reveal is silently falling through to the reopen branch — a real defect here, not the
       "not a bug" case above.
-- [ ] "Open Main Window" with the window **on another Space**.
-- [ ] Immediately after using "Open Main Window" (or any popover close), click the menu bar icon
+- [x] "Open Main Window" with the window **on another Space**.
+- [x] Immediately after using "Open Main Window" (or any popover close), click the menu bar icon
       within about 200ms. It is a no-op. Deliberate — the transient-toggle guard's window after
       any close — not a bug.
-- [ ] Look at "Open Main Window"'s hit area by eye. It is the text glyphs plus padding, not the
-      popover's full width, with no hover state or border marking it clickable. Nobody has been
-      able to look at it; judge whether that reads as clickable rather than filing it as a defect
-      to fix blind.
-- [ ] Capture through the popover feels no slower than the hotkey panel — this is criterion 5's
+- [x] Look at "Open Main Window"'s hit area by eye. It is the text glyphs plus padding, not the
+      popover's full width, with no hover state or border marking it clickable. Judge whether that
+      reads as clickable rather than filing it as a defect to fix blind; the 2026-09-02 pass
+      raised no complaint about it, which is not the same as a considered verdict.
+- [x] Capture through the popover feels no slower than the hotkey panel — this is criterion 5's
       subjective half; `MenuBarPerformanceTests` and `CapturePerformanceTests` are its objective
       half (see the PR body for both sets of numbers).
 
