@@ -3,11 +3,15 @@ import SwiftUI
 
 /// One event in FR-3's timeline, with FR-2's affordances when they apply.
 ///
-/// **"Correct" is present only while the event is inside FR-2's window and
-/// disappears at five minutes.** That is the acceptance criterion "after 5
-/// minutes, editing is unavailable" made visible rather than merely true; the
-/// service refuses a late correction regardless, but a button that lingers
-/// past its own deadline is a lie the user has to discover by clicking.
+/// **"Correct" is present only while the event is inside FR-2's window**,
+/// disappearing within ~15 seconds of the five-minute deadline — the detail
+/// pane's timer ticks at that interval, and a reload can retire the button
+/// sooner. That is the acceptance criterion "after 5 minutes, editing is
+/// unavailable" made visible rather than merely true. It is not exact, so the
+/// button can survive its own deadline by up to one tick;
+/// `NoteComposerModel.beginCorrection` refuses a click in that gap **and
+/// posts a notice**, which is what keeps the stale button from being one that
+/// silently does nothing.
 ///
 /// "Redact…" is a context menu behind a confirmation. `Event` has no
 /// `unredact()` by design, so a one-way action reachable in a single misclick
@@ -41,7 +45,7 @@ struct TimelineRowView: View {
             }
         }
         .confirmationDialog(
-            "Redact this note?", isPresented: $isConfirmingRedaction, titleVisibility: .visible
+            "Redact this entry?", isPresented: $isConfirmingRedaction, titleVisibility: .visible
         ) {
             Button("Redact", role: .destructive, action: onRedact)
             Button("Cancel", role: .cancel) {}

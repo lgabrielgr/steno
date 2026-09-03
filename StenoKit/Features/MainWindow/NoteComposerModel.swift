@@ -74,13 +74,19 @@ public final class NoteComposerModel {
     /// Start correcting `eventID`, prefilled with its current body.
     ///
     /// Refuses a row that is no longer correctable rather than opening a
-    /// composer whose commit is guaranteed to be refused.
+    /// composer whose commit is guaranteed to be refused — and **says so**.
+    /// The affordance that leads here is driven by a 15-second timer, so it
+    /// can outlive FR-2's window by up to one tick; a click landing in that
+    /// gap has to explain itself rather than appear to do nothing.
     public func beginCorrection(of eventID: UUID, in events: [Event]) {
         guard let event = events.first(where: { $0.id == eventID }),
             NoteCorrection.isCorrectable(
                 kind: event.kind, timestamp: event.timestamp, isRedacted: event.isRedacted,
                 at: now())
-        else { return }
+        else {
+            notice = "That note can no longer be corrected — ⌘↩ adds a new note instead."
+            return
+        }
 
         text = event.body
         mode = .correcting(eventID: eventID)
@@ -89,12 +95,20 @@ public final class NoteComposerModel {
         requestFocus()
     }
 
-    /// `Esc`, or Cancel while correcting.
+    /// `Esc`, Cancel while correcting, or the window changing selected task.
     ///
-    /// **Discards the draft, in both modes.** The rule across this type is that
-    /// the user cancelling discards and the system refusing does not — an
-    /// abandoned correction must not survive as a new note's draft, because the
-    /// text in the field is a copy of a note that already exists.
+    /// **Discards the draft, in both modes, from all three callers.** The rule
+    /// across this type is that the user cancelling discards and the system
+    /// refusing does not — an abandoned correction must not survive as a new
+    /// note's draft, because the text in the field is a copy of a note that
+    /// already exists.
+    ///
+    /// A selection change is the third caller and sits on the *user* side of
+    /// that rule, not the system's: the user navigated away from the task the
+    /// draft was written against, and this type holds no task of its own, so
+    /// text kept across the change would be filed against whichever task is
+    /// selected at commit time. Discarding is the only outcome that cannot
+    /// silently attribute prose to the wrong task.
     public func cancel() {
         text = ""
         mode = .adding

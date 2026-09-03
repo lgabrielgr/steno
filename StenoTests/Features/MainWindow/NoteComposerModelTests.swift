@@ -254,3 +254,32 @@ func aFailedRedactReportsItself() throws {
     #expect(composer.mode == .correcting(eventID: note.id))
     #expect(counter.posts == 0)
 }
+
+@MainActor
+@Test("a correction refused at the door says why instead of doing nothing")
+func refusedCorrectionPostsANotice() throws {
+    let fixture = try makeComposer()
+    let composer = fixture.composer
+    let task = fixture.task
+    let context = fixture.context
+    let clock = fixture.clock
+    composer.text = "fixed PAY-42"
+    _ = composer.commit(on: task, in: [])
+    let note = try #require(try timeline(context, task).first)
+
+    // The detail pane re-asks on a 15-second timer, so "Correct" is still on
+    // screen for up to one tick past the deadline. A click there reaches this
+    // guard and never reaches `NoteService`, so this is the only place that
+    // can account for it.
+    clock.instant = origin.addingTimeInterval(301)
+    composer.beginCorrection(of: note.id, in: [note])
+
+    #expect(composer.mode == .adding)
+    #expect(composer.notice != nil)
+
+    // A row that has since left the timeline is refused the same way.
+    composer.cancel()
+    #expect(composer.notice == nil)
+    composer.beginCorrection(of: UUID(), in: [note])
+    #expect(composer.notice != nil)
+}

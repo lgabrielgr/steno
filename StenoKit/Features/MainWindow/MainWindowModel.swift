@@ -31,7 +31,16 @@ public final class MainWindowModel: MainWindowActions {
     }
 
     public var selectedTaskID: UUID? {
-        didSet { if selectedTaskID != oldValue { reloadSelectedTaskEvents() } }
+        didSet {
+            guard selectedTaskID != oldValue else { return }
+            // A draft belongs to the task it was typed against. Carrying it
+            // across a selection change would let the next ⌘↩ file one task's
+            // prose on another — and in `.correcting` mode, file a correction
+            // of one task's note as a new note on a different task. The user
+            // navigating away is the discard; see `cancel()`'s third case.
+            noteComposer.cancel()
+            reloadSelectedTaskEvents()
+        }
     }
 
     /// The selected task's timeline, newest first, redacted events excluded.
