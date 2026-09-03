@@ -1984,14 +1984,12 @@ import Foundation
 /// this supplies the two things it deliberately does not hold — the selected
 /// task and the visible timeline — and reloads when it says to.
 ///
-/// **Every path that can fail reloads**, because what `rollback()` leaves
-/// behind depends on the shape of the transaction and no caller should have to
-/// know which it got. Measured during M1-06: a failed `redact(_:)` — a pure
-/// mutation — leaves the held `Event` still reporting the rejected
-/// `isRedacted`, matching `+Status.swift`; a failed `correct(_:to:on:)`, whose
-/// transaction also carries an insert, re-faults the held object back to its
-/// clean stored value. Reloading is correct under both, and a caller that
-/// reasons about only one of them is right by accident.
+/// **Every path that can fail reloads.** What a rollback leaves in the `Event`
+/// objects this window still holds is not dependable — measured during M1-06,
+/// twice, with contradictory results that tracked test-suite composition rather
+/// than the code. What is dependable is that the store was left clean. So the
+/// failure path refetches rather than reasoning about what survived, and no
+/// comment here claims an outcome the tests deliberately stopped asserting.
 extension MainWindowModel {
     /// FR-3 gates its shortcuts on having a subject.
     public var canAddNote: Bool { selectedTaskID != nil }
