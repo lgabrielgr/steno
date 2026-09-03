@@ -74,9 +74,13 @@ struct NoteComposerView: View {
                     .disabled(!composer.canCommit)
             }
         }
-        // A counter rather than a `Bool`: a second focus request while the
-        // field is already focused must still re-focus, and `isFocused = true`
-        // when it is already `true` changes nothing observable.
+        // A counter rather than a `Bool`: the case that earns it is focus
+        // having *left* the field — the user clicked the timeline, so
+        // `@FocusState` is back to `false` while a model-side `Bool` would
+        // still read `true`. Setting that `Bool` to `true` again would be a
+        // write of the value it already held, so `onChange` would not fire and
+        // the second `N` press would not re-focus. Every request is a new
+        // value here, so every request re-focuses.
         .onChange(of: composer.focusRequests) { isFocused = true }
     }
 }
