@@ -24,7 +24,11 @@ struct NoteComposerView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
             if isCorrecting {
-                Text("Correcting a note — it keeps its original time in the timeline.")
+                // "entry", not "note": `blockedReason` is correctable too
+                // (D-045), and this view has no access to the kind — it holds
+                // an event id, not the event. Matches `TimelineRowView`'s
+                // "Redact this entry?" for the same reason.
+                Text("Correcting an entry — it keeps its original time in the timeline.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
@@ -69,7 +73,9 @@ struct NoteComposerView: View {
             }
 
             HStack {
-                Text("⌘↩ to add")
+                // Tracks the button to its right: in correcting mode ⌘↩ saves
+                // a correction rather than adding anything.
+                Text(isCorrecting ? "⌘↩ to save" : "⌘↩ to add")
                     .font(.caption)
                     .foregroundStyle(.secondary)
                 Spacer()

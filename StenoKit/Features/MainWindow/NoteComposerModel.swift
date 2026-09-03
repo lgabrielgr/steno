@@ -93,7 +93,7 @@ public final class NoteComposerModel {
             // `.adding` to make the promise true would silently abandon the
             // correction the user is in the middle of. Refusing Y is the whole
             // job here; X is none of its business.
-            notice = "That note can no longer be corrected."
+            notice = "That entry can no longer be corrected."
             return
         }
 
@@ -158,7 +158,7 @@ public final class NoteComposerModel {
             case .correcting(let eventID):
                 guard let event = events.first(where: { $0.id == eventID }) else {
                     // Redacted from another surface, or gone in a reload.
-                    keepDraft("That note is no longer available — ⌘↩ adds this as a new note.")
+                    keepDraft("That entry is no longer available — ⌘↩ adds this as a new note.")
                     return true
                 }
                 switch try service.correct(event, to: draft, on: task) {
@@ -166,7 +166,7 @@ public final class NoteComposerModel {
                     reset()
                 case .windowExpired, .notCorrectable:
                     keepDraft(
-                        "That note can no longer be corrected — ⌘↩ adds this as a new note instead."
+                        "That entry can no longer be corrected — ⌘↩ adds this as a new note instead."
                     )
                 }
             }
