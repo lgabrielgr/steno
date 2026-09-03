@@ -97,13 +97,16 @@ public final class NoteComposerModel {
 
     /// `Esc`, Cancel while correcting, or the window changing selected task.
     ///
-    /// **Discards the draft, in both modes, from all three callers.** The rule
-    /// across this type is that the user cancelling discards and the system
-    /// refusing does not — an abandoned correction must not survive as a new
-    /// note's draft, because the text in the field is a copy of a note that
-    /// already exists.
+    /// **Discards the draft, in both modes, in all three cases.** Those three
+    /// cases reach this method through two call sites: the composer view's
+    /// Cancel button — which carries `.keyboardShortcut(.cancelAction)`, so
+    /// `Esc` and the click are one button and two gestures — and
+    /// `MainWindowModel.selectedTaskID`'s `didSet`. The rule across this type
+    /// is that the user cancelling discards and the system refusing does not —
+    /// an abandoned correction must not survive as a new note's draft, because
+    /// the text in the field is a copy of a note that already exists.
     ///
-    /// A selection change is the third caller and sits on the *user* side of
+    /// A selection change is the third case and sits on the *user* side of
     /// that rule, not the system's: the user navigated away from the task the
     /// draft was written against, and this type holds no task of its own, so
     /// text kept across the change would be filed against whichever task is

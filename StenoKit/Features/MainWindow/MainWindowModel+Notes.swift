@@ -35,6 +35,16 @@ extension MainWindowModel {
         // reports it as "failed to produce diagnostic for expression" rather
         // than as the shadowing it is.
         let subject = selectedTaskID.flatMap { task(withID: $0) }
+        // A successful write reloads twice: `NoteService.commit()` posts
+        // `.stenoDidWrite` synchronously, which this window's own observer
+        // turns into a `reload()`, and then this line reloads again on the
+        // returned `true`. Known and harmless — `reload()` is idempotent —
+        // and the same shape as the `NewTaskSheet` case documented in
+        // `MainWindowModel.swift` (`redactEvent` below is the third instance).
+        // Left alone rather than deduplicated: the return value is what tells
+        // *this* call site the write happened, and the notification is what
+        // serves surfaces with no return value to read. Deleting either one
+        // silently breaks the other's case.
         if noteComposer.commit(on: subject, in: selectedTaskEvents) { reload() }
     }
 

@@ -322,16 +322,25 @@ func aFailedCorrectionRollsBack() throws {
     #expect(try #require(stored.first).isRedacted == false)
     #expect(try #require(stored.first).body == "fixed PAY-42")
 
-    // Deliberately not asserted here: what `original.isRedacted` reports.
-    // Measured twice, two different ways, two contradictory but each
-    // internally deterministic answers — it depends on what else is running
-    // in the same test process, not on anything `NoteService` controls. A
-    // SwiftData implementation detail with no product requirement behind it
-    // does not belong in this suite; asserting it would let an unrelated
-    // future test change the answer and fail this one with a message that
-    // points at correction logic that is fine. This is exactly why every
-    // failure path reloads instead of trusting the object it already holds —
-    // a caller cannot know which answer it got, so it never asks.
+    // Read that assertion honestly: `allEvents` fetches through the *same*
+    // `context`, and SwiftData uniques by persistent ID within a context, so
+    // `stored.first` is the very `original` instance held above, not an
+    // independent read of the store. (`StatusServiceTests` pins that identity
+    // directly, with `refetched === task`.) The assertion is still
+    // load-bearing — nothing else here checks that `correct`'s redaction half
+    // was rolled back — but it is evidence about one object, not about the
+    // bytes in the store.
+    // Independent evidence needs a second `ModelContext` over the same
+    // container, which `makeTask()` does not hand back; adding it is a
+    // fixture change deferred past this PR.
+    //
+    // What is deliberately *not* asserted is the held reference's state after
+    // a rollback in general: measured twice, two contradictory but each
+    // internally deterministic answers, varying with what else runs in the
+    // test process rather than with anything `NoteService` controls. Pinning
+    // that would let an unrelated future test fail this one with a message
+    // pointing at correction logic that is fine — and it is why every failure
+    // path reloads instead of trusting the object it already holds.
 }
 
 @MainActor
@@ -359,9 +368,16 @@ func redactFailedSaveRollsBack() throws {
     #expect(try #require(stored.first).isRedacted == false)
     #expect(counter.posts == 0)
 
-    // Deliberately not asserted here: what `note.isRedacted` reports. Same
-    // reasoning as `aFailedCorrectionRollsBack` above — measured twice, two
-    // contradictory but each internally deterministic answers, varying with
-    // test-suite composition rather than with this code. Nothing the product
-    // needs depends on it, so it is not part of what this test checks.
+    // The `isRedacted == false` above is what proves the redaction did not
+    // persist — a redaction leaves the row count unchanged, so `count == 1`
+    // would not catch it. Same caveat as `aFailedCorrectionRollsBack`: the
+    // fetch goes through the same `context`, so SwiftData's uniquing makes
+    // `stored.first` the held `note`, not an independent read of the store.
+    // Load-bearing, but a second `ModelContext` over the same container would
+    // be the properly independent version, and the fixtures do not expose one.
+    //
+    // Not asserted, deliberately: the held reference's post-rollback state as
+    // a general property. Measured twice, two contradictory but each
+    // internally deterministic answers, varying with test-suite composition
+    // rather than with this code. Nothing the product needs depends on it.
 }

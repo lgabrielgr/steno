@@ -66,14 +66,18 @@ GUI automation is unavailable in this environment, so everything below needs a p
 `make run` and work down the list — it is ordered to find problems fastest.
 
 **Run by the user on 2026-09-02.** They reported acceptance criteria 1, 2 and 4 passing. They did
-not report per-step findings, so where a step below raises a question nobody in this environment
-could settle — whether a `Window` scene's `NSWindow` survives ⌘W, whether the **Window** menu
-carries a Steno item — the tick records that the step was run and did not block the criterion it
-serves. It is **not** an answer to the question, and those questions stay open. Anyone who needs
-one answered should re-run that step and look specifically.
+not report per-step findings, so a tick below means "run, and did not block the criterion it
+serves" — it is **not** an answer to any question the step raises. Two steps exist *only* to
+answer such a question — whether a `Window` scene's `NSWindow` survives ⌘W, and whether the
+**Window** menu carries a Steno item — and neither was reported on, so both are left **unticked**
+rather than claiming a verification nobody made. Anyone who needs one answered should re-run that
+step and look specifically.
 
 - [x] Quit and relaunch. The icon is in the menu bar, with no window open.
-- [x] Close the main window with ⌘W. The icon is still there and the app is still running.
+- [ ] Close the main window with ⌘W. The icon is still there and the app is still running. *Run on
+      2026-09-02, but not reported on: whether the `Window` scene's `NSWindow` survives ⌘W and
+      stays in `NSApp.windows` is the open question this step exists to answer, and it is still
+      open. Unticked until someone looks.*
 - [x] Click the icon. The popover opens and the field is focused — type without clicking first.
 - [x] Close and reopen it. The field is focused **again** (the `showCount` fix). **If clicking the
       icon while the popover is open re-opens it instead of closing it**, the cause is
@@ -99,11 +103,11 @@ one answered should re-run that step and look specifically.
       branch) if it did not — both end with the window on screen, which is the only thing this
       step is checking. This case cannot tell you whether `WindowTagger` stamped the identifier;
       the minimized case below is the one that can.
-- [x] With the main window closed, open the **Window** menu. It contains a Steno item that
+- [ ] With the main window closed, open the **Window** menu. It contains a Steno item that
       reopens the window. This is the stated fallback if "Open Main Window" misbehaves
       (`StenoApp.swift`'s comment on the `Window` scene) — if the menu has no such item, that comment
-      is wrong and the popover's button is the only way back. The 2026-09-02 pass did not report on
-      this either way, so the comment is still unconfirmed.
+      is wrong and the popover's button is the only way back. *The 2026-09-02 pass did not report on
+      this either way, so the comment is still unconfirmed and this box stays unticked.*
 - [x] "Open Main Window" with the window **minimized**. Unlike the closed case, a minimized
       window is definitely still in `NSApp.windows`, so this is the real discriminator: the log
       **must** read `reveal: bringing the existing main window forward`. If it instead reads

@@ -67,9 +67,11 @@ func expectAppendOnly(
 
 /// Run `operation` and assert it mutated no existing event and deleted none.
 ///
-/// Used by every write path in the suite, not just the note ones: the
-/// invariant is a property of the whole system (§13), so a status change that
-/// started rewriting bodies must fail here too.
+/// `EventLogInvariantTests` is the only file that calls this, but it runs
+/// every write method in the app through it — `setStatus`, `addBlockedReason`,
+/// `addNote`, both `correct` outcomes, and `redact` — because the invariant is
+/// a property of the whole system (§13), not of the note paths. A status change
+/// that started rewriting bodies fails here, in the notes suite.
 @MainActor
 func expectingAppendOnly(
     _ context: ModelContext,

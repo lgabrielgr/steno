@@ -914,14 +914,24 @@ unblocks, and then notices the typo must still be able to fix it inside FR-2's f
 under `StatusService`'s guard they could not. Correction is a property of the event, not of the
 task's current status, so it needs an owner whose guards are about events.
 **Alternatives:** extending `StatusService` (inherits the wrong guard, as above); putting the
-rule on `MainWindowModel` (M2-01 needs redaction for FR-4.1's undo and has no main window to
-borrow it from, so the rule would have to move out again one milestone later).
+rule on `MainWindowModel` (the guard is about the event, not about what is on screen — a window
+model is the wrong owner for a rule that has nothing to do with a window, and it puts a store
+write behind a surface that headless callers and tests cannot reach).
+
+**FR-4.1's undo does *not* get to reuse `redact` here, and must not try.**
+[`REQUIREMENTS.md` FR-4.1](REQUIREMENTS.md) redacts `standupReported` events, and
+`NoteService.redact` guards on `event.kind.isUserAuthored`, which is `false` for that kind
+(`StenoKit/Models/EventKind.swift`; D-045). So this method refuses precisely the events FR-4.1
+needs redacted — and refuses by returning `false` rather than throwing, which reads at the call
+site as "ineligible", not as a wiring mistake. That is correct for `NoteService`, whose whole
+scope is FR-2's user-authored prose. **M2-04 needs its own redaction path**, with an eligibility
+rule about the report being undone rather than about who wrote the body.
 
 ### D-045 — `EventKind.isUserAuthored` decides correction and redaction scope
 **2026-09-02** · M1-06 · **Status:** accepted
 
-`note` and `blockedReason` are correctable and redactable; `created`, `statusChanged`, and
-`externalUpdate` are neither (`StenoKit/Models/EventKind.swift`, consumed by
+`note` and `blockedReason` are correctable and redactable; `created`, `statusChanged`,
+`externalUpdate`, and `standupReported` are neither (`StenoKit/Models/EventKind.swift`, consumed by
 `NoteCorrection.isCorrectable`).
 
 **Why:** those two are the kinds the user typed prose into, and prose is the only thing a typo
@@ -983,22 +993,30 @@ is `NSTableView`-backed and does type-select on plain characters; if it consumes
 ancestor's handler never runs. This is a hypothesis, not a measurement — see M1-06's manual
 verification section, item 1.
 
-### D-049 — Orphan `SourceRef` rows from a redacted note are left in place
+### D-049 — Orphan `SourceRef` rows from a corrected or redacted note are left in place
 **2026-09-02** · M1-06 · **Status:** open — deferred to M5
 
-Redacting a note does not remove the `SourceRef` rows that note's body created, so a task can
-carry a ref whose only mention has been redacted away.
+Neither correcting nor redacting a note withdraws the `SourceRef` rows that note's body created,
+so a task can carry a ref whose only mention no longer exists.
+
+**Correction is the primary generator**, not redaction. `NoteService.correct` calls
+`insertNewRefs` for the *new* body and does nothing about the old one, so correcting
+`PAY-42` → `PAY-421` — which is exactly the fat-finger FR-2's five-minute window exists for —
+leaves the task permanently carrying a ref to `PAY-42`, a ticket that was never really mentioned.
+Redaction produces the same orphan but needs a user who wrote a ref and then deleted the line,
+which is both rarer and less misleading than a typo the user believes they already fixed.
 
 **Why deferred:** reconciling them would add the app's first delete path for a persisted row, and
 would add it immediately beside the invariant this task exists to defend — a delete helper sitting
 one file away from "nothing is ever deleted" is exactly the shape a later reader misapplies. It
 would also discard `cachedSummary` and `lastFetchedAt`, which §10.1 preserves across import, on a
-ref that a *different* note may still mention. Nothing observes the orphan today: refs render as
-cards with no back-pointer to the event that created them, so an orphan is indistinguishable from
-a ref the user still wants. **Owner: M5**, where fetched external state makes a dead ref visible.
-**Alternatives:** deleting the ref on redaction (the delete path above, plus it drops refs other
-live notes still mention); reference-counting refs against live events (real machinery, no
-observable payoff before M5).
+ref that a *different* note may still mention. Nothing observes the orphan today: as of M1-06 no
+surface reads `task.sourceRefs` at all — `NoteService.insertNewRefs` is the only code outside the
+models that touches it — so the orphan is invisible rather than merely ambiguous. **Owner: M5**,
+where fetched external state makes a dead ref visible.
+**Alternatives:** deleting the ref on correction or redaction (the delete path above, plus it
+drops refs other live notes still mention); reference-counting refs against live events (real
+machinery, no observable payoff before M5).
 
 ### D-050 — `MainWindowModel`'s project actions move to `+Projects.swift`
 **2026-09-02** · M1-06 · **Status:** accepted
@@ -1067,6 +1085,7 @@ composer a per-task identity and refusing a mismatched commit (more machinery, a
 user holding a draft they cannot commit anywhere).
 **Cost accepted:** a user who types, switches task to look something up, and switches back loses
 the draft.
+
 ---
 
 ## Open — decided by the task that owns them
@@ -1080,7 +1099,7 @@ its PR body, and adds an entry above.
 | O-7 | Whether integration *configuration* (site URLs, MCP definitions minus secrets) is exported by M2.5-01 or added by M4-04/M5-02 | `M2.5-01` |
 | O-8 | How import merges the two mutable boolean flags, `Event.isRedacted` and `StandupReport.isUndone` — §10.1's union-by-UUID default has no rule for them and neither model carries `modifiedAt` | `M2.5-02` |
 | O-9 | Whether the hotkey chord in `UserDefaults` is carried by §10's export | `M2.5-01` |
-| O-10 | Whether a `SourceRef` orphaned by a redacted note is reconciled, and how — stated in full as **D-049** above, which M1-06 left open rather than deciding blind | `M5` |
+| O-10 | Whether a `SourceRef` orphaned by a **corrected** note (the primary case) or a redacted one is reconciled, and how — stated in full as **D-049** above, which M1-06 left open rather than deciding blind | `M5` |
 
 ## Product questions — not for agents to decide
 
