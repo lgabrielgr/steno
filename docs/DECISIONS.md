@@ -1088,6 +1088,46 @@ the draft.
 
 ---
 
+### D-053 — CI signs ad-hoc, through an `XCFLAGS` seam rather than an xcconfig key
+**2026-09-04** · M1-07 · **Status:** accepted
+
+`make build`, `make test` and `make release` pass `$(XCFLAGS)` — empty by default — to
+`xcodebuild`. CI sets it to `CODE_SIGN_IDENTITY=- CODE_SIGN_STYLE=Manual` and writes a stub
+`Local.xcconfig` carrying `DEVELOPMENT_TEAM = CI0000000`. `main`'s branch protection requires the
+resulting `build-test-lint` check, with `strict: false`.
+
+**Why an xcconfig key does not work:** `project.yml` sets `CODE_SIGN_IDENTITY` under
+`settings.base`; XcodeGen writes that into the `.pbxproj`; and a `.pbxproj` build setting outranks
+the xcconfig attached to the same configuration. Putting the override in `Local.xcconfig` resolves
+to `Apple Development` and is ignored — measured with `-showBuildSettings`, not assumed. The
+xcodebuild command line is the only level that wins, so the seam has to be a Make variable.
+
+**Why the stub file is needed at all:** `Local.xcconfig` is gitignored, so a fresh checkout lacks
+it — and `xcodegen generate` then fails outright with `Invalid config file "Local.xcconfig"`. CI
+cannot simply build without one. `preflight` is left unmodified and the stub satisfies it as
+written: teaching `preflight` to stand down when `CI` is set would weaken the gate exactly where
+nobody is watching.
+
+**Why ad-hoc rather than `CODE_SIGNING_ALLOWED=NO`:** both build and test green, but ad-hoc still
+runs the codesign step over the app, the embedded `StenoKit` framework and the test bundle, and
+embeds the entitlements — verified with `codesign -dv --entitlements -`. So a broken
+`Steno.entitlements` or a framework-embedding regression fails CI instead of reaching `main` and
+surfacing on the next local build. This does not weaken §9.3: its stable-identity rule exists so
+macOS TCC grants survive rebuilds, and a runner holds no TCC grants. `XCFLAGS` defaults to empty
+and `project.yml` still pins `Apple Development`, so local signing is untouched.
+
+**Why `strict: false`:** `strict: true` also requires a branch be up to date with `main` before
+merging, forcing a rebase every time `main` moves. The race it protects against needs concurrent
+merges to arise; with one developer merging sequentially it is friction bought for nothing.
+
+**Alternatives:** indirection in `project.yml` (`CODE_SIGN_IDENTITY: $(STENO_SIGN_IDENTITY)`) —
+rejected because an existing `Local.xcconfig` lacking the new key resolves it to empty and
+silently changes how local builds sign, which is precisely what §9.3 forbids; a `CI`-conditional
+`Makefile` — rejected because the build system would then behave differently where nobody is
+watching.
+
+---
+
 ## Open — decided by the task that owns them
 
 Each of these is a real choice the spec leaves open. The owning task decides it, records it in
