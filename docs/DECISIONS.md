@@ -1119,6 +1119,15 @@ and `project.yml` still pins `Apple Development`, so local signing is untouched.
 **Why `strict: false`:** `strict: true` also requires a branch be up to date with `main` before
 merging, forcing a rebase every time `main` moves. The race it protects against needs concurrent
 merges to arise; with one developer merging sequentially it is friction bought for nothing.
+Nothing in the protection settings enforces that serial-merge assumption, though — it holds only
+because it happens to be true today. Flip `strict: true` if two task branches are ever in flight
+at once.
+
+**Unpinned bootstrap formulae:** `make bootstrap` installs `xcodegen` and `swiftlint` from
+Homebrew without pinning a version, so a future SwiftLint release that adds or tightens a
+default rule can turn `make lint --strict` red on a PR that changed nothing. Accepted for now
+because local `make bootstrap` has always had the same property — this just makes CI inherit
+it — recorded here so it is a known exposure rather than a surprise.
 
 **Alternatives:** indirection in `project.yml` (`CODE_SIGN_IDENTITY: $(STENO_SIGN_IDENTITY)`) —
 rejected because an existing `Local.xcconfig` lacking the new key resolves it to empty and

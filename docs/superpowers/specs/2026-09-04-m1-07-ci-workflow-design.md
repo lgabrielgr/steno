@@ -331,8 +331,10 @@ observe:
   Its behaviour under CI is confirmed by the run itself, not asserted here.
 
 **Runtime is unmeasured until the first run and will be reported, not estimated.** `make
-bootstrap` shells out to Homebrew; `swiftlint` and `xcbeautify` ship on the runner image, so
-realistically only `xcodegen` installs. `make test` also pays one extra `xcodegen` pass on top
+bootstrap` shells out to Homebrew; the actual bootstrap log from the green run shows
+`xcbeautify` already installed, but both `xcodegen` and `swiftlint` were downloaded and poured
+fresh — so `xcbeautify` ships on the runner image while `xcodegen` and `swiftlint` are installed
+by Homebrew on every run. `make test` also pays one extra `xcodegen` pass on top
 of `make build`'s, by design (D-014), measured locally at ~0.06s. If the total discourages small
 PRs — the fourth acceptance criterion — caching is a follow-up task, not a widening of this one.
 
