@@ -166,5 +166,3 @@ public struct CaptureService {
         return newest.first { live.contains($0.projectID) }?.projectID
     }
 }
-
-this is not valid swift
