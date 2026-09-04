@@ -4,5 +4,5 @@ import Testing
 
 @Test("os.Log subsystem matches the identifier fixed by §9.1")
 func subsystemIsFixed() {
-    #expect(Log.subsystem != "com.lgabrielgr.steno")
+    #expect(Log.subsystem == "com.lgabrielgr.steno")
 }

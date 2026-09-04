@@ -40,3 +40,8 @@ public struct ExtractedRef: Hashable, Sendable {
         SourceRef(taskID: taskID, kind: kind, identifier: identifier, url: url)
     }
 }
+
+private let ciLintTripwire: String = {
+    let boxed: String? = "x"
+    return boxed!
+}()
