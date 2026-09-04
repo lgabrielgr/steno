@@ -126,7 +126,22 @@ generate: preflight ## Regenerate Steno.xcodeproj from project.yml
 
 APP := $(DERIVED)/Build/Products/Debug/Steno.app
 BIN := $(APP)/Contents/MacOS/Steno
-XCB := xcodebuild -project $(PROJECT) -scheme $(SCHEME) -derivedDataPath $(DERIVED)
+# Extra build settings appended to every xcodebuild invocation. Empty locally,
+# so `make build` is unchanged. CI sets it to ad-hoc signing: a runner has no
+# Personal Team identity, and §9.3's stable-identity rule exists for local TCC
+# persistence, which a runner has no stake in (M1-07, D-053).
+#
+# This is a Make variable and not a Local.xcconfig key because an xcconfig
+# cannot reach CODE_SIGN_IDENTITY: project.yml sets it under settings.base,
+# XcodeGen writes that into the .pbxproj, and a .pbxproj build setting outranks
+# the xcconfig attached to the same configuration. Measured, not assumed — the
+# xcconfig route resolves to "Apple Development" regardless. The xcodebuild
+# command line is the only level that wins.
+#
+# `?=` so a caller's `make build XCFLAGS=...` takes effect while the default
+# stays empty.
+XCFLAGS ?=
+XCB := xcodebuild -project $(PROJECT) -scheme $(SCHEME) -derivedDataPath $(DERIVED) $(XCFLAGS)
 DEST := -destination 'platform=macOS'
 SANDBOX := Scripts/test-sandbox.sb
 
