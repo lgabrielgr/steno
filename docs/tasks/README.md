@@ -61,7 +61,7 @@ something better than paper. **M2 is the true MVP; M6 is the finish line.**
 - [x] [M1-04](M1-04-menu-bar.md) — menu bar item and popover (FR-1.2) — PR #16
 - [x] [M1-05](M1-05-status-control.md) — status transitions and `statusChanged` events
 - [x] [M1-06](M1-06-progress-notes.md) — notes, timeline, redact-and-reappend grace window (FR-2) — PR #17
-- [ ] [M1-07](M1-07-ci-workflow.md) — GitHub Actions running build/test/lint on every PR (§9.6)
+- [ ] [M1-07](M1-07-ci-workflow.md) — GitHub Actions running build/test/lint on every PR (§9.6) — PR #18
 - [ ] [M1-08](M1-08-settings-shell-and-capture-pane.md) — Settings window plus the Capture pane
 
 ### M2 — Report, no AI

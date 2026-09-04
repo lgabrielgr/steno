@@ -23,7 +23,7 @@ configFiles:
 settings:
   base:
     CODE_SIGN_STYLE: Automatic
-    CODE_SIGN_IDENTITY: Apple Development   # never ad-hoc "-" (§9.3)
+    CODE_SIGN_IDENTITY: Apple Development   # never ad-hoc "-" locally (§9.3); CI overrides on the command line — see D-053
     ENABLE_HARDENED_RUNTIME: NO             # not notarizing (§6.1)
     SWIFT_VERSION: "6.0"
 

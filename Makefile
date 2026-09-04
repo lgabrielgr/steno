@@ -126,7 +126,34 @@ generate: preflight ## Regenerate Steno.xcodeproj from project.yml
 
 APP := $(DERIVED)/Build/Products/Debug/Steno.app
 BIN := $(APP)/Contents/MacOS/Steno
-XCB := xcodebuild -project $(PROJECT) -scheme $(SCHEME) -derivedDataPath $(DERIVED)
+# Extra build settings appended to every xcodebuild invocation. Empty locally,
+# so `make build` is unchanged. CI sets it to ad-hoc signing: a runner has no
+# Personal Team identity, and §9.3's stable-identity rule exists for local TCC
+# persistence, which a runner has no stake in (M1-07, D-053).
+#
+# This is a Make variable and not a Local.xcconfig key because an xcconfig
+# cannot reach CODE_SIGN_IDENTITY: project.yml sets it under settings.base,
+# XcodeGen writes that into the .pbxproj, and a .pbxproj build setting outranks
+# the xcconfig attached to the same configuration. Measured, not assumed — the
+# xcconfig route resolves to "Apple Development" regardless. The xcodebuild
+# command line is the only level that wins.
+#
+# Only the command line may set this. `XCFLAGS ?=` alone was wrong: a variable
+# inherited from the developer's environment has origin `environment`, which
+# counts as already-defined, so `?=` leaves it in place — and it would then be
+# appended to every local xcodebuild invocation, which is precisely the
+# opposite of the "empty locally" guarantee above. Raised by Copilot on PR #18
+# and reproduced before fixing: `XCFLAGS='CODE_SIGN_IDENTITY=-' make -n build`
+# put that flag on the command line.
+#
+# Verified on Apple's GNU Make 3.81, which is what this repo actually runs:
+# `$(origin XCFLAGS)` is `undefined`, `environment`, or `command line`, and a
+# plain assignment in a makefile overrides the environment (absent `make -e`),
+# while a command-line value outranks the makefile and survives.
+ifneq ($(origin XCFLAGS),command line)
+XCFLAGS :=
+endif
+XCB := xcodebuild -project $(PROJECT) -scheme $(SCHEME) -derivedDataPath $(DERIVED) $(XCFLAGS)
 DEST := -destination 'platform=macOS'
 SANDBOX := Scripts/test-sandbox.sb
 
