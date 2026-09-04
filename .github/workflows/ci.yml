@@ -75,5 +75,21 @@ jobs:
       - name: make test
         run: make test XCFLAGS="$SIGN"
 
+      # Runs even when build or test failed. SwiftLint parses source rather than
+      # compiling it, so it is independent of both and still yields a valid
+      # signal when they are red — one run then reports every problem instead of
+      # surfacing them one push at a time. That is not hypothetical: during
+      # M1-07's own verification a test failure masked an intended lint failure
+      # and cost a rerun to confirm. Raised by Copilot on PR #18.
+      #
+      # `!cancelled()` rather than `always()`, so a run stopped by the
+      # concurrency group or the job timeout ends here instead of burning a
+      # runner on a result nobody will read. The quotes are required: a bare `!`
+      # opens a YAML tag.
+      #
+      # `make build` and `make test` are deliberately NOT given this treatment.
+      # A test run after a failed build only reproduces the same compile error,
+      # so it adds no signal and doubles the time to a red result.
       - name: make lint
+        if: '!cancelled()'
         run: make lint

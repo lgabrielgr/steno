@@ -138,9 +138,21 @@ BIN := $(APP)/Contents/MacOS/Steno
 # xcconfig route resolves to "Apple Development" regardless. The xcodebuild
 # command line is the only level that wins.
 #
-# `?=` so a caller's `make build XCFLAGS=...` takes effect while the default
-# stays empty.
-XCFLAGS ?=
+# Only the command line may set this. `XCFLAGS ?=` alone was wrong: a variable
+# inherited from the developer's environment has origin `environment`, which
+# counts as already-defined, so `?=` leaves it in place — and it would then be
+# appended to every local xcodebuild invocation, which is precisely the
+# opposite of the "empty locally" guarantee above. Raised by Copilot on PR #18
+# and reproduced before fixing: `XCFLAGS='CODE_SIGN_IDENTITY=-' make -n build`
+# put that flag on the command line.
+#
+# Verified on Apple's GNU Make 3.81, which is what this repo actually runs:
+# `$(origin XCFLAGS)` is `undefined`, `environment`, or `command line`, and a
+# plain assignment in a makefile overrides the environment (absent `make -e`),
+# while a command-line value outranks the makefile and survives.
+ifneq ($(origin XCFLAGS),command line)
+XCFLAGS :=
+endif
 XCB := xcodebuild -project $(PROJECT) -scheme $(SCHEME) -derivedDataPath $(DERIVED) $(XCFLAGS)
 DEST := -destination 'platform=macOS'
 SANDBOX := Scripts/test-sandbox.sb

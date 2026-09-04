@@ -1091,10 +1091,18 @@ the draft.
 ### D-053 — CI signs ad-hoc, through an `XCFLAGS` seam rather than an xcconfig key
 **2026-09-04** · M1-07 · **Status:** accepted
 
-`make build`, `make test` and `make release` pass `$(XCFLAGS)` — empty by default — to
-`xcodebuild`. CI sets it to `CODE_SIGN_IDENTITY=- CODE_SIGN_STYLE=Manual` and writes a stub
-`Local.xcconfig` carrying `DEVELOPMENT_TEAM = CI0000000`. `main`'s branch protection requires the
-resulting `build-test-lint` check, with `strict: false`.
+`make build`, `make test` and `make release` pass `$(XCFLAGS)` — empty unless set on the command
+line — to `xcodebuild`. CI sets it to `CODE_SIGN_IDENTITY=- CODE_SIGN_STYLE=Manual` and writes a
+stub `Local.xcconfig` carrying `DEVELOPMENT_TEAM = CI0000000`. `main`'s branch protection requires
+the resulting `build-test-lint` check, with `strict: false`.
+
+**Only the command line may set it, and `?=` was not enough.** The first cut wrote `XCFLAGS ?=`,
+which honours a variable inherited from the developer's environment: origin `environment` counts
+as already-defined, so `?=` leaves it in place and it lands on every local `xcodebuild`
+invocation — the opposite of the intent. Caught by Copilot reviewing PR #18 and reproduced before
+fixing. The guard is `ifneq ($(origin XCFLAGS),command line)` / `XCFLAGS :=`, verified on Apple's
+GNU Make 3.81 across four cases: unset, environment-only (now ignored), command-line-only (works),
+and both at once (command line wins).
 
 **Why an xcconfig key does not work:** `project.yml` sets `CODE_SIGN_IDENTITY` under
 `settings.base`; XcodeGen writes that into the `.pbxproj`; and a `.pbxproj` build setting outranks

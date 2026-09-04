@@ -172,11 +172,21 @@ the override through every path that compiles:
 # has no stake in (M1-07, D-053). The command line is the ONLY level that
 # outranks project.yml's settings.base — an xcconfig cannot reach
 # CODE_SIGN_IDENTITY, so this cannot be a Local.xcconfig key.
-XCFLAGS ?=
+ifneq ($(origin XCFLAGS),command line)
+XCFLAGS :=
+endif
 XCB := xcodebuild -project $(PROJECT) -scheme $(SCHEME) -derivedDataPath $(DERIVED) $(XCFLAGS)
 ```
 
-`?=` rather than `=` so a caller's `make build XCFLAGS=…` wins while the default stays empty.
+**Only the command line may set it.** The first cut used `XCFLAGS ?=`, which is wrong: a variable
+inherited from the developer's environment has origin `environment`, which counts as
+already-defined, so `?=` leaves it alone and it reaches every local `xcodebuild` invocation —
+the exact opposite of the guarantee in the comment above it. Copilot raised this on PR #18 and it
+reproduced immediately: `XCFLAGS='CODE_SIGN_IDENTITY=-' make -n build` put that flag on the
+command line. The `origin` guard admits a command-line value and nothing else. Verified on Apple's
+GNU Make 3.81, which is what this repo runs: origin is `undefined`, `environment`, or
+`command line`; a makefile assignment overrides the environment (absent `make -e`), and a
+command-line value outranks the makefile.
 
 **`preflight` is not modified.** The CI stub satisfies both of its `Local.xcconfig` checks as
 they are written today. Deliberately so: `preflight` is the gate that makes a misconfigured
