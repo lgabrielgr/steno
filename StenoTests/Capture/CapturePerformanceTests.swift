@@ -10,8 +10,12 @@ import XCTest
 ///
 /// XCTest rather than Swift Testing per D-011 — the `measure` exception.
 ///
-/// Each case asserts against the **worst** of `measure`'s ten iterations, not
-/// the last, so the assertion does not look only at the warmest run.
+/// The two store-write cases assert against the **worst** of `measure`'s ten
+/// iterations, not the last, so the assertion does not look only at the warmest
+/// run. `testKeyScanOnALargePasteStaysInteractive` is the exception: it asserts
+/// the **mean**, because worst-of-ten proved unstable on GitHub's shared
+/// runners once M1-07 put this suite in CI. Its doc comment carries the
+/// measurements and the reasoning.
 ///
 /// **`make test` will not show you that number.** xcbeautify compresses
 /// `measure`'s output to an average and an RSD, so the worst-of-ten the
@@ -66,17 +70,31 @@ final class CapturePerformanceTests: XCTestCase {
     /// comment used to say a regex scan "has no such cliff"; it has one, and
     /// reading the computed `JiraKey.pattern` inside the loop made it 342 ms.
     ///
-    /// Measured worst-of-ten on this machine: **50 ms** in this unoptimised
-    /// Debug test build (32 ms average); the same scan costs 21 ms built `-O`,
+    /// Measured on this machine: **32 ms average**, 50 ms worst-of-ten, in this
+    /// unoptimised Debug test build; the same scan costs 21 ms built `-O`,
     /// which is what the shipped app pays.
     ///
-    /// The ceiling is 150 ms, well above both — this is an adversarial input
-    /// on a machine already under test load, and the assertion exists to catch
-    /// the return of the per-iteration `Regex` construction, not to police
-    /// milliseconds. It discriminates: reinstating `JiraKey.pattern` inside
-    /// the loop takes this case to ~400 ms per iteration and fails the
-    /// assertion. That was verified by breaking it on purpose, not reasoned
-    /// about.
+    /// The assertion exists to catch the return of the per-iteration `Regex`
+    /// construction, not to police milliseconds. It discriminates: reinstating
+    /// `JiraKey.pattern` inside the loop takes this case to ~400 ms per
+    /// iteration and fails the assertion. That was verified by breaking it on
+    /// purpose, not reasoned about.
+    ///
+    /// **This case asserts the mean, unlike the rest of the file — M1-07.**
+    /// It originally gated on worst-of-ten at 150 ms, which flaked on GitHub's
+    /// runners in 2 of 7 runs: worst-of-ten came in at 150.1 ms once and
+    /// **267 ms** once. Worst-of-ten is precisely the statistic shared CI
+    /// hardware destabilises — both failing runs had a blown-out relative
+    /// standard deviation (±20.7% and ±41.8%) where every passing run sat at
+    /// ±2.9–11.4%. The *mean* was stable at 82–121 ms across every run,
+    /// including both failures.
+    ///
+    /// So the ceiling is 250 ms on the mean: ~2x the noisiest mean observed on
+    /// a runner, ~8x this machine's, and still far below the ~400 ms per
+    /// iteration the regression costs — which drags the mean too, so nothing
+    /// is given up. Widening the worst-of-ten ceiling instead was rejected:
+    /// 267 ms was already seen on clean code, leaving no usable gap below the
+    /// 400 ms defect signature.
     @MainActor
     func testKeyScanOnALargePasteStaysInteractive() throws {
         let directory = makeDirectory()
@@ -87,13 +105,15 @@ final class CapturePerformanceTests: XCTestCase {
         while noisy.utf8.count < 250_000 {
             noisy += "UTF-8 encodes ISO-8601 stamps and COVID-19 counts beside M1-01 notes. "
         }
-        var elapsed = 0.0
+        var total = 0.0
+        var iterations = 0
         var matched = true
 
         measure {
             let start = Date()
             let hit = ProjectRouter.ticketKeyMatch(text: noisy, projects: projects)
-            elapsed = max(elapsed, Date().timeIntervalSince(start))
+            total += Date().timeIntervalSince(start)
+            iterations += 1
             matched = matched && hit == nil
         }
 
@@ -101,7 +121,23 @@ final class CapturePerformanceTests: XCTestCase {
         // run to the end. If this ever returns a match the input stopped being
         // the worst case and the number below stops meaning anything.
         XCTAssertTrue(matched, "the adversarial paste unexpectedly resolved to a project")
-        XCTAssertLessThan(elapsed, 0.150, "scanning a large paste for ticket keys exceeded 150 ms")
+        // Guard the divisor: a `measure` block that never ran would otherwise
+        // divide by zero and report a NaN mean, which compares false against
+        // any ceiling and passes silently — the same swallowed-block failure
+        // the other two cases in this file guard against by other means.
+        XCTAssertGreaterThan(iterations, 0, "the measure block never ran")
+        let average = total / Double(iterations)
+        // The ceiling is named so the failure message cannot drift from the
+        // value actually asserted — found by mutation-testing this assertion,
+        // where a hardcoded "250 ms" in the message survived a changed literal.
+        let ceiling = 0.250
+        XCTAssertLessThan(
+            average, ceiling,
+            """
+            scanning a large paste for ticket keys averaged \(average * 1000) ms, \
+            over the \(ceiling * 1000) ms ceiling
+            """
+        )
     }
 
     private func makeDirectory() -> URL {
