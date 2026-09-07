@@ -25,6 +25,17 @@ public final class QuickCaptureModel {
     /// *was* the attachment point (design §3.4).
     public private(set) var registrationProblem: String?
 
+    /// What the hotkey does. Stored by `start` so `rebind(to:)` can re-register
+    /// without the caller having to supply it again.
+    ///
+    /// **This is why `rebind` takes a chord and nothing else.** The Settings
+    /// pane's business is *which chord*, not what pressing it does; had it
+    /// been obliged to pass the action, the settings layer would have to know
+    /// how `QuickCaptureController` toggles its panel, and the next pane
+    /// driving a controller would copy that. No retain cycle: the controller
+    /// passes `{ [weak self] in self?.toggle() }`.
+    private var onPress: (() -> Void)?
+
     private let context: ModelContext
     private let monitor: any GlobalHotkeyMonitor
     private let reserved: () -> [ReservedHotkey]
@@ -61,16 +72,20 @@ public final class QuickCaptureModel {
 
     /// Read the stored chord, check it, and bind it.
     public func start(onPress: @escaping () -> Void) {
+        self.onPress = onPress
         chord = settings.hotkeyChord ?? .default
-        bind(onPress: onPress)
+        bind()
     }
 
-    /// M1-08's entry point. Deliberately present from day one so that task
-    /// adds a pane rather than redesigning this type.
-    public func rebind(to replacement: HotkeyChord, onPress: @escaping () -> Void) {
+    /// M1-08's entry point: bind a different chord, with no relaunch.
+    ///
+    /// Persist first, then register, so a registration that fails still leaves
+    /// the user's choice recorded — the pane shows the problem and the chord
+    /// they picked rather than silently reverting to the old one.
+    public func rebind(to replacement: HotkeyChord) {
         chord = replacement
         settings.hotkeyChord = replacement
-        bind(onPress: onPress)
+        bind()
     }
 
     /// Called on every open.
@@ -92,8 +107,18 @@ public final class QuickCaptureModel {
         field.refreshChip()
     }
 
-    private func bind(onPress: @escaping () -> Void) {
+    private func bind() {
         registrationProblem = nil
+
+        // Nothing has told this model what the hotkey does yet, so there is no
+        // action to register. Binding anyway would put a live system-wide
+        // chord in front of a no-op — a hotkey that swallows the keystroke and
+        // does nothing, which is worse than the unbound state it replaces.
+        guard let onPress else {
+            Log.app.error("hotkey bind requested before start(); nothing was registered")
+            registrationProblem = "The shortcut could not be registered."
+            return
+        }
 
         // Warn, then register anyway. Refusing to bind guarantees a dead
         // hotkey; binding a claimed chord leaves the user with one that may

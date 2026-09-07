@@ -13,9 +13,14 @@ private final class FakeHotkeyMonitor: GlobalHotkeyMonitor {
     var unregisterCount = 0
     var failure: (any Error)?
 
+    /// Kept so a test can fire the action the model registered. Without this,
+    /// "rebinding keeps the hotkey working" is unprovable here.
+    var onPress: (() -> Void)?
+
     func register(_ chord: HotkeyChord, onPress: @escaping () -> Void) throws {
         if let failure { throw failure }
         registered = chord
+        self.onPress = onPress
     }
 
     func unregister() {
@@ -144,7 +149,7 @@ func rebindingReplacesTheChord() throws {
 
     monitor.failure = nil
     let replacement = HotkeyChord(keyCode: 49, modifiers: NSEvent.ModifierFlags.command.rawValue)
-    model.rebind(to: replacement) {}
+    model.rebind(to: replacement)
 
     #expect(model.chord == replacement)
     #expect(model.registrationProblem == nil)
@@ -226,4 +231,66 @@ func panelCaptureRoutesOnTicketKey() throws {
     let tasks = try context.fetch(FetchDescriptor<TaskItem>())
     #expect(tasks.count == 1)
     #expect(model.field.text.isEmpty)
+}
+
+/// M1-08's first acceptance criterion, as far as a headless test reaches:
+/// rebinding takes effect with no relaunch, and the action survives it.
+///
+/// The action surviving is the half that could silently break. `rebind(to:)`
+/// re-registers using the closure `start` stored; drop that and the chord
+/// still changes, the monitor still reports the new binding, and pressing it
+/// does nothing.
+@Test("rebinding keeps the registered action live")
+@MainActor
+func rebindingKeepsTheActionLive() throws {
+    let fixture = try makeModel()
+    let (model, monitor) = (fixture.model, fixture.monitor)
+
+    var presses = 0
+    model.start { presses += 1 }
+    monitor.onPress?()
+    #expect(presses == 1)
+
+    let replacement = HotkeyChord(keyCode: 49, modifiers: NSEvent.ModifierFlags.command.rawValue)
+    model.rebind(to: replacement)
+
+    #expect(monitor.registered == replacement)
+    monitor.onPress?()
+    #expect(presses == 2, "the action stored by start() must survive a rebind")
+}
+
+/// A chord bound in front of no action is worse than no chord: it swallows the
+/// keystroke system-wide and does nothing.
+@Test("rebinding before start registers nothing and says so")
+@MainActor
+func rebindingBeforeStartRegistersNothing() throws {
+    let fixture = try makeModel()
+    let (model, monitor) = (fixture.model, fixture.monitor)
+
+    let replacement = HotkeyChord(keyCode: 49, modifiers: NSEvent.ModifierFlags.command.rawValue)
+    model.rebind(to: replacement)
+
+    #expect(monitor.registered == nil)
+    #expect(model.registrationProblem != nil)
+}
+
+/// The chord is persisted before registration is attempted, so a failure
+/// leaves the user's choice recorded rather than silently reverting it.
+@Test("a rebind that fails to register still persists the chosen chord")
+@MainActor
+func aFailedRebindStillPersistsTheChord() throws {
+    let defaults = try #require(UserDefaults(suiteName: "steno.tests.\(UUID().uuidString)"))
+    let settings = AppSettings(defaults: defaults)
+    let monitor = FakeHotkeyMonitor()
+    let model = QuickCaptureModel(
+        context: ModelContext(try StenoStore.inMemory()), monitor: monitor, reserved: { [] },
+        settings: settings, now: { epoch })
+    model.start {}
+
+    monitor.failure = HotkeyRegistrationError.alreadyRegistered
+    let replacement = HotkeyChord(keyCode: 49, modifiers: NSEvent.ModifierFlags.command.rawValue)
+    model.rebind(to: replacement)
+
+    #expect(model.registrationProblem == "That shortcut is already registered.")
+    #expect(settings.hotkeyChord == replacement)
 }
