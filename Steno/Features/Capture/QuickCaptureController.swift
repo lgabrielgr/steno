@@ -22,6 +22,13 @@ final class QuickCaptureController {
     /// is a guard against a future call site rather than a live bug.
     private var hideObservation: (any NSObjectProtocol)?
 
+    /// The Settings pane's seam onto the hotkey (`HotkeyBinding`).
+    ///
+    /// Exposed as the protocol, not as `QuickCaptureModel`: Settings has no
+    /// business with the panel's capture field or project list, and the narrow
+    /// type is what keeps `SettingsModel` testable with a four-line double.
+    var hotkeyBinding: any HotkeyBinding { model }
+
     init(container: ModelContainer) {
         // `container.mainContext`, matching what `MainWindowView` reads, so a
         // capture from the panel and the window's own fetches agree without
