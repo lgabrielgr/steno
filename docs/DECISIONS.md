@@ -1281,6 +1281,36 @@ event plumbing only, which is what keeps "a bare key is refused" a unit test rat
 check. A bare key is refused because a global binding swallows that key in every application —
 including whatever the user would type to reach this pane and undo it.
 
+### D-060 — Project writes post `.stenoDidWrite` too
+
+**2026-09-07** · M1-08 · **Status:** accepted · **amends the note on `.stenoDidWrite`**
+
+`MainWindowModel.perform(_:_:)` posts `.stenoDidWrite` after a successful save, so all four write
+kinds — capture, status, notes, projects — announce themselves at the write (D-031).
+
+**Why this is an amendment and not an addition.** `WriteNotifications.swift` used to say project
+writes deliberately did not post, "that view model is the only surface that shows projects today,
+so nothing yet depends on it", and warned: *"A future cache of projects elsewhere must not assume
+this notification covers them."* M1-08's default-project picker became that cache and made exactly
+that assumption. The user archived a project and the Settings picker went on offering it — and
+went on resolving to it, so FR-1.4 rung 4 pointed at an archived project.
+
+The warning was the right instinct and the wrong remedy: an exception that has to be remembered is
+an exception that gets forgotten, and this one was forgotten by the next task to touch it. A
+per-write-kind notification would have moved the same forgettable registration one level down —
+the case `WriteNotifications` already argues against.
+
+**What it also fixed, unasked:** the menu bar popover kept listing an archived project's tasks
+until the next capture happened to refresh it. Nobody had reported that; it was the same defect.
+
+**Only on success.** A rolled-back save changed nothing, so posting would announce a write that
+did not happen — the write-side twin of D-018's rule, guarded by `aFailedProjectWritePostsNothing`.
+
+**Testing note.** The two `SettingsModelTests` cases covering this ground post the notification by
+hand. They pass, and they cannot detect a missing post site. `ProjectWriteNotificationTests`
+archives through the real path with no `NotificationCenter` call in the test at all; it is the one
+that failed before this change.
+
 ---
 
 ## Open — decided by the task that owns them

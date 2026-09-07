@@ -320,6 +320,23 @@ public final class MainWindowModel: MainWindowActions {
             saved = false
         }
         reload()
+
+        // Project writes are the one write kind with no service behind them —
+        // they go straight through this method — so this is their post site,
+        // and D-031's "posted at the write" now covers all four kinds rather
+        // than three. Without it a cache of projects held anywhere else goes
+        // stale: FR-6's default-project picker kept offering a project the user
+        // had just archived, and the menu bar popover kept listing its tasks.
+        //
+        // Only on success, for the reason `MainWindowModel+Status` gives about
+        // no-op transitions: a save that failed was rolled back, and telling
+        // every surface to refetch would announce a write that did not happen.
+        //
+        // After `reload()`, so this model is consistent by the time the others
+        // read. Its own observer then reloads a second time — the same
+        // idempotent double-reload `+Status` documents, over a dataset D18
+        // caps.
+        if saved { NotificationCenter.default.post(name: .stenoDidWrite, object: nil) }
         return saved
     }
 }

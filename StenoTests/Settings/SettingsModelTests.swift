@@ -204,6 +204,12 @@ func theDefaultProjectPersists() throws {
 /// Archiving the chosen project must not silently discard the setting:
 /// unarchiving it restores the choice. The picker shows "None" meanwhile,
 /// which is what `resolvedDefaultProjectID` is for.
+///
+/// **This posts `.stenoDidWrite` by hand, so it proves the observer and
+/// nothing about who calls it.** That gap shipped: nothing posted it for
+/// project writes, and the picker kept resolving to an archived project
+/// (D-060). `ProjectWriteNotificationTests` archives through the real path
+/// and is the test that would have caught it — keep both.
 @Test("a default whose project is archived resolves to none without being erased")
 @MainActor
 func anArchivedDefaultResolvesToNone() throws {
@@ -221,6 +227,8 @@ func anArchivedDefaultResolvesToNone() throws {
 
 /// A project created in the main window while Settings is open reaches the
 /// picker through `.stenoDidWrite`, without either type knowing the other.
+/// Hand-posted, with the caveat above: the end-to-end version is
+/// `creatingReachesTheSettingsPicker`.
 @Test("a project created elsewhere appears in the picker")
 @MainActor
 func aProjectCreatedElsewhereAppears() throws {

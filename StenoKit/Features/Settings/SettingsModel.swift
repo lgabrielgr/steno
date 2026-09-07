@@ -101,9 +101,14 @@ public final class SettingsModel {
         reloadProjects()
 
         // Registered last: `self` may only be captured once every stored
-        // property has a value. A project created in the main window while
-        // Settings is open reaches the picker through this, without either
-        // type knowing the other exists — the same route M1-03 and M1-04 use.
+        // property has a value. A project created — or archived — in the main
+        // window while Settings is open reaches the picker through this,
+        // without either type knowing the other exists: the same route M1-03
+        // and M1-04 use.
+        //
+        // That holds only because `MainWindowModel.perform` posts the
+        // notification for project writes. It did not until D-060, and this
+        // observer silently covered nothing: see `WriteNotifications`.
         writeObservation = WriteObservation(
             NotificationCenter.default.addObserver(
                 forName: .stenoDidWrite, object: nil, queue: nil
