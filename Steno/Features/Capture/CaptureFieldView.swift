@@ -184,6 +184,7 @@ struct NewTaskSheet: View {
                 service: model.captureService(),
                 projects: { model.projects },
                 preferred: { model.preferredProjectIDForCapture },
+                defaultProjectID: { model.defaultProjectIDForCapture },
                 onCaptured: { _ in model.reload() }
             )
         )

@@ -42,17 +42,28 @@ public final class CaptureFieldModel {
     private let service: CaptureService
     private let projects: () -> [Project]
     private let preferred: () -> UUID?
+    private let defaultProjectID: () -> UUID?
     private let onCaptured: (TaskItem) -> Void
 
+    /// - Parameter defaultProjectID: FR-6's configured default — rung 4 of
+    ///   FR-1.4's ladder, below last-used. A closure like its neighbours,
+    ///   because the setting can change while a field is open: the Settings
+    ///   window and a capture surface can both be on screen at once.
+    ///
+    ///   Defaulted to `{ nil }` so a surface that has no settings to consult —
+    ///   every test that does not care, and any future surface — is not forced
+    ///   to invent one.
     public init(
         service: CaptureService,
         projects: @escaping () -> [Project],
         preferred: @escaping () -> UUID? = { nil },
+        defaultProjectID: @escaping () -> UUID? = { nil },
         onCaptured: @escaping (TaskItem) -> Void = { _ in }
     ) {
         self.service = service
         self.projects = projects
         self.preferred = preferred
+        self.defaultProjectID = defaultProjectID
         self.onCaptured = onCaptured
     }
 
@@ -80,9 +91,15 @@ public final class CaptureFieldModel {
     /// error to, so a failure becomes `lastError` and the text is kept.
     public func commit() {
         do {
+            // Read once, here, and deliberately not in `refreshChip()`. The
+            // chip is derived from a ticket-key match alone and never displays
+            // a configured default, so there is no path where the UI promises
+            // one project and the save writes another — and §1.1's
+            // per-keystroke budget is untouched.
             if let task = try service.capture(
                 text: text,
                 preferred: preferred(),
+                defaultProjectID: defaultProjectID(),
                 ignoringTicketKey: isCurrentMatchDismissed()
             ) {
                 onCaptured(task)

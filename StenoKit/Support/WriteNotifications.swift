@@ -1,12 +1,18 @@
 import Foundation
 
 extension Notification.Name {
-    /// Posted after a write through a writing service is on disk.
+    /// Posted after a write is on disk — by each writing service, and by
+    /// `MainWindowModel.perform` for project writes, which have no service.
     ///
-    /// Project writes through `MainWindowModel.perform` do not currently post
-    /// this — that view model is the only surface that shows projects today,
-    /// so nothing yet depends on it. A future cache of projects elsewhere must
-    /// not assume this notification covers them.
+    /// **That last clause was the exception until M1-08, and the exception was
+    /// a bug.** This comment used to say project writes did not post, on the
+    /// grounds that the main window was the only surface showing projects, and
+    /// warned that "a future cache of projects elsewhere must not assume this
+    /// notification covers them". FR-6's default-project picker became exactly
+    /// that cache and made exactly that assumption, so archiving a project left
+    /// it selected in Settings. Closing the gap is the fix; a second
+    /// notification for project writes would only have moved the same
+    /// forgettable registration one level down.
     ///
     /// **Posted at the write, not by each surface** (D-031). View models fetch
     /// manually and do not refresh, so without this the floating panel and

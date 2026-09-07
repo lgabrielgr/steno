@@ -90,6 +90,12 @@ public final class MainWindowModel: MainWindowActions {
     let now: () -> Date
     let save: (ModelContext) throws -> Void
 
+    /// FR-6's settings, reached by the capture sheet through
+    /// `defaultProjectIDForCapture`. Held rather than read at the call site so
+    /// a test can supply a scratch suite instead of the developer's own
+    /// preferences (§9.4).
+    let settings: AppSettings
+
     /// Kept alive so the observation lives exactly as long as this model. See
     /// `WriteObservation` for why the token is not a plain stored property.
     private var writeObservation: WriteObservation?
@@ -100,11 +106,13 @@ public final class MainWindowModel: MainWindowActions {
     public init(
         context: ModelContext,
         now: @escaping () -> Date = Date.init,
-        save: @escaping (ModelContext) throws -> Void = { try $0.save() }
+        save: @escaping (ModelContext) throws -> Void = { try $0.save() },
+        settings: AppSettings = AppSettings()
     ) {
         self.context = context
         self.now = now
         self.save = save
+        self.settings = settings
         self.noteComposer = NoteComposerModel(
             service: NoteService(context: context, now: now, save: save), now: now)
         reload()
@@ -312,6 +320,23 @@ public final class MainWindowModel: MainWindowActions {
             saved = false
         }
         reload()
+
+        // Project writes are the one write kind with no service behind them —
+        // they go straight through this method — so this is their post site,
+        // and D-031's "posted at the write" now covers all four kinds rather
+        // than three. Without it a cache of projects held anywhere else goes
+        // stale: FR-6's default-project picker kept offering a project the user
+        // had just archived, and the menu bar popover kept listing its tasks.
+        //
+        // Only on success, for the reason `MainWindowModel+Status` gives about
+        // no-op transitions: a save that failed was rolled back, and telling
+        // every surface to refetch would announce a write that did not happen.
+        //
+        // After `reload()`, so this model is consistent by the time the others
+        // read. Its own observer then reloads a second time — the same
+        // idempotent double-reload `+Status` documents, over a dataset D18
+        // caps.
+        if saved { NotificationCenter.default.post(name: .stenoDidWrite, object: nil) }
         return saved
     }
 }

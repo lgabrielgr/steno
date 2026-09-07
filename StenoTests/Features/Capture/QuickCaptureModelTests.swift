@@ -1,4 +1,5 @@
 import AppKit
+import Carbon.HIToolbox
 import Foundation
 import SwiftData
 import Testing
@@ -13,9 +14,14 @@ private final class FakeHotkeyMonitor: GlobalHotkeyMonitor {
     var unregisterCount = 0
     var failure: (any Error)?
 
+    /// Kept so a test can fire the action the model registered. Without this,
+    /// "rebinding keeps the hotkey working" is unprovable here.
+    var onPress: (() -> Void)?
+
     func register(_ chord: HotkeyChord, onPress: @escaping () -> Void) throws {
         if let failure { throw failure }
         registered = chord
+        self.onPress = onPress
     }
 
     func unregister() {
@@ -24,13 +30,14 @@ private final class FakeHotkeyMonitor: GlobalHotkeyMonitor {
     }
 }
 
-/// The helper's three values as a named struct rather than a tuple.
-/// SwiftLint's `large_tuple` rejects a bare 3-tuple — the same reason
+/// The helper's values as a named struct rather than a tuple. SwiftLint's
+/// `large_tuple` rejects a bare 3-tuple — the same reason
 /// `CaptureFieldModelTests` declares a `Fixture`.
 private struct Fixture {
     let model: QuickCaptureModel
     let context: ModelContext
     let monitor: FakeHotkeyMonitor
+    let settings: AppSettings
 }
 
 @MainActor
@@ -50,13 +57,14 @@ private func makeModel(
     // and `--strict` promotes it to a build failure.
     let defaults = try #require(UserDefaults(suiteName: "steno.tests.\(UUID().uuidString)"))
     if let stored {
-        defaults.set(try JSONEncoder().encode(stored), forKey: QuickCaptureModel.chordKey)
+        defaults.set(try JSONEncoder().encode(stored), forKey: AppSettings.hotkeyChordKey)
     }
 
+    let settings = AppSettings(defaults: defaults)
     let model = QuickCaptureModel(
-        context: context, monitor: monitor, reserved: { reserved }, defaults: defaults,
-        now: { epoch })
-    return Fixture(model: model, context: context, monitor: monitor)
+        context: context, monitor: monitor, reserved: { reserved },
+        settings: settings, now: { epoch })
+    return Fixture(model: model, context: context, monitor: monitor, settings: settings)
 }
 
 @Test("with no stored chord the model binds ⌥Space")
@@ -85,21 +93,85 @@ func storedChordIsUsed() throws {
     #expect(monitor.registered == stored)
 }
 
+/// A chord that decodes cleanly can still be one that must never be
+/// registered. Before M1-08 nothing in the app could write this key — `rebind`
+/// had no caller — so the load path had never been handed a hostile value; the
+/// Settings pane makes it a real, user-writable setting. `defaults write` and a
+/// future second caller of `rebind` are both now reachable.
+///
+/// A bare key bound globally is swallowed in *every* application, so this is
+/// the one invalid state that damages the machine rather than the app.
+@Test("a stored chord with no modifiers is refused and the default is bound instead")
+@MainActor
+func storedBareKeyFallsBackToTheDefault() throws {
+    let bare = HotkeyChord(keyCode: UInt16(kVK_ANSI_K), modifiers: 0)
+    let fixture = try makeModel(stored: bare)
+    let (model, monitor) = (fixture.model, fixture.monitor)
+
+    model.start {}
+
+    #expect(model.chord == .default)
+    #expect(monitor.registered == .default)
+    // The stored value is left alone, exactly as an undecodable one is: this
+    // is a read-side refusal, not a correction (D-056).
+    #expect(fixture.settings.hotkeyChord == bare)
+}
+
+@Test("a stored shift-only chord is refused the same way")
+@MainActor
+func storedShiftOnlyChordFallsBackToTheDefault() throws {
+    let shifted = HotkeyChord(
+        keyCode: UInt16(kVK_ANSI_K), modifiers: NSEvent.ModifierFlags.shift.rawValue)
+    let fixture = try makeModel(stored: shifted)
+
+    fixture.model.start {}
+
+    #expect(fixture.model.chord == .default)
+    #expect(fixture.monitor.registered == .default)
+}
+
+/// The masking half of `validate` is load-bearing on the load path too, not
+/// just the judging half — a hand-written chord can carry bits the recorder
+/// would never have produced. `HotkeyChord` compares modifiers for exact
+/// equality (D-059), so an unmasked `.capsLock` bit would silently stop the
+/// chord matching `SystemHotkeys` and convert to the wrong Carbon mask.
+///
+/// Asserted rather than left to the doc comment, because a comment claiming a
+/// behaviour nothing exercises is this repo's most repeated defect.
+@Test("a stored chord carrying stray modifier bits is masked before it is bound")
+@MainActor
+func storedChordWithStrayBitsIsMasked() throws {
+    let command = NSEvent.ModifierFlags.command.rawValue
+    let stored = HotkeyChord(
+        keyCode: UInt16(kVK_ANSI_K), modifiers: command | NSEvent.ModifierFlags.capsLock.rawValue)
+    let fixture = try makeModel(stored: stored)
+
+    fixture.model.start {}
+
+    let masked = HotkeyChord(keyCode: UInt16(kVK_ANSI_K), modifiers: command)
+    #expect(fixture.model.chord == masked)
+    #expect(fixture.monitor.registered == masked)
+    // Refuse, don't correct: what is bound differs from what is stored, and
+    // the file is left as the user wrote it.
+    #expect(fixture.settings.hotkeyChord == stored)
+}
+
 @Test("an undecodable stored chord falls back to the default without erasing it")
 @MainActor
 func undecodableStoredChordFallsBack() throws {
     let context = ModelContext(try StenoStore.inMemory())
     let defaults = try #require(UserDefaults(suiteName: "steno.tests.\(UUID().uuidString)"))
-    defaults.set(Data([0x01, 0x02]), forKey: QuickCaptureModel.chordKey)
+    defaults.set(Data([0x01, 0x02]), forKey: AppSettings.hotkeyChordKey)
 
     let model = QuickCaptureModel(
-        context: context, monitor: FakeHotkeyMonitor(), reserved: { [] }, defaults: defaults,
-        now: { epoch })
+        context: context, monitor: FakeHotkeyMonitor(), reserved: { [] },
+        settings: AppSettings(defaults: defaults), now: { epoch })
     model.start {}
 
     #expect(model.chord == .default)
-    // M1-08's pane will want to show what the bad value was.
-    #expect(defaults.data(forKey: QuickCaptureModel.chordKey) == Data([0x01, 0x02]))
+    // The Capture pane shows the user what is actually stored, so the bad
+    // value is reported as absent rather than erased.
+    #expect(defaults.data(forKey: AppSettings.hotkeyChordKey) == Data([0x01, 0x02]))
 }
 
 @Test("a reserved chord warns and is registered anyway")
@@ -143,7 +215,7 @@ func rebindingReplacesTheChord() throws {
 
     monitor.failure = nil
     let replacement = HotkeyChord(keyCode: 49, modifiers: NSEvent.ModifierFlags.command.rawValue)
-    model.rebind(to: replacement) {}
+    model.rebind(to: replacement)
 
     #expect(model.chord == replacement)
     #expect(model.registrationProblem == nil)
@@ -225,4 +297,66 @@ func panelCaptureRoutesOnTicketKey() throws {
     let tasks = try context.fetch(FetchDescriptor<TaskItem>())
     #expect(tasks.count == 1)
     #expect(model.field.text.isEmpty)
+}
+
+/// M1-08's first acceptance criterion, as far as a headless test reaches:
+/// rebinding takes effect with no relaunch, and the action survives it.
+///
+/// The action surviving is the half that could silently break. `rebind(to:)`
+/// re-registers using the closure `start` stored; drop that and the chord
+/// still changes, the monitor still reports the new binding, and pressing it
+/// does nothing.
+@Test("rebinding keeps the registered action live")
+@MainActor
+func rebindingKeepsTheActionLive() throws {
+    let fixture = try makeModel()
+    let (model, monitor) = (fixture.model, fixture.monitor)
+
+    var presses = 0
+    model.start { presses += 1 }
+    monitor.onPress?()
+    #expect(presses == 1)
+
+    let replacement = HotkeyChord(keyCode: 49, modifiers: NSEvent.ModifierFlags.command.rawValue)
+    model.rebind(to: replacement)
+
+    #expect(monitor.registered == replacement)
+    monitor.onPress?()
+    #expect(presses == 2, "the action stored by start() must survive a rebind")
+}
+
+/// A chord bound in front of no action is worse than no chord: it swallows the
+/// keystroke system-wide and does nothing.
+@Test("rebinding before start registers nothing and says so")
+@MainActor
+func rebindingBeforeStartRegistersNothing() throws {
+    let fixture = try makeModel()
+    let (model, monitor) = (fixture.model, fixture.monitor)
+
+    let replacement = HotkeyChord(keyCode: 49, modifiers: NSEvent.ModifierFlags.command.rawValue)
+    model.rebind(to: replacement)
+
+    #expect(monitor.registered == nil)
+    #expect(model.registrationProblem != nil)
+}
+
+/// The chord is persisted before registration is attempted, so a failure
+/// leaves the user's choice recorded rather than silently reverting it.
+@Test("a rebind that fails to register still persists the chosen chord")
+@MainActor
+func aFailedRebindStillPersistsTheChord() throws {
+    let defaults = try #require(UserDefaults(suiteName: "steno.tests.\(UUID().uuidString)"))
+    let settings = AppSettings(defaults: defaults)
+    let monitor = FakeHotkeyMonitor()
+    let model = QuickCaptureModel(
+        context: ModelContext(try StenoStore.inMemory()), monitor: monitor, reserved: { [] },
+        settings: settings, now: { epoch })
+    model.start {}
+
+    monitor.failure = HotkeyRegistrationError.alreadyRegistered
+    let replacement = HotkeyChord(keyCode: 49, modifiers: NSEvent.ModifierFlags.command.rawValue)
+    model.rebind(to: replacement)
+
+    #expect(model.registrationProblem == "That shortcut is already registered.")
+    #expect(settings.hotkeyChord == replacement)
 }

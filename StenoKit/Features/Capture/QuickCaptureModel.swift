@@ -12,7 +12,7 @@ import SwiftData
 /// reloads itself.
 @Observable
 @MainActor
-public final class QuickCaptureModel {
+public final class QuickCaptureModel: HotkeyBinding {
     /// The shared capture field — the same type the main window's sheet uses,
     /// so the FR-1.4 chip cannot drift between surfaces.
     public let field: CaptureFieldModel
@@ -20,19 +20,26 @@ public final class QuickCaptureModel {
     /// The chord currently bound.
     public private(set) var chord: HotkeyChord
 
-    /// A conflict or a registration failure, in words. M1-08's rebinding pane
-    /// renders this; M1-03 has no settings UI to put it in, so the property
-    /// *is* the attachment point (design §3.4).
+    /// A conflict or a registration failure, in words. M1-08's Capture pane
+    /// renders this; M1-03 had no settings UI to put it in, so the property
+    /// *was* the attachment point (design §3.4).
     public private(set) var registrationProblem: String?
 
-    /// Where the user's chord is stored. `UserDefaults`, not SwiftData: it is
-    /// configuration, not domain data, and §10's export carries the domain.
-    public static let chordKey = "com.lgabrielgr.steno.hotkeyChord"
+    /// What the hotkey does. Stored by `start` so `rebind(to:)` can re-register
+    /// without the caller having to supply it again.
+    ///
+    /// **This is why `rebind` takes a chord and nothing else.** The Settings
+    /// pane's business is *which chord*, not what pressing it does; had it
+    /// been obliged to pass the action, the settings layer would have to know
+    /// how `QuickCaptureController` toggles its panel, and the next pane
+    /// driving a controller would copy that. No retain cycle: the controller
+    /// passes `{ [weak self] in self?.toggle() }`.
+    private var onPress: (() -> Void)?
 
     private let context: ModelContext
     private let monitor: any GlobalHotkeyMonitor
     private let reserved: () -> [ReservedHotkey]
-    private let defaults: UserDefaults
+    private let settings: AppSettings
     private let projectBox: ProjectBox
 
     public init(
@@ -41,7 +48,7 @@ public final class QuickCaptureModel {
         reserved: @escaping () -> [ReservedHotkey] = {
             SystemHotkeys.reserved(in: SystemHotkeys.systemDomain())
         },
-        defaults: UserDefaults = .standard,
+        settings: AppSettings = AppSettings(),
         now: @escaping () -> Date = Date.init,
         onCaptured: @escaping () -> Void = {}
     ) {
@@ -50,7 +57,7 @@ public final class QuickCaptureModel {
         self.context = context
         self.monitor = monitor
         self.reserved = reserved
-        self.defaults = defaults
+        self.settings = settings
         self.chord = .default
         self.field = CaptureFieldModel(
             service: CaptureService(context: context, now: now),
@@ -59,24 +66,64 @@ public final class QuickCaptureModel {
             // the ticket key, then last-used. `CaptureService`'s own
             // documentation specifies `nil` for exactly this surface.
             preferred: { nil },
+            // FR-6's configured default, rung 4 of FR-1.4's ladder. Read per
+            // commit, never per keystroke: `refreshChip` does not consult it,
+            // because the chip only ever displays a ticket-key match.
+            defaultProjectID: { settings.defaultProjectID },
             onCaptured: { _ in onCaptured() }
         )
     }
 
     /// Read the stored chord, check it, and bind it.
+    ///
+    /// **The stored chord is re-validated, not trusted.** `AppSettings` decodes
+    /// whatever is on disk and deliberately does no checking (D-056), and
+    /// decoding cleanly is a weaker property than being safe to register: a
+    /// chord with no modifiers, or shift alone, binds a bare key *system-wide*
+    /// and swallows it in every application — the exact harm
+    /// `HotkeyChordValidator` refuses at the recorder. Nothing in the app can
+    /// write such a value, but `defaults write` can, and so could a second
+    /// caller of `rebind` added later. Refusing on the read side is what makes
+    /// that a non-event rather than an unusable keyboard (D-062).
+    ///
+    /// An invalid chord falls back to `.default` and is **left on disk**,
+    /// exactly as an undecodable one is: this is a refusal to act on a value,
+    /// not a correction of it.
     public func start(onPress: @escaping () -> Void) {
-        chord = storedChord()
-        bind(onPress: onPress)
+        self.onPress = onPress
+        chord = settings.hotkeyChord.flatMap(Self.bindable) ?? .default
+        bind()
     }
 
-    /// M1-08's entry point. Deliberately present from day one so that task
-    /// adds a pane rather than redesigning this type.
-    public func rebind(to replacement: HotkeyChord, onPress: @escaping () -> Void) {
+    /// The stored chord if it is safe to register, `nil` otherwise.
+    ///
+    /// Runs the same rule the recorder does, and needs **both** halves of it.
+    /// A chord this app wrote came through `validate` already, so the second
+    /// pass is a no-op for it — but that is a fact about this app's write path,
+    /// not about the file on disk, and the values this guard exists for are
+    /// exactly the ones that never came from the recorder. Those can carry
+    /// `.capsLock` or `.function` bits as easily as no modifiers at all, so the
+    /// masking is load-bearing here too and not merely the judging.
+    ///
+    /// A consequence: the chord returned may differ from the one stored, when
+    /// masking strips bits the recorder would never have produced. `start`
+    /// binds and displays what comes back and leaves the file alone, which is
+    /// the same refuse-don't-correct posture as the `nil` case.
+    private static func bindable(_ stored: HotkeyChord) -> HotkeyChord? {
+        try? HotkeyChordValidator.validate(
+            keyCode: stored.keyCode, modifiers: stored.modifiers
+        ).get()
+    }
+
+    /// M1-08's entry point: bind a different chord, with no relaunch.
+    ///
+    /// Persist first, then register, so a registration that fails still leaves
+    /// the user's choice recorded — the pane shows the problem and the chord
+    /// they picked rather than silently reverting to the old one.
+    public func rebind(to replacement: HotkeyChord) {
         chord = replacement
-        if let encoded = try? JSONEncoder().encode(replacement) {
-            defaults.set(encoded, forKey: Self.chordKey)
-        }
-        bind(onPress: onPress)
+        settings.hotkeyChord = replacement
+        bind()
     }
 
     /// Called on every open.
@@ -98,8 +145,18 @@ public final class QuickCaptureModel {
         field.refreshChip()
     }
 
-    private func bind(onPress: @escaping () -> Void) {
+    private func bind() {
         registrationProblem = nil
+
+        // Nothing has told this model what the hotkey does yet, so there is no
+        // action to register. Binding anyway would put a live system-wide
+        // chord in front of a no-op — a hotkey that swallows the keystroke and
+        // does nothing, which is worse than the unbound state it replaces.
+        guard let onPress else {
+            Log.app.error("hotkey bind requested before start(); nothing was registered")
+            registrationProblem = "The shortcut could not be registered."
+            return
+        }
 
         // Warn, then register anyway. Refusing to bind guarantees a dead
         // hotkey; binding a claimed chord leaves the user with one that may
@@ -124,15 +181,6 @@ public final class QuickCaptureModel {
             Log.app.fault(
                 "hotkey registration failed: \(String(describing: error), privacy: .public)")
         }
-    }
-
-    /// A bad stored value falls back without being overwritten — M1-08's pane
-    /// will want to show the user what is actually in there.
-    private func storedChord() -> HotkeyChord {
-        guard let data = defaults.data(forKey: Self.chordKey),
-            let decoded = try? JSONDecoder().decode(HotkeyChord.self, from: data)
-        else { return .default }
-        return decoded
     }
 
     private func liveProjects() -> [Project] {

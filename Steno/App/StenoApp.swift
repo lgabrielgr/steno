@@ -18,6 +18,11 @@ struct StenoApp: App {
     /// the status item out of the menu bar with it.
     private let menuBar: MenuBarController?
 
+    /// FR-6's surface. Built here for the reason the two controllers are: the
+    /// `Settings` scene's content is rebuilt freely by SwiftUI, and the state
+    /// behind it must not be.
+    private let settingsModel: SettingsModel
+
     /// Exists to keep the app alive when the last window closes, which is what
     /// makes "the icon is present without the main window open" true.
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
@@ -92,9 +97,16 @@ struct StenoApp: App {
             controller.start()
             quickCapture = controller
             menuBar = MenuBarController(container: container)
+            settingsModel = SettingsModel(
+                hotkey: controller.hotkeyBinding, context: container.mainContext)
         } else {
             quickCapture = nil
             menuBar = nil
+            // Settings still opens. Launch at login has no store dependency
+            // and stays live; the hotkey and default-project controls disable
+            // themselves and say why (§13 — degradation ships with the
+            // feature, not after it).
+            settingsModel = SettingsModel()
         }
     }
 
@@ -121,5 +133,16 @@ struct StenoApp: App {
             }
         }
         .commands { MainWindowCommands() }
+
+        // FR-6. A `Settings` scene rather than a second `Window`: this is what
+        // puts "Steno › Settings…" in the application menu at the right
+        // position with ⌘, bound, and makes macOS treat the window as a
+        // settings window. ⌘, is the only entry point by decision — clicking
+        // the menu bar icon activates the app (`MenuBarController.show` calls
+        // `NSApp.activate`), so the application menu is reachable even with no
+        // window open, and M1-04's popover is left as it was built.
+        Settings {
+            SettingsView(model: settingsModel)
+        }
     }
 }

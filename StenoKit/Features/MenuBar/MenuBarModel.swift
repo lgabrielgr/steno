@@ -89,7 +89,8 @@ public final class MenuBarModel {
         context: ModelContext,
         now: @escaping () -> Date = Date.init,
         save: @escaping (ModelContext) throws -> Void = { try $0.save() },
-        failFetch: @escaping () throws -> Void = {}
+        failFetch: @escaping () throws -> Void = {},
+        settings: AppSettings = AppSettings()
     ) {
         let box = ProjectBox()
         self.projectBox = box
@@ -103,7 +104,10 @@ public final class MenuBarModel {
             // The popover has no surface context to prefer, so FR-1.4's ladder
             // falls through to the ticket key and then to last-used.
             // `CaptureService.capture` names this surface explicitly.
-            preferred: { nil }
+            preferred: { nil },
+            // FR-6's configured default, rung 4. Read per commit, not per
+            // keystroke — see `CaptureFieldModel.commit`.
+            defaultProjectID: { settings.defaultProjectID }
             // No `onCaptured:` hook. Nothing here needs one: the list refresh
             // arrives through the `.stenoDidWrite` observer below, and the
             // popover is closed by `CaptureFieldView.commit()` calling its
