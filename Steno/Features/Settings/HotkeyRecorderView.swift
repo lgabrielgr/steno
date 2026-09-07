@@ -52,6 +52,10 @@ final class HotkeyRecorderControl: NSButton {
         didSet { refreshTitle() }
     }
 
+    /// Disarms when the control's window stops being key. Rebuilt whenever the
+    /// control changes window; see `viewDidMoveToWindow`.
+    private var keyWindowObservation: NotificationObservation?
+
     init() {
         super.init(frame: .zero)
         bezelStyle = .rounded
@@ -78,6 +82,20 @@ final class HotkeyRecorderControl: NSButton {
         let monitor = NSEvent.addLocalMonitorForEvents(matching: [.keyDown]) { [weak self] event in
             guard let self, self.recording != nil else { return event }
 
+            // A local monitor is application-wide, not view-wide. If this
+            // control's window is not the one being typed into, the press is
+            // not a binding gesture — so disarm and let it through rather than
+            // swallowing a keystroke aimed at something else.
+            //
+            // Belt to `keyWindowObservation`'s braces, and the half that makes
+            // the failure impossible rather than merely unlikely: the shipped
+            // bug was a monitor that outlived its window and bound ⌘, — the
+            // press that was meant to *open* Settings.
+            guard self.window?.isKeyWindow == true else {
+                self.recording = nil
+                return event
+            }
+
             // `Esc` cancels rather than binding — so no `Esc` chord is
             // bindable at all, which is the platform norm and matches every
             // other `Esc` in this app.
@@ -96,10 +114,31 @@ final class HotkeyRecorderControl: NSButton {
         recording = monitor.map(LocalMonitorToken.init)
     }
 
-    /// Disarm when the control leaves the screen, so a Settings window closed
-    /// mid-recording does not leave a monitor swallowing every key press.
+    /// Disarm when the control's window goes away — or merely stops being the
+    /// one receiving keys.
+    ///
+    /// **`window == nil` alone is not enough, and shipping it alone was the
+    /// bug.** SwiftUI's `Settings` scene keeps its window and its content view
+    /// alive across a close: ⌘, reopens the same window rather than building a
+    /// new one, so a control armed when the window closed never moves out of a
+    /// window and this override never runs. The monitor survived, and the next
+    /// keystroke anywhere in the app was swallowed and bound — reliably ⌘,
+    /// itself, since that is what the user presses to get Settings back.
+    ///
+    /// Resigning key is the signal that actually fires: on close, on switching
+    /// to the main window, and on ⌘Tab away. All three should disarm, so
+    /// watching for it is not just a workaround for the close case.
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
+
+        keyWindowObservation = window.map { window in
+            NotificationObservation(
+                NotificationCenter.default.addObserver(
+                    forName: NSWindow.didResignKeyNotification, object: window, queue: nil
+                ) { [weak self] _ in
+                    MainActor.assumeIsolated { self?.recording = nil }
+                })
+        }
         if window == nil { recording = nil }
     }
 }
@@ -119,5 +158,23 @@ private final class LocalMonitorToken {
 
     deinit {
         NSEvent.removeMonitor(monitor)
+    }
+}
+
+/// The same arrangement for a `NotificationCenter` observation.
+///
+/// `StenoKit`'s `WriteObservation` is this type, but it is internal to that
+/// module and `Steno` cannot see it. Two five-line classes rather than making
+/// one of them public: the shape is the Swift 6 rule, not shared behaviour, and
+/// widening a framework's API for it would say otherwise.
+private final class NotificationObservation {
+    private let token: any NSObjectProtocol
+
+    init(_ token: any NSObjectProtocol) {
+        self.token = token
+    }
+
+    deinit {
+        NotificationCenter.default.removeObserver(token)
     }
 }

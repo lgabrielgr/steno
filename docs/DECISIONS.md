@@ -1313,6 +1313,32 @@ that failed before this change.
 
 ---
 
+### D-061 — The hotkey recorder disarms on resigning key, not on leaving its window
+
+**2026-09-07** · M1-08 · **Status:** accepted
+
+`HotkeyRecorderControl` disarms when its window posts `NSWindow.didResignKeyNotification`, and
+independently refuses to record any press that arrives while its window is not key.
+
+**Why the original hook was wrong.** It disarmed in `viewDidMoveToWindow` when `window == nil`,
+on the assumption that closing Settings tears the view down. SwiftUI's `Settings` scene keeps its
+window and content view alive across a close — ⌘, reopens the same window rather than building a
+new one — so a control left armed never moves out of a window and the disarm never ran. The local
+monitor survived the close, and because it is application-wide it then swallowed and bound the
+next keystroke anywhere in the app. In practice that keystroke is ⌘, itself: the user presses it
+to get Settings back, and instead silently rebinds capture onto it. Confirmed from the persisted
+chord, which read `{"modifiers":1048576,"keyCode":43}`.
+
+Resigning key is the signal that actually fires, and it is the *right* signal independently: a
+recorder should also stop listening when the user switches to the main window or ⌘Tabs away.
+
+**Both halves, deliberately.** The notification disarms eagerly; the `window?.isKeyWindow` check
+inside the monitor makes a missed notification harmless and passes the keystroke through instead of
+eating it. This is view plumbing in `Steno/`, so per D-010 it carries no unit test — the evidence
+is the manual check, and the reason the check exists.
+
+---
+
 ## Open — decided by the task that owns them
 
 Each of these is a real choice the spec leaves open. The owning task decides it, records it in
