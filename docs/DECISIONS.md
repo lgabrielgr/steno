@@ -1404,7 +1404,7 @@ a capture concern.
 **2026-09-07** · follow-up to M1-07/M1-08 · **Status:** accepted · **completes D-053's fix**
 
 `testSingleCaptureIsWellUnderBudget` and `testCaptureAtScaleIsWellUnderBudget` now gate on the
-mean of `measure`'s ten iterations. The 50 ms ceiling is unchanged. All three cases in
+mean of `measure`'s iterations. The 50 ms ceiling is unchanged. All three cases in
 `CapturePerformanceTests` are now on the same statistic; the file's "one exception" note is gone.
 
 **The evidence.** `testCaptureAtScaleIsWellUnderBudget` failed at 63 ms, failed again at 72 ms,
@@ -1429,7 +1429,7 @@ the warm-up was reverted rather than shipped. **A change that does nothing, carr
 saying it fixed something, would have been worse than no change** — and the comment was already
 written before the measurement contradicted it.
 
-**What the mean gives up.** A regression that slowed one capture in ten would now pass. That is
+**What the mean gives up.** A regression that slowed a single capture in a run would now pass. That is
 accepted for the same reason D-053 accepted it: no worst-of-ten ceiling separates that defect from
 runner noise, because 72 ms has been observed on clean code. A regression worth catching — the
 order-of-magnitude kind this gate exists for — moves the mean with it, verified by mutation: a

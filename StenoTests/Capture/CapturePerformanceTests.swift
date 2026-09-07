@@ -17,8 +17,9 @@ import XCTest
 /// own measurements.
 ///
 /// The cause is the same in all three: **`measure`'s first iteration is
-/// consistently 2–5x the other nine**, and worst-of-ten is the statistic that
-/// selects for it. It is *not* a cold store, though the comment here used to
+/// consistently several times the rest** — 2–5x, in the ten-iteration runs
+/// these numbers come from — and worst-of-ten is the statistic that selects
+/// for it. It is *not* a cold store, though the comment here used to
 /// say so — an untimed warm-up capture before `measure` was implemented and
 /// measured, and left the spike exactly where it was (9.5 ms → 9.6 ms). The
 /// overhead is in XCTest's measurement harness, not in the code under test, so
@@ -93,7 +94,9 @@ final class CapturePerformanceTests: XCTestCase {
     /// iteration and fails the assertion. That was verified by breaking it on
     /// purpose, not reasoned about.
     ///
-    /// **This case asserts the mean, unlike the rest of the file — M1-07.**
+    /// **This case was the first to move to the mean — M1-07.** It was the
+    /// only one for a while; D-064 moved the other two for the same reason, so
+    /// the whole file now agrees.
     /// It originally gated on worst-of-ten at 150 ms, which flaked on GitHub's
     /// runners in 2 of 7 runs: worst-of-ten came in at 150.1 ms once and
     /// **267 ms** once. Worst-of-ten is precisely the statistic shared CI
@@ -159,10 +162,18 @@ final class CapturePerformanceTests: XCTestCase {
     }
 
     /// One realistic capture — routing, extraction, three inserts, one save —
-    /// on an empty store. Measured at 3.6 ms, worst of ten across three runs
-    /// on this machine (the average across the ten was 1.6 ms). The worst is
-    /// always the first iteration, against a cold store; the other nine sit
-    /// near 1.4 ms.
+    /// on an empty store.
+    ///
+    /// Measured on this machine over four runs: **mean 1.2–2.1 ms**, against a
+    /// worst-of-ten of 3.4–4.3 ms that was always the first iteration. The low
+    /// end of the mean is from a full `make test`, the rest from this suite
+    /// alone.
+    ///
+    /// This case has never failed in CI. D-064 moved it off worst-of-ten
+    /// anyway, with its sibling: it shares the cause, the statistic and the
+    /// ceiling, and this file already argues the two gates must not drift
+    /// apart — which has to cover *how* they measure, not only the figure they
+    /// compare against. Leaving it would have been waiting for it.
     @MainActor
     func testSingleCaptureIsWellUnderBudget() throws {
         let directory = makeDirectory()
@@ -207,8 +218,8 @@ final class CapturePerformanceTests: XCTestCase {
         XCTAssertLessThan(
             average, ceiling,
             """
-            a single capture averaged \(average * 1000) ms, \
-            over the \(ceiling * 1000) ms ceiling
+            a single capture took \(average * 1000) ms on average \
+            over \(iterations) iterations, past the \(ceiling * 1000) ms ceiling
             """
         )
     }
@@ -232,7 +243,8 @@ final class CapturePerformanceTests: XCTestCase {
     ///
     /// **What this still catches, and what it gives up.** A regression that
     /// slows every capture — the kind worth catching — moves the mean with it.
-    /// A regression that made one capture in ten slow would now pass, which is
+    /// A regression that made a single capture in a run slow would now pass,
+    /// which is
     /// the trade M1-07 accepted for `testKeyScanOnALargePasteStaysInteractive`
     /// and is accepted here for the same reason: no ceiling on worst-of-ten
     /// separates that defect from the runner, because 72 ms has been seen on
@@ -271,8 +283,8 @@ final class CapturePerformanceTests: XCTestCase {
         XCTAssertLessThan(
             average, ceiling,
             """
-            a capture at D18 scale averaged \(average * 1000) ms, \
-            over the \(ceiling * 1000) ms ceiling
+            a capture at D18 scale took \(average * 1000) ms on average \
+            over \(iterations) iterations, past the \(ceiling * 1000) ms ceiling
             """
         )
     }
