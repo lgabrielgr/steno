@@ -90,6 +90,12 @@ public final class MainWindowModel: MainWindowActions {
     let now: () -> Date
     let save: (ModelContext) throws -> Void
 
+    /// FR-6's settings, reached by the capture sheet through
+    /// `defaultProjectIDForCapture`. Held rather than read at the call site so
+    /// a test can supply a scratch suite instead of the developer's own
+    /// preferences (§9.4).
+    let settings: AppSettings
+
     /// Kept alive so the observation lives exactly as long as this model. See
     /// `WriteObservation` for why the token is not a plain stored property.
     private var writeObservation: WriteObservation?
@@ -100,11 +106,13 @@ public final class MainWindowModel: MainWindowActions {
     public init(
         context: ModelContext,
         now: @escaping () -> Date = Date.init,
-        save: @escaping (ModelContext) throws -> Void = { try $0.save() }
+        save: @escaping (ModelContext) throws -> Void = { try $0.save() },
+        settings: AppSettings = AppSettings()
     ) {
         self.context = context
         self.now = now
         self.save = save
+        self.settings = settings
         self.noteComposer = NoteComposerModel(
             service: NoteService(context: context, now: now, save: save), now: now)
         reload()

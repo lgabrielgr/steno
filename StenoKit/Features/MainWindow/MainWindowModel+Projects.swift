@@ -18,6 +18,14 @@ extension MainWindowModel {
     /// FR-1.4 rung 2, exposed for the capture sheet. See `preferredProjectID`.
     public var preferredProjectIDForCapture: UUID? { preferredProjectID() }
 
+    /// FR-1.4 rung 4 — FR-6's configured default — exposed for the same sheet.
+    ///
+    /// A computed property rather than a stored value: `NewTaskSheet` builds
+    /// its `CaptureFieldModel` once per presentation and reads through this on
+    /// commit, so a default changed in Settings while the sheet is open is the
+    /// one that applies.
+    public var defaultProjectIDForCapture: UUID? { settings.defaultProjectID }
+
     public func createProject(named name: String) {
         let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }

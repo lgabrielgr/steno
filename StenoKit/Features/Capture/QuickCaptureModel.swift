@@ -66,6 +66,10 @@ public final class QuickCaptureModel: HotkeyBinding {
             // the ticket key, then last-used. `CaptureService`'s own
             // documentation specifies `nil` for exactly this surface.
             preferred: { nil },
+            // FR-6's configured default, rung 4 of FR-1.4's ladder. Read per
+            // commit, never per keystroke: `refreshChip` does not consult it,
+            // because the chip only ever displays a ticket-key match.
+            defaultProjectID: { settings.defaultProjectID },
             onCaptured: { _ in onCaptured() }
         )
     }
