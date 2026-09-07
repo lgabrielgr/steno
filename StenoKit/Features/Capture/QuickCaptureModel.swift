@@ -20,19 +20,15 @@ public final class QuickCaptureModel {
     /// The chord currently bound.
     public private(set) var chord: HotkeyChord
 
-    /// A conflict or a registration failure, in words. M1-08's rebinding pane
-    /// renders this; M1-03 has no settings UI to put it in, so the property
-    /// *is* the attachment point (design §3.4).
+    /// A conflict or a registration failure, in words. M1-08's Capture pane
+    /// renders this; M1-03 had no settings UI to put it in, so the property
+    /// *was* the attachment point (design §3.4).
     public private(set) var registrationProblem: String?
-
-    /// Where the user's chord is stored. `UserDefaults`, not SwiftData: it is
-    /// configuration, not domain data, and §10's export carries the domain.
-    public static let chordKey = "com.lgabrielgr.steno.hotkeyChord"
 
     private let context: ModelContext
     private let monitor: any GlobalHotkeyMonitor
     private let reserved: () -> [ReservedHotkey]
-    private let defaults: UserDefaults
+    private let settings: AppSettings
     private let projectBox: ProjectBox
 
     public init(
@@ -41,7 +37,7 @@ public final class QuickCaptureModel {
         reserved: @escaping () -> [ReservedHotkey] = {
             SystemHotkeys.reserved(in: SystemHotkeys.systemDomain())
         },
-        defaults: UserDefaults = .standard,
+        settings: AppSettings = AppSettings(),
         now: @escaping () -> Date = Date.init,
         onCaptured: @escaping () -> Void = {}
     ) {
@@ -50,7 +46,7 @@ public final class QuickCaptureModel {
         self.context = context
         self.monitor = monitor
         self.reserved = reserved
-        self.defaults = defaults
+        self.settings = settings
         self.chord = .default
         self.field = CaptureFieldModel(
             service: CaptureService(context: context, now: now),
@@ -65,7 +61,7 @@ public final class QuickCaptureModel {
 
     /// Read the stored chord, check it, and bind it.
     public func start(onPress: @escaping () -> Void) {
-        chord = storedChord()
+        chord = settings.hotkeyChord ?? .default
         bind(onPress: onPress)
     }
 
@@ -73,9 +69,7 @@ public final class QuickCaptureModel {
     /// adds a pane rather than redesigning this type.
     public func rebind(to replacement: HotkeyChord, onPress: @escaping () -> Void) {
         chord = replacement
-        if let encoded = try? JSONEncoder().encode(replacement) {
-            defaults.set(encoded, forKey: Self.chordKey)
-        }
+        settings.hotkeyChord = replacement
         bind(onPress: onPress)
     }
 
@@ -124,15 +118,6 @@ public final class QuickCaptureModel {
             Log.app.fault(
                 "hotkey registration failed: \(String(describing: error), privacy: .public)")
         }
-    }
-
-    /// A bad stored value falls back without being overwritten — M1-08's pane
-    /// will want to show the user what is actually in there.
-    private func storedChord() -> HotkeyChord {
-        guard let data = defaults.data(forKey: Self.chordKey),
-            let decoded = try? JSONDecoder().decode(HotkeyChord.self, from: data)
-        else { return .default }
-        return decoded
     }
 
     private func liveProjects() -> [Project] {

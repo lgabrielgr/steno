@@ -50,12 +50,12 @@ private func makeModel(
     // and `--strict` promotes it to a build failure.
     let defaults = try #require(UserDefaults(suiteName: "steno.tests.\(UUID().uuidString)"))
     if let stored {
-        defaults.set(try JSONEncoder().encode(stored), forKey: QuickCaptureModel.chordKey)
+        defaults.set(try JSONEncoder().encode(stored), forKey: AppSettings.hotkeyChordKey)
     }
 
     let model = QuickCaptureModel(
-        context: context, monitor: monitor, reserved: { reserved }, defaults: defaults,
-        now: { epoch })
+        context: context, monitor: monitor, reserved: { reserved },
+        settings: AppSettings(defaults: defaults), now: { epoch })
     return Fixture(model: model, context: context, monitor: monitor)
 }
 
@@ -90,16 +90,17 @@ func storedChordIsUsed() throws {
 func undecodableStoredChordFallsBack() throws {
     let context = ModelContext(try StenoStore.inMemory())
     let defaults = try #require(UserDefaults(suiteName: "steno.tests.\(UUID().uuidString)"))
-    defaults.set(Data([0x01, 0x02]), forKey: QuickCaptureModel.chordKey)
+    defaults.set(Data([0x01, 0x02]), forKey: AppSettings.hotkeyChordKey)
 
     let model = QuickCaptureModel(
-        context: context, monitor: FakeHotkeyMonitor(), reserved: { [] }, defaults: defaults,
-        now: { epoch })
+        context: context, monitor: FakeHotkeyMonitor(), reserved: { [] },
+        settings: AppSettings(defaults: defaults), now: { epoch })
     model.start {}
 
     #expect(model.chord == .default)
-    // M1-08's pane will want to show what the bad value was.
-    #expect(defaults.data(forKey: QuickCaptureModel.chordKey) == Data([0x01, 0x02]))
+    // The Capture pane shows the user what is actually stored, so the bad
+    // value is reported as absent rather than erased.
+    #expect(defaults.data(forKey: AppSettings.hotkeyChordKey) == Data([0x01, 0x02]))
 }
 
 @Test("a reserved chord warns and is registered anyway")
