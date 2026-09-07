@@ -1399,6 +1399,61 @@ way round: settings configures capture.
 No behaviour changed. The rule it encodes — what is safe to register as a global chord — was always
 a capture concern.
 
+### D-064 — Both store-write performance cases assert the mean, not the worst of ten
+
+**2026-09-07** · follow-up to M1-07/M1-08 · **Status:** accepted · **completes D-053's fix**
+
+`testSingleCaptureIsWellUnderBudget` and `testCaptureAtScaleIsWellUnderBudget` now gate on the
+mean of `measure`'s iterations. The 50 ms ceiling is unchanged. All three cases in
+`CapturePerformanceTests` are now on the same statistic; the file's "one exception" note is gone.
+
+**The evidence.** `testCaptureAtScaleIsWellUnderBudget` failed at 63 ms, failed again at 72 ms,
+then passed — **all three on the identical commit `f757b07`**, which changed a doc comment and
+added an unrelated test. Three outcomes from one commit is proof the code was not the variable.
+The failing run reported a mean of 11 ms at an RSD of **±189%**: nine iterations near 3 ms and one
+pathological one. Worst-of-ten is the statistic that selects for exactly that.
+
+M1-07 had already reached this conclusion for `testKeyScanOnALargePasteStaysInteractive` and
+recorded it in D-053, but left the two store-write cases on worst-of-ten because they had not
+flaked in seven runs. They had the same weakness; one of them simply had not crossed the line yet.
+`testSingleCaptureIsWellUnderBudget` still has not, and is moved anyway — it shares the cause, the
+statistic and the ceiling, and the file already argues the two gates must not drift apart. That
+has to cover *how* they measure, not only the figure they compare against.
+
+**A root-cause fix was tried first and rejected on measurement.** Per-iteration values show the
+first iteration is consistently 2–5x the other nine, and the existing comment attributed that to a
+cold store. If true, an untimed warm-up capture before `measure` would have removed the spike and
+allowed worst-of-ten to stay — the stricter gate. It was implemented and measured: the spike did
+not move (9.5 ms → 9.6 ms). The overhead is in XCTest's measurement harness, not in the store, so
+the warm-up was reverted rather than shipped. **A change that does nothing, carrying a comment
+saying it fixed something, would have been worse than no change** — and the comment was already
+written before the measurement contradicted it.
+
+**What the mean gives up.** A regression that slowed a single capture in a run would now pass. That is
+accepted for the same reason D-053 accepted it: no worst-of-ten ceiling separates that defect from
+runner noise, because 72 ms has been observed on clean code. A regression worth catching — the
+order-of-magnitude kind this gate exists for — moves the mean with it, verified by mutation: a
+60 ms delay injected into the measured block fails both cases.
+
+**Mutation-checked twice**, the second because D-053 records a hardcoded ceiling surviving a
+changed literal in a failure *message*: changing `ceiling` to 0.5 ms produced "over the 0.5 ms
+ceiling", so the message cannot drift from the value asserted.
+
+**Numbers are ranges over four runs**, not three cherry-picked values, because two more arrived
+during mutation testing under full-suite load and the low end came from there.
+
+**Nothing in the file assumes ten iterations any more.** `XCTMeasureOptions` can change the count,
+so the mean divides by the iterations actually run and the row-count assertions compare against
+that same tally rather than a literal `10` and `30`. The separate `iterations > 0` assertion is
+what keeps that safe: a block that never ran leaves both sides at zero, which would satisfy the
+equality on its own. Mutation-checked — a measured block that throws nothing and writes nothing
+still fails both counts. Raised by Copilot's review of PR #21.
+
+**This entry claimed the file's "one exception" note was removed before it actually was.** The
+class doc rewrite was collateral damage when the warm-up experiment above was reverted with `git
+checkout --`, and only the per-test edits were re-applied. Caught by Copilot, not by me, on a PR
+whose subject is not shipping claims the code disproves.
+
 ---
 
 ## Open — decided by the task that owns them
