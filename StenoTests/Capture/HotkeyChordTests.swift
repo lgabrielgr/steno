@@ -1,4 +1,5 @@
 import AppKit
+import Carbon.HIToolbox
 import Foundation
 import Testing
 
@@ -48,4 +49,38 @@ func unmappedKeyCodeDegrades() {
     let chord = HotkeyChord(keyCode: 200, modifiers: NSEvent.ModifierFlags.command.rawValue)
 
     #expect(chord.displayString == "⌘Key 200")
+}
+
+/// The table M1-08's recorder made load-bearing.
+///
+/// Two properties, and both can break silently. A dropped row degrades that
+/// key to `"Key 40"` in the pane the user just pressed it in; a duplicated
+/// name makes two different chords read identically, so a conflict message
+/// names a shortcut the user cannot find. Constructing `keyNames` also traps
+/// on a duplicate *key*, so reaching the table at all is part of the check.
+@Test("every named key code renders as itself, uniquely")
+func namedKeyCodesRenderUniquely() {
+    let names = HotkeyChord.namedKeyCodes.map { HotkeyChord.keyName(for: $0) }
+
+    #expect(!names.isEmpty)
+    for name in names {
+        #expect(!name.isEmpty)
+        #expect(!name.hasPrefix("Key "), "\(name) fell through to the unmapped fallback")
+    }
+    #expect(Set(names).count == names.count, "two key codes share a name")
+}
+
+/// The recorder can emit any code on the keyboard, and the letters and digits
+/// are what a person actually picks.
+@Test("the keys a person would choose all have names")
+func theOrdinaryKeysAreNamed() {
+    let named = Set(HotkeyChord.namedKeyCodes)
+    for letter in [kVK_ANSI_A, kVK_ANSI_K, kVK_ANSI_Z] {
+        #expect(named.contains(UInt16(letter)))
+    }
+    for digit in [kVK_ANSI_0, kVK_ANSI_9] {
+        #expect(named.contains(UInt16(digit)))
+    }
+    #expect(named.contains(UInt16(kVK_F1)))
+    #expect(named.contains(UInt16(kVK_Tab)))
 }
