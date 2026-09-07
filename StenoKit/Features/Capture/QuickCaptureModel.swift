@@ -75,10 +75,36 @@ public final class QuickCaptureModel: HotkeyBinding {
     }
 
     /// Read the stored chord, check it, and bind it.
+    ///
+    /// **The stored chord is re-validated, not trusted.** `AppSettings` decodes
+    /// whatever is on disk and deliberately does no checking (D-056), and
+    /// decoding cleanly is a weaker property than being safe to register: a
+    /// chord with no modifiers, or shift alone, binds a bare key *system-wide*
+    /// and swallows it in every application — the exact harm
+    /// `HotkeyChordValidator` refuses at the recorder. Nothing in the app can
+    /// write such a value, but `defaults write` can, and so could a second
+    /// caller of `rebind` added later. Refusing on the read side is what makes
+    /// that a non-event rather than an unusable keyboard (D-062).
+    ///
+    /// An invalid chord falls back to `.default` and is **left on disk**,
+    /// exactly as an undecodable one is: this is a refusal to act on a value,
+    /// not a correction of it.
     public func start(onPress: @escaping () -> Void) {
         self.onPress = onPress
-        chord = settings.hotkeyChord ?? .default
+        chord = settings.hotkeyChord.flatMap(Self.bindable) ?? .default
         bind()
+    }
+
+    /// The stored chord if it is safe to register, `nil` otherwise.
+    ///
+    /// Runs the same rule the recorder does. The chord's modifiers are already
+    /// masked — `validate` is where masking happens, and every chord that
+    /// reaches disk came through it — so the second pass changes nothing for a
+    /// legitimate value and rejects the ones that never came from the recorder.
+    private static func bindable(_ stored: HotkeyChord) -> HotkeyChord? {
+        try? HotkeyChordValidator.validate(
+            keyCode: stored.keyCode, modifiers: stored.modifiers
+        ).get()
     }
 
     /// M1-08's entry point: bind a different chord, with no relaunch.

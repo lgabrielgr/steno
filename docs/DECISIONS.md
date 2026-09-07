@@ -1276,7 +1276,9 @@ Neither the design doc nor its review caught this; writing the validator did. It
 `extraneousFlagsAreStripped`, which records the reasoning in full so a later simplification of
 `validate` cannot quietly drop the mask.
 
-**Where the rules live:** all of them in `StenoKit`, none in the recorder. `HotkeyRecorderView` is
+**Where the rules live:** all of them in `StenoKit`, none in the recorder — in `Capture/` since
+D-063, which corrects this entry's original placement under `Features/Settings/`.
+`HotkeyRecorderView` is
 event plumbing only, which is what keeps "a bare key is refused" a unit test rather than a manual
 check. A bare key is refused because a global binding swallows that key in every application —
 including whatever the user would type to reach this pane and undo it.
@@ -1336,6 +1338,59 @@ recorder should also stop listening when the user switches to the main window or
 inside the monitor makes a missed notification harmless and passes the keystroke through instead of
 eating it. This is view plumbing in `Steno/`, so per D-010 it carries no unit test — the evidence
 is the manual check, and the reason the check exists.
+
+### D-062 — The stored hotkey chord is re-validated on load, not trusted
+
+**2026-09-07** · M1-08 · **Status:** accepted
+
+`QuickCaptureModel.start(onPress:)` runs the stored chord back through
+`HotkeyChordValidator.validate` and falls back to `.default` if it fails. The stored value is left
+on disk untouched.
+
+**Why this became necessary in this task specifically.** Before M1-08, `rebind` had no caller
+anywhere in `StenoKit` or `Steno` — nothing could write `AppSettings.hotkeyChord`, so the load
+path had never been handed a value it did not produce itself. The Capture pane makes the chord a
+real, user-writable setting, which is what turns "decodes cleanly" into a weaker property than
+"is safe to register". `defaults write` reaches this key directly (the app is unsandboxed, per
+`Steno.entitlements`), and a second caller of `rebind` in a later task would too.
+
+The harm is specific and asymmetric: a chord with no modifiers registers a **bare key
+system-wide** through `RegisterEventHotKey`, swallowing it in every application — the exact
+failure `HotkeyChordValidator` exists to refuse at the recorder, and the one invalid state here
+that damages the machine rather than the app. Refusing on the read side as well as the write side
+is proportionate to that.
+
+**It is a refusal, not a correction.** The bad value stays on disk, matching what
+`undecodableStoredChordFallsBack` already guaranteed and D-056's rule that `AppSettings` reports
+bad stored values as absent rather than overwriting them.
+
+**`rebind` is deliberately left unvalidated**, against the reviewer's suggestion. D-058 made it a
+narrow seam whose whole job is "bind this chord"; `SettingsModel.record` is its validating caller
+and the only producer of chords from user input. Putting the rule inside `rebind` too would place
+one policy in two places that can drift, and the two callers need different things from a
+rejection — `record` must tell the user *why* in words, while a load-path refusal has nobody to
+tell. The read-side guard covers what a future misuse of `rebind` could actually persist.
+
+**Raised by GitHub Copilot's review of PR #20.** Recorded because the reasoning about *where* the
+check belongs is not obvious from the code.
+
+---
+
+### D-063 — `HotkeyChordValidator` lives in `Capture/`, not `Features/Settings/`
+
+**2026-09-07** · M1-08 · **Status:** accepted · **corrects D-059's placement**
+
+Moved to `StenoKit/Capture/`, beside `HotkeyChord`, `SystemHotkeys` and `GlobalHotkeyMonitor`;
+its tests moved to `StenoTests/Capture/` with it.
+
+M1-08 put it under `Features/Settings/` because the recorder was its first caller. That was wrong
+on the layer map's own terms — `Features/` holds **view models**, and this is a pure rule — and
+D-062 made it visible by giving the validator a second caller in `Features/Capture/`, which would
+otherwise have left capture depending on a settings-namespaced type. The dependency runs the other
+way round: settings configures capture.
+
+No behaviour changed. The rule it encodes — what is safe to register as a global chord — was always
+a capture concern.
 
 ---
 

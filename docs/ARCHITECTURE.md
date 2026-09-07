@@ -147,7 +147,8 @@ StenoKit/         framework — everything testable
   Models/         SwiftData models, enums                (exists, M0-03)
   Persistence/    StenoStore — schema, store location    (exists, M0-04)
   Capture/        ref extraction (M1-01); routing, capture service (M1-02);
-                  hotkey chord, conflict detection, Carbon monitor (M1-03)
+                  hotkey chord, conflict detection, Carbon monitor (M1-03);
+                  chord validation (M1-08, D-063 — a rule, not a view model)
   Status/         status service, transition and cycle           (exists, M1-05)
   Report/         window computation, renderers          (M2-01, M2-02)
   Portability/    export, import, merge                  (M2.5)

@@ -1,4 +1,5 @@
 import AppKit
+import Carbon.HIToolbox
 import Foundation
 import SwiftData
 import Testing
@@ -29,13 +30,14 @@ private final class FakeHotkeyMonitor: GlobalHotkeyMonitor {
     }
 }
 
-/// The helper's three values as a named struct rather than a tuple.
-/// SwiftLint's `large_tuple` rejects a bare 3-tuple — the same reason
+/// The helper's values as a named struct rather than a tuple. SwiftLint's
+/// `large_tuple` rejects a bare 3-tuple — the same reason
 /// `CaptureFieldModelTests` declares a `Fixture`.
 private struct Fixture {
     let model: QuickCaptureModel
     let context: ModelContext
     let monitor: FakeHotkeyMonitor
+    let settings: AppSettings
 }
 
 @MainActor
@@ -58,10 +60,11 @@ private func makeModel(
         defaults.set(try JSONEncoder().encode(stored), forKey: AppSettings.hotkeyChordKey)
     }
 
+    let settings = AppSettings(defaults: defaults)
     let model = QuickCaptureModel(
         context: context, monitor: monitor, reserved: { reserved },
-        settings: AppSettings(defaults: defaults), now: { epoch })
-    return Fixture(model: model, context: context, monitor: monitor)
+        settings: settings, now: { epoch })
+    return Fixture(model: model, context: context, monitor: monitor, settings: settings)
 }
 
 @Test("with no stored chord the model binds ⌥Space")
@@ -88,6 +91,43 @@ func storedChordIsUsed() throws {
 
     #expect(model.chord == stored)
     #expect(monitor.registered == stored)
+}
+
+/// A chord that decodes cleanly can still be one that must never be
+/// registered. Before M1-08 nothing in the app could write this key — `rebind`
+/// had no caller — so the load path had never been handed a hostile value; the
+/// Settings pane makes it a real, user-writable setting. `defaults write` and a
+/// future second caller of `rebind` are both now reachable.
+///
+/// A bare key bound globally is swallowed in *every* application, so this is
+/// the one invalid state that damages the machine rather than the app.
+@Test("a stored chord with no modifiers is refused and the default is bound instead")
+@MainActor
+func storedBareKeyFallsBackToTheDefault() throws {
+    let bare = HotkeyChord(keyCode: UInt16(kVK_ANSI_K), modifiers: 0)
+    let fixture = try makeModel(stored: bare)
+    let (model, monitor) = (fixture.model, fixture.monitor)
+
+    model.start {}
+
+    #expect(model.chord == .default)
+    #expect(monitor.registered == .default)
+    // The stored value is left alone, exactly as an undecodable one is: this
+    // is a read-side refusal, not a correction (D-056).
+    #expect(fixture.settings.hotkeyChord == bare)
+}
+
+@Test("a stored shift-only chord is refused the same way")
+@MainActor
+func storedShiftOnlyChordFallsBackToTheDefault() throws {
+    let shifted = HotkeyChord(
+        keyCode: UInt16(kVK_ANSI_K), modifiers: NSEvent.ModifierFlags.shift.rawValue)
+    let fixture = try makeModel(stored: shifted)
+
+    fixture.model.start {}
+
+    #expect(fixture.model.chord == .default)
+    #expect(fixture.monitor.registered == .default)
 }
 
 @Test("an undecodable stored chord falls back to the default without erasing it")
