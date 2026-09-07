@@ -12,7 +12,7 @@ import SwiftData
 /// reloads itself.
 @Observable
 @MainActor
-public final class QuickCaptureModel {
+public final class QuickCaptureModel: HotkeyBinding {
     /// The shared capture field — the same type the main window's sheet uses,
     /// so the FR-1.4 chip cannot drift between surfaces.
     public let field: CaptureFieldModel
