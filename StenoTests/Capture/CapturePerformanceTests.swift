@@ -155,7 +155,8 @@ final class CapturePerformanceTests: XCTestCase {
         let directory = makeDirectory()
         defer { try? FileManager.default.removeItem(at: directory) }
         let (service, context) = try makeService(at: directory)
-        var elapsed = 0.0
+        var total = 0.0
+        var iterations = 0
         var failures = 0
 
         measure {
@@ -165,40 +166,70 @@ final class CapturePerformanceTests: XCTestCase {
             } catch {
                 failures += 1
             }
-            elapsed = max(elapsed, Date().timeIntervalSince(start))
+            total += Date().timeIntervalSince(start)
+            iterations += 1
         }
 
         // `measure` runs the block ten times, so a swallowed error would
         // otherwise measure ten no-ops and pass.
         XCTAssertEqual(failures, 0)
         XCTAssertEqual(try context.fetch(FetchDescriptor<TaskItem>()).count, 10)
-        // 50 ms is ~14x the worst measured value, where the plan asked for
-        // ~5x. Deliberately loose, and deliberately the same figure as the
-        // at-scale case below so the two gates cannot drift apart: the first
-        // iteration runs against a cold store and the ten-run spread is wide
-        // (RSD ~35%). That a 5x gate would fail under load is risk-aversion,
-        // not something observed — three runs under concurrent load stayed
-        // well inside 5x. With three orders of magnitude of headroom against
-        // §1.1's budget, the regression worth catching is an order of
-        // magnitude, not a factor of two.
-        XCTAssertLessThan(elapsed, 0.050, "a single capture exceeded 50 ms")
+        // As in the key-scan case: a block that never ran would divide by zero
+        // and report a NaN mean, which compares false against any ceiling and
+        // passes silently.
+        XCTAssertGreaterThan(iterations, 0, "the measure block never ran")
+        let average = total / Double(iterations)
+        // 50 ms is ~24x the noisiest mean measured here, and unchanged from
+        // when this
+        // gated on the worst of ten. Deliberately loose, and deliberately the
+        // same figure as the at-scale case below so the two gates cannot drift
+        // apart. With three orders of magnitude of headroom against §1.1's
+        // budget, the regression worth catching is an order of magnitude, not
+        // a factor of two.
+        let ceiling = 0.050
+        XCTAssertLessThan(
+            average, ceiling,
+            """
+            a single capture averaged \(average * 1000) ms, \
+            over the \(ceiling * 1000) ms ceiling
+            """
+        )
     }
 
     /// The same capture against D18's ceiling of live tasks, because the
     /// last-used derivation reads all of them (`CaptureService`'s comment
-    /// explains why it cannot use `fetchLimit`). Measured at 8.1 ms, worst of
-    /// ten across three runs on this machine (the average across the ten was
-    /// 2.2 ms) — so here the shared 50 ms ceiling is ~6x, close to the ~5x
-    /// the plan asked for.
+    /// explains why it cannot use `fetchLimit`).
     ///
-    /// Twenty extra tasks cost roughly 0.8 ms over the empty-store case — the
+    /// **This is the case that flaked, and the reason this file moved off
+    /// worst-of-ten.** On the identical commit `f757b07` it failed at 63 ms,
+    /// failed again at 72 ms, then passed — three outcomes from one commit, so
+    /// the code was never the variable. The failing run reported a mean of 11 ms
+    /// with an RSD of **±189%**: nine iterations near 3 ms and one pathological
+    /// one, which is exactly what a worst-of-ten gate selects for.
+    ///
+    /// Measured on this machine over four runs: **mean 2.1–2.8 ms**, against a
+    /// worst-of-ten of 5.3–9.6 ms. The runner's *mean* stayed at 5–11 ms even
+    /// while failing, so the mean is the statistic that survives the hardware;
+    /// 50 ms is ~4.5x the noisiest mean ever observed in CI and ~18x the
+    /// noisiest here.
+    ///
+    /// **What this still catches, and what it gives up.** A regression that
+    /// slows every capture — the kind worth catching — moves the mean with it.
+    /// A regression that made one capture in ten slow would now pass, which is
+    /// the trade M1-07 accepted for `testKeyScanOnALargePasteStaysInteractive`
+    /// and is accepted here for the same reason: no ceiling on worst-of-ten
+    /// separates that defect from the runner, because 72 ms has been seen on
+    /// clean code.
+    ///
+    /// Twenty extra tasks cost roughly 0.4 ms over the empty-store case — the
     /// full-table read is not the bottleneck at D18's ceiling, the save is.
     @MainActor
     func testCaptureAtScaleIsWellUnderBudget() throws {
         let directory = makeDirectory()
         defer { try? FileManager.default.removeItem(at: directory) }
         let (service, context) = try makeService(at: directory, tasks: 20)
-        var elapsed = 0.0
+        var total = 0.0
+        var iterations = 0
         var failures = 0
 
         measure {
@@ -208,13 +239,23 @@ final class CapturePerformanceTests: XCTestCase {
             } catch {
                 failures += 1
             }
-            elapsed = max(elapsed, Date().timeIntervalSince(start))
+            total += Date().timeIntervalSince(start)
+            iterations += 1
         }
 
         // As above: `capture` returning nil without throwing would leave
         // `failures` at zero and measure ten no-ops. 20 seeded + 10 captured.
         XCTAssertEqual(failures, 0)
         XCTAssertEqual(try context.fetch(FetchDescriptor<TaskItem>()).count, 30)
-        XCTAssertLessThan(elapsed, 0.050, "a capture at D18 scale exceeded 50 ms")
+        XCTAssertGreaterThan(iterations, 0, "the measure block never ran")
+        let average = total / Double(iterations)
+        let ceiling = 0.050
+        XCTAssertLessThan(
+            average, ceiling,
+            """
+            a capture at D18 scale averaged \(average * 1000) ms, \
+            over the \(ceiling * 1000) ms ceiling
+            """
+        )
     }
 }
