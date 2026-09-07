@@ -130,6 +130,32 @@ func storedShiftOnlyChordFallsBackToTheDefault() throws {
     #expect(fixture.monitor.registered == .default)
 }
 
+/// The masking half of `validate` is load-bearing on the load path too, not
+/// just the judging half — a hand-written chord can carry bits the recorder
+/// would never have produced. `HotkeyChord` compares modifiers for exact
+/// equality (D-059), so an unmasked `.capsLock` bit would silently stop the
+/// chord matching `SystemHotkeys` and convert to the wrong Carbon mask.
+///
+/// Asserted rather than left to the doc comment, because a comment claiming a
+/// behaviour nothing exercises is this repo's most repeated defect.
+@Test("a stored chord carrying stray modifier bits is masked before it is bound")
+@MainActor
+func storedChordWithStrayBitsIsMasked() throws {
+    let command = NSEvent.ModifierFlags.command.rawValue
+    let stored = HotkeyChord(
+        keyCode: UInt16(kVK_ANSI_K), modifiers: command | NSEvent.ModifierFlags.capsLock.rawValue)
+    let fixture = try makeModel(stored: stored)
+
+    fixture.model.start {}
+
+    let masked = HotkeyChord(keyCode: UInt16(kVK_ANSI_K), modifiers: command)
+    #expect(fixture.model.chord == masked)
+    #expect(fixture.monitor.registered == masked)
+    // Refuse, don't correct: what is bound differs from what is stored, and
+    // the file is left as the user wrote it.
+    #expect(fixture.settings.hotkeyChord == stored)
+}
+
 @Test("an undecodable stored chord falls back to the default without erasing it")
 @MainActor
 func undecodableStoredChordFallsBack() throws {

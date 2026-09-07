@@ -1364,6 +1364,13 @@ is proportionate to that.
 `undecodableStoredChordFallsBack` already guaranteed and D-056's rule that `AppSettings` reports
 bad stored values as absent rather than overwriting them.
 
+**Both halves of `validate` earn their keep here, not just the judging half.** A chord the app
+wrote was masked on the way in, so the second pass is a no-op for it — but that is a property of
+this app's write path, not of the file, and the values this guard exists for never came from the
+recorder. One carrying `.capsLock` or `.function` is masked on load, which means the chord that
+gets bound can differ from the one stored. `storedChordWithStrayBitsIsMasked` asserts that rather
+than leaving it to a comment.
+
 **`rebind` is deliberately left unvalidated**, against the reviewer's suggestion. D-058 made it a
 narrow seam whose whole job is "bind this chord"; `SettingsModel.record` is its validating caller
 and the only producer of chords from user input. Putting the rule inside `rebind` too would place

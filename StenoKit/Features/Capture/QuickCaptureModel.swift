@@ -97,10 +97,18 @@ public final class QuickCaptureModel: HotkeyBinding {
 
     /// The stored chord if it is safe to register, `nil` otherwise.
     ///
-    /// Runs the same rule the recorder does. The chord's modifiers are already
-    /// masked — `validate` is where masking happens, and every chord that
-    /// reaches disk came through it — so the second pass changes nothing for a
-    /// legitimate value and rejects the ones that never came from the recorder.
+    /// Runs the same rule the recorder does, and needs **both** halves of it.
+    /// A chord this app wrote came through `validate` already, so the second
+    /// pass is a no-op for it — but that is a fact about this app's write path,
+    /// not about the file on disk, and the values this guard exists for are
+    /// exactly the ones that never came from the recorder. Those can carry
+    /// `.capsLock` or `.function` bits as easily as no modifiers at all, so the
+    /// masking is load-bearing here too and not merely the judging.
+    ///
+    /// A consequence: the chord returned may differ from the one stored, when
+    /// masking strips bits the recorder would never have produced. `start`
+    /// binds and displays what comes back and leaves the file alone, which is
+    /// the same refuse-don't-correct posture as the `nil` case.
     private static func bindable(_ stored: HotkeyChord) -> HotkeyChord? {
         try? HotkeyChordValidator.validate(
             keyCode: stored.keyCode, modifiers: stored.modifiers
