@@ -1145,6 +1145,144 @@ watching.
 
 ---
 
+### D-054 — Settings is a `Settings` scene, reached only by ⌘,
+**2026-09-06** · M1-08 · **Status:** accepted
+
+`StenoApp` gains a SwiftUI `Settings` scene. There is no other way in — no toolbar button, and no
+"Settings…" row in FR-1.2's popover.
+
+**Why:** the `Settings` scene is what puts "Steno › Settings…" in the application menu at the
+correct position with ⌘, bound, and what makes macOS treat the window as a settings window —
+single-instance, non-restorable, correct in Mission Control. A `Window` scene would need all of
+that rebuilt by hand and would still sit in the wrong menu.
+
+**The apparent gap, and why it is not one.** The application menu is reachable only while Steno is
+frontmost, and `AppDelegate` keeps the process alive with no windows open — so on paper there is a
+state with no route to Settings. In practice there is not: `MenuBarController.show()` calls
+`NSApp.activate(ignoringOtherApps:)` before showing the popover, so clicking the menu bar icon
+makes Steno frontmost and the application menu available.
+**Alternatives:** a "Settings…" row in the menu bar popover (edits M1-04's reviewed surface to
+solve a state that does not occur); a gear in the main window's toolbar (redundant — the window
+being open is exactly when ⌘, already works).
+
+---
+
+### D-055 — `SettingsPane` is the registry, and its switch is deliberately exhaustive
+**2026-09-06** · M1-08 · **Status:** accepted
+
+`SettingsPane` is a `CaseIterable` enum in `StenoKit` carrying each pane's title, symbol and
+order. `SettingsView` in `Steno/` is a `TabView` over `allCases` with **one `switch` and no
+`default` arm**. Adding M3-04's pane is one case, one arm, one new view file.
+
+**Why the missing `default` matters:** an exhaustive switch means a new case fails to compile until
+its view exists. Without that, the registry could silently acquire a tab that renders nothing —
+the only failure mode a registry of this shape has, and the one a reviewer would never see.
+
+**Why the enum is in `StenoKit` and the switch in `Steno/`:** D-010's test. Pane titles, symbols
+and ordering are data a headless test can read; `TabView` construction is not.
+
+**Cost accepted:** with one case, `TabView` draws a toolbar with a single segment, which reads
+oddly until M3-04 lands. A `count == 1` special case was rejected — it becomes dead code the day
+the second pane arrives, and this is the shape all five panes use.
+
+---
+
+### D-056 — `AppSettings` is the one `UserDefaults` facade
+**2026-09-06** · M1-08 · **Status:** accepted · supersedes `QuickCaptureModel.chordKey`
+
+Every `UserDefaults`-backed setting is declared in `StenoKit/Settings/AppSettings.swift`, one key
+per setting. M1-03's `QuickCaptureModel.chordKey` moved into it, and `QuickCaptureModel` takes an
+`AppSettings` rather than a raw `UserDefaults`.
+
+**Why:** declaring the key on the model that used it was right when there was one setting. FR-6
+lists five Settings areas and four arrive with later milestones; a codebase where every model
+declares its own key leaves §10.3's "secrets are never exported" audit with no single place to
+look, and O-9 (whether the chord is exported) with no single place to read.
+
+**Both accessors report a bad stored value as absent without overwriting it,** the posture
+`storedChord()` already took, so the pane can still show what is really on disk. `UserDefaults` is
+a shared, user-editable store — `defaults write` is a supported thing for a person to do — so
+`UUID(uuidString:)` has to be allowed to fail rather than trap. A force-unwrap there is a launch
+crash no test of the happy path would find.
+**Alternatives:** a settings row in SwiftData (a schema addition §6's CloudKit rules and M2.5-02's
+merge would both have to reason about, for two values that are not domain data).
+
+---
+
+### D-057 — `LoginItem` reports a status, not a `Bool`
+**2026-09-06** · M1-08 · **Status:** accepted · amends D-041
+
+`LoginItem.isEnabled: Bool` becomes `status: LoginItemStatus` — `.enabled`, `.notRegistered`,
+`.requiresApproval`, `.notFound` — and `SettingsModel` re-reads it after every call rather than
+inferring success from the call returning.
+
+**Why:** `SMAppService.mainApp.register()` can succeed and leave the service at
+`.requiresApproval`: macOS lists Steno under Login Items with its switch off, waiting for the user
+to approve it. Read through a `Bool` that state is indistinguishable from "off", with nothing
+thrown — so the toggle would flip itself back and say nothing. That is the same silent failure
+FR-1.1's conflict warning exists to prevent, on a different control, and §13 makes designing it
+out the job.
+
+D-041 shipped this protocol with no callers precisely so that M1-08 would wire a UI to a reviewed
+type rather than design one under a deadline. That posture is what made this change cost a type
+and its fake instead of a redesign.
+
+**What is still not tested,** unchanged from D-041: the real `SystemLoginItem`. `SMAppService`
+from an unhosted bundle registers the *test runner* on the developer's machine, which a headless
+suite may not do (§9.4). The thrown-failure path is exercised through the fake, and a relocated
+debug build run out of `.build/` is expected to hit it for real — which is why the pane reports
+the thrown error verbatim rather than a generic message.
+
+---
+
+### D-058 — `rebind` takes a chord and nothing else, and refuses to bind before `start`
+**2026-09-06** · M1-08 · **Status:** accepted · supersedes M1-03's `rebind(to:onPress:)`
+
+`QuickCaptureModel.start(onPress:)` stores the closure; `rebind(to:)` re-registers with it.
+
+**Why the signature changed:** the Settings pane's business is *which chord*, not what pressing it
+does. Under the old signature the settings layer would have had to supply
+`{ quickCaptureController.toggle() }` — which means Settings knowing how the capture panel works,
+a dependency that buys nothing and that the next pane driving a controller would copy. No retain
+cycle: the controller passes `{ [weak self] in self?.toggle() }`.
+
+It is also what makes FR-1.1's "takes effect without relaunch" provable headlessly. The half that
+can break silently is the action, not the chord: drop the stored closure and the chord still
+changes, the monitor still reports the new binding, and pressing it does nothing.
+`FakeHotkeyMonitor` now keeps the closure so a test can fire it.
+
+**Binding before `start` registers nothing** and sets `registrationProblem`. A chord bound in
+front of a `nil` action is a live system-wide shortcut that swallows the keystroke and does
+nothing — strictly worse than the unbound state it replaces.
+
+---
+
+### D-059 — Recorded modifiers are masked to ⇧⌃⌥⌘ before a chord is built
+**2026-09-06** · M1-08 · **Status:** accepted
+
+`HotkeyChordValidator.validate(keyCode:modifiers:)` intersects the event's raw
+`modifierFlags.rawValue` with `[.shift, .control, .option, .command]` before constructing a
+`HotkeyChord`.
+
+**Why, and this is the subtlest thing in M1-08.** `NSEvent.modifierFlags` also reports
+`.capsLock`, `.function` and `.numericPad`, plus device-dependent left/right bits — a laptop's
+arrow and function keys set `.function`, and `.capsLock` is set whenever caps lock is on.
+`HotkeyChord` compares modifiers for **exact equality**: against `SystemHotkeys`' reserved table in
+`HotkeyConflictChecker`, and across its own `Codable` round-trip. An unmasked recorded chord
+therefore never matches a system shortcut — **FR-1.1's conflict warning would simply stop firing**,
+with no error anywhere — and `carbonModifiers` would convert a mask the user did not press.
+
+Neither the design doc nor its review caught this; writing the validator did. It is guarded by
+`extraneousFlagsAreStripped`, which records the reasoning in full so a later simplification of
+`validate` cannot quietly drop the mask.
+
+**Where the rules live:** all of them in `StenoKit`, none in the recorder. `HotkeyRecorderView` is
+event plumbing only, which is what keeps "a bare key is refused" a unit test rather than a manual
+check. A bare key is refused because a global binding swallows that key in every application —
+including whatever the user would type to reach this pane and undo it.
+
+---
+
 ## Open — decided by the task that owns them
 
 Each of these is a real choice the spec leaves open. The owning task decides it, records it in
@@ -1155,7 +1293,7 @@ its PR body, and adds an entry above.
 | O-5 | Where "last-used project" is stored, and its behavior on first ever launch | `M1-02` |
 | O-7 | Whether integration *configuration* (site URLs, MCP definitions minus secrets) is exported by M2.5-01 or added by M4-04/M5-02 | `M2.5-01` |
 | O-8 | How import merges the two mutable boolean flags, `Event.isRedacted` and `StandupReport.isUndone` — §10.1's union-by-UUID default has no rule for them and neither model carries `modifiedAt` | `M2.5-02` |
-| O-9 | Whether the hotkey chord in `UserDefaults` is carried by §10's export | `M2.5-01` |
+| O-9 | Whether the settings in `AppSettings` — the hotkey chord and FR-6's default project — are carried by §10's export. D-056 moved both behind one type, so this is now a single place to read | `M2.5-01` |
 | O-10 | Whether a `SourceRef` orphaned by a **corrected** note (the primary case) or a redacted one is reconciled, and how — stated in full as **D-049** above, which M1-06 left open rather than deciding blind | `M5` |
 
 ## Product questions — not for agents to decide
