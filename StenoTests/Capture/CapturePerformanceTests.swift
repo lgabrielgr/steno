@@ -10,17 +10,30 @@ import XCTest
 ///
 /// XCTest rather than Swift Testing per D-011 — the `measure` exception.
 ///
-/// The two store-write cases assert against the **worst** of `measure`'s ten
-/// iterations, not the last, so the assertion does not look only at the warmest
-/// run. `testKeyScanOnALargePasteStaysInteractive` is the exception: it asserts
-/// the **mean**, because worst-of-ten proved unstable on GitHub's shared
-/// runners once M1-07 put this suite in CI. Its doc comment carries the
-/// measurements and the reasoning.
+/// **All three cases assert the mean of `measure`'s iterations.** The two
+/// store-write cases gated on the worst of ten until they flaked in CI;
+/// `testKeyScanOnALargePasteStaysInteractive` was moved to the mean by M1-07
+/// for the same reason (D-053, then D-064). Each doc comment below carries its
+/// own measurements.
 ///
-/// **`make test` will not show you that number.** xcbeautify compresses
-/// `measure`'s output to an average and an RSD, so the worst-of-ten the
-/// assertions actually gate on is invisible unless one fails. To read it, run
-/// the raw command:
+/// The cause is the same in all three: **`measure`'s first iteration is
+/// consistently 2–5x the other nine**, and worst-of-ten is the statistic that
+/// selects for it. It is *not* a cold store, though the comment here used to
+/// say so — an untimed warm-up capture before `measure` was implemented and
+/// measured, and left the spike exactly where it was (9.5 ms → 9.6 ms). The
+/// overhead is in XCTest's measurement harness, not in the code under test, so
+/// the warm-up was reverted rather than shipped.
+///
+/// Nothing here assumes ten iterations: `XCTMeasureOptions` can change the
+/// count, so the mean divides by the iterations actually run and the row-count
+/// assertions compare against the same tally. The "did the block run at all"
+/// question is a separate assertion, because a block that never ran leaves
+/// every count at zero and every zero-against-zero comparison true.
+///
+/// **`make test` will not show you these numbers.** xcbeautify compresses
+/// `measure`'s output to an average and an RSD, and the per-iteration values
+/// that make the first-iteration spike visible never appear at all. To read
+/// them, run the raw command:
 ///
 ///     sandbox-exec -f Scripts/test-sandbox.sb xcodebuild -project \
 ///       Steno.xcodeproj -scheme Steno -derivedDataPath .build \
@@ -170,13 +183,17 @@ final class CapturePerformanceTests: XCTestCase {
             iterations += 1
         }
 
-        // `measure` runs the block ten times, so a swallowed error would
-        // otherwise measure ten no-ops and pass.
+        // A swallowed error would otherwise measure a run of no-ops and pass.
         XCTAssertEqual(failures, 0)
-        XCTAssertEqual(try context.fetch(FetchDescriptor<TaskItem>()).count, 10)
-        // As in the key-scan case: a block that never ran would divide by zero
-        // and report a NaN mean, which compares false against any ceiling and
-        // passes silently.
+        // Against `iterations`, not a hardcoded 10: `XCTMeasureOptions` can
+        // change the count, and a literal would then fail for a reason that has
+        // nothing to do with capture.
+        XCTAssertEqual(try context.fetch(FetchDescriptor<TaskItem>()).count, iterations)
+        // Still needed alongside it, and not only for the divisor. A block that
+        // never ran leaves `iterations` and the row count both at zero, which
+        // satisfies the equality above — and would divide by zero here for a
+        // NaN mean, which compares false against any ceiling and passes
+        // silently. This is the assertion that makes "it ran" a claim.
         XCTAssertGreaterThan(iterations, 0, "the measure block never ran")
         let average = total / Double(iterations)
         // 50 ms is ~24x the noisiest mean measured here, and unchanged from
@@ -244,9 +261,10 @@ final class CapturePerformanceTests: XCTestCase {
         }
 
         // As above: `capture` returning nil without throwing would leave
-        // `failures` at zero and measure ten no-ops. 20 seeded + 10 captured.
+        // `failures` at zero and measure a run of no-ops. 20 seeded, plus one
+        // row per iteration actually run.
         XCTAssertEqual(failures, 0)
-        XCTAssertEqual(try context.fetch(FetchDescriptor<TaskItem>()).count, 30)
+        XCTAssertEqual(try context.fetch(FetchDescriptor<TaskItem>()).count, 20 + iterations)
         XCTAssertGreaterThan(iterations, 0, "the measure block never ran")
         let average = total / Double(iterations)
         let ceiling = 0.050

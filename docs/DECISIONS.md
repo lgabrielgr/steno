@@ -1442,6 +1442,18 @@ ceiling", so the message cannot drift from the value asserted.
 **Numbers are ranges over four runs**, not three cherry-picked values, because two more arrived
 during mutation testing under full-suite load and the low end came from there.
 
+**Nothing in the file assumes ten iterations any more.** `XCTMeasureOptions` can change the count,
+so the mean divides by the iterations actually run and the row-count assertions compare against
+that same tally rather than a literal `10` and `30`. The separate `iterations > 0` assertion is
+what keeps that safe: a block that never ran leaves both sides at zero, which would satisfy the
+equality on its own. Mutation-checked — a measured block that throws nothing and writes nothing
+still fails both counts. Raised by Copilot's review of PR #21.
+
+**This entry claimed the file's "one exception" note was removed before it actually was.** The
+class doc rewrite was collateral damage when the warm-up experiment above was reverted with `git
+checkout --`, and only the per-test edits were re-applied. Caught by Copilot, not by me, on a PR
+whose subject is not shipping claims the code disproves.
+
 ---
 
 ## Open — decided by the task that owns them
