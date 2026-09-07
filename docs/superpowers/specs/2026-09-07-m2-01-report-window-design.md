@@ -104,7 +104,6 @@ public struct GatheredTask: Sendable {
 }
 
 public struct GatheredEvent: Sendable {
-    public let id: UUID
     public let timestamp: Date
     public let kind: EventKind
     public let body: String
@@ -135,16 +134,13 @@ yet:
 | `title`, `status` | M2-02, M3-03 | §7.3 lists both explicitly |
 | `ticketKeys` | M3-03 | §7.3 lists "ticket key"; must survive verbatim |
 | `events` | M2-02, M3-03 | §7.3: "all events in `[windowStart, now]` with timestamps" |
-| `id` (event) | — | see below |
 
-**`GatheredEvent.id` has no consumer in M2 or M3, and that is worth stating plainly** rather than
-inventing one. It is not what M2-04 uses: undo redacts `standupReported` events, which §5.1
-excludes from gathering entirely, so M2-04 must query them directly and this field could not help
-it. The honest justification is narrower — a snapshot without identity cannot be traced back to
-the log row it came from, which matters when a report renders something the user does not
-recognise. If that is too thin, the field should be dropped now rather than carried: an unused
-`public` field on a type three tasks depend on is a decision that gets harder to reverse with
-each of them.
+**`GatheredEvent` deliberately carries no `id`.** An earlier draft of this design included one,
+justified as what M2-04 would use to find the events it redacts. That was false: M2-04 redacts
+`standupReported` events, which §5.1 excludes from gathering entirely, so the field could not have
+served that purpose. With that justification gone, nothing in M2 or M3 consumes it — and an unused
+`public` field on a type three downstream tasks depend on only gets harder to remove with each of
+them. A task that later needs event identity can add it with a consumer in the same PR.
 
 **`ticketKeys` is plural where §7.3 says "ticket key" singular.** A task can carry several
 `jiraIssue` refs — FR-1.5's extractor creates one per key found, and a note mentioning two
