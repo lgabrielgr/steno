@@ -16,7 +16,8 @@ func theWindowsEventsAreGatheredOldestFirst() throws {
     let window = try fixture.gatherer(nowOffset: 300).gather(for: fixture.alpha)
 
     #expect(window.tasks.count == 1)
-    #expect(window.tasks[0].events.map(\.body) == ["first", "second"])
+    let task0 = try #require(window.tasks.first)
+    #expect(task0.events.map(\.body) == ["first", "second"])
     #expect(window.projectID == fixture.alpha.id)
     #expect(window.cadence == .daily)
 }
@@ -149,7 +150,8 @@ func aFutureLastStandupYieldsAnEmptyWindow() throws {
     let window = try fixture.gatherer(nowOffset: 300).gather(for: fixture.alpha)
 
     #expect(window.start == window.end)
-    #expect(window.tasks[0].events.isEmpty, "no events, but the open task still reports")
+    let task0 = try #require(window.tasks.first)
+    #expect(task0.events.isEmpty, "no events, but the open task still reports")
     #expect(window.tasks.count == 1)
 }
 
@@ -180,8 +182,9 @@ func aQuietOpenTaskSurvives() throws {
     let window = try fixture.gatherer(nowOffset: 300).gather(for: fixture.alpha)
 
     #expect(window.tasks.count == 1)
-    #expect(window.tasks[0].title == "carried over")
-    #expect(window.tasks[0].events.isEmpty)
+    let task0 = try #require(window.tasks.first)
+    #expect(task0.title == "carried over")
+    #expect(task0.events.isEmpty)
 }
 
 @MainActor

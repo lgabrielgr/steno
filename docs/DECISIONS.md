@@ -1571,6 +1571,41 @@ as context it must learn to ignore).
 
 ---
 
+### D-069 — `blockedReason` is sourced independent of the report window
+**2026-09-07** · M2-01 · **Status:** accepted
+
+`GatheredTask.blockedReason` carries the most recent non-redacted `blockedReason` event's body for
+a task whose current status is `.blocked`, found by querying that task's full timeline rather than
+the window's bucketed events — `nil` for any other status.
+
+**D-068 includes a quiet blocked task precisely because FR-4's report structure demands it — but
+gathering the reason from the window alone would have handed back the task with nothing to say.**
+FR-4's structure specifies "**Blockers** — BLOCKED tasks with reasons". `blockedReason` is an
+ordinary `Event`, so a task blocked before the window opened and quiet since — the common case: it
+was blocked last week, is still blocked, and nothing new has happened — arrives with an empty
+`events` array under D-068's own rule, and the one event that explains *why* it is blocked sits
+outside `[start, end]`. The type would be withholding the very thing that justified including the
+task in the first place.
+
+**The precedent that settles it: `ticketKeys` already reads `task.sourceRefs`, not windowed
+events.** Nothing about "ticket references survive outside the window but blocked reasons don't"
+is defensible — the two fields disagreeing was the defect. Making `blockedReason` consistent with
+`ticketKeys` is the fix, not a new exception.
+
+**One accepted gap, stated rather than hidden:** if a task was blocked, unblocked, and re-blocked
+without a fresh `blockedReason` event, the earlier reason surfaces — not the current episode's
+reason, because there isn't one yet. That matches how a person recalls the task from memory, and
+is better than the alternative of going silent.
+
+**Alternatives:** let M2-02 query the store for the reason when it renders a blocked task with no
+in-window event — rejected because it reopens the side-effect question inside a renderer task, the
+same argument D-068 already made for putting the inclusion rule in the gatherer rather than the
+renderer; widen the report window for blocked tasks specifically — rejected because the window
+belongs to FR-4, and bending it per-task would make `StandupReport.windowStart` mean a different
+thing on different rows of the same report.
+
+---
+
 ## Open — decided by the task that owns them
 
 Each of these is a real choice the spec leaves open. The owning task decides it, records it in
