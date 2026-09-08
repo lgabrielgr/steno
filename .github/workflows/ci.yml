@@ -1,5 +1,6 @@
 # Runs the §9.5 step 4 gate — make build && make test && make lint — on every
-# pull request to main, so the rule holds without an agent's cooperation.
+# pull request to main, so the rule holds without an agent's cooperation, plus
+# a formatting check that holds D-013's other half.
 # Design and the measurements behind it:
 #   docs/superpowers/specs/2026-09-04-m1-07-ci-workflow-design.md
 name: CI
@@ -93,3 +94,41 @@ jobs:
       - name: make lint
         if: '!cancelled()'
         run: make lint
+
+      # D-013 splits the contract: SwiftLint owns semantics and naming, and
+      # swift-format owns layout. Only the first half was enforced, so a file
+      # could merge unformatted and stay that way — the next author to run
+      # `make format` as §9.5 step 4 requires would find an unrelated file in
+      # their working tree and have to notice and drop it. That is not
+      # hypothetical: EventQueriesTests.swift drifted at M1-06 and was
+      # rediscovered twice during M2-02 (#23).
+      #
+      # `make format` writes in place, so "is it formatted" is expressed as
+      # "does formatting change anything". That makes this step mutate the
+      # checkout, which is why it runs **last** — nothing downstream may see a
+      # tree that no commit corresponds to.
+      #
+      # `!cancelled()` for `make lint`'s reason: formatting is independent of
+      # compiling, so a red build must not hide it, and one run should report
+      # every problem rather than surfacing them one push at a time.
+      #
+      # Needs no signing stub and no generated project: `make format` shells
+      # out to `xcrun swift-format` and has no `preflight` dependency. It is
+      # placed here for the mutation argument above, not because it needs the
+      # setup steps.
+      #
+      # The diff is scoped to the three directories `make format` writes to —
+      # the same list the target and .swiftlint.yml carry — so this reports what
+      # the formatter did and cannot be tripped by another step dirtying the
+      # tree. Both `Steno.xcodeproj` and `Local.xcconfig` are gitignored today,
+      # which makes the scope belt-and-braces rather than load-bearing; it costs
+      # nothing and removes a way for this check to fail for a reason it does
+      # not name.
+      - name: make format is a no-op
+        if: '!cancelled()'
+        run: |
+          make format
+          git diff --exit-code -- Steno StenoKit StenoTests || {
+            echo "::error::swift-format would rewrite the files diffed above. Run 'make format' locally and commit the result."
+            exit 1
+          }
