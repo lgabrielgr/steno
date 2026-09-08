@@ -27,9 +27,18 @@ private func goldenTasks() -> [GatheredTask] {
         SectionInput.task(
             "Spike: cache warming", status: .todo,
             events: [SectionInput.event("read the redis docs, not obviously worth it")]),
+        // The reason is present both as an in-window event and on
+        // blockedReason, which is what StatusService.addBlockedReason actually
+        // produces for a task blocked since the last stand-up. The expected
+        // output below says it exactly once; that it did not change when this
+        // event was added is the assertion.
         SectionInput.task(
             "Webhook replay", status: .blocked, ticketKeys: ["PAY-401"],
-            blockedReason: "waiting on infra for the DLQ credentials"),
+            blockedReason: "waiting on infra for the DLQ credentials",
+            events: [
+                SectionInput.event(
+                    "waiting on infra for the DLQ credentials", kind: .blockedReason)
+            ]),
     ]
 }
 

@@ -80,6 +80,57 @@ func dailyOmitsAQuietTodoTask() {
     #expect(sections.map(\.bullets.count) == [0, 0, 0])
 }
 
+@Test("A reason captured inside the window is said once, not twice")
+func dailyDoesNotRepeatAnInWindowBlockedReason() {
+    // The common case, not an exotic one: StatusService.addBlockedReason
+    // stamps now(), so a task blocked since the last stand-up has its reason
+    // event *inside* the window as well as on GatheredTask.blockedReason.
+    let sections = RawReportSections.build(
+        from: SectionInput.window(
+            .daily,
+            [
+                SectionInput.task(
+                    "Webhook replay", status: .blocked, blockedReason: "waiting on infra",
+                    events: [
+                        SectionInput.event("raised INFRA-9"),
+                        SectionInput.event("waiting on infra", kind: .blockedReason),
+                    ])
+            ]))
+
+    #expect(
+        SectionInput.section("Since last stand-up", of: sections)
+            == [ReportBullet(text: "Webhook replay", details: ["raised INFRA-9"])])
+    #expect(
+        SectionInput.section("Blockers", of: sections)
+            == [ReportBullet(text: "Webhook replay", details: ["waiting on infra"])])
+}
+
+@Test("A reason from a block that has since lifted is still the user's words")
+func anUnblockedTaskKeepsItsFormerBlockedReason() {
+    // D-069 leaves GatheredTask.blockedReason nil for anything not currently
+    // blocked, so this event is the only carrier of what the user wrote. It
+    // must survive, or the report loses words the user typed.
+    let sections = RawReportSections.build(
+        from: SectionInput.window(
+            .daily,
+            [
+                SectionInput.task(
+                    "Webhook replay", status: .inProgress,
+                    events: [
+                        SectionInput.event("was waiting on infra", kind: .blockedReason),
+                        SectionInput.event("creds arrived, unblocked"),
+                    ])
+            ]))
+
+    #expect(
+        SectionInput.section("Since last stand-up", of: sections)
+            == [
+                ReportBullet(
+                    text: "Webhook replay",
+                    details: ["was waiting on infra", "creds arrived, unblocked"])
+            ])
+}
+
 // MARK: - Periodic
 
 @Test("D17 periodic: every task lands in exactly one section")
@@ -115,11 +166,15 @@ func periodicBlockersCarryReasonThenNotes() {
             [
                 SectionInput.task(
                     "Webhook replay", status: .blocked, blockedReason: "waiting on infra",
-                    events: [SectionInput.event("raised INFRA-9")])
+                    events: [
+                        SectionInput.event("raised INFRA-9"),
+                        SectionInput.event("waiting on infra", kind: .blockedReason),
+                    ])
             ]))
 
     // Periodic has no second section for the notes to live in, so losing them
-    // here would lose the user's words outright.
+    // here would lose the user's words outright — and the in-window reason
+    // event must not make the bullet say "waiting on infra" twice.
     #expect(
         SectionInput.section("Blockers & risks", of: sections)
             == [

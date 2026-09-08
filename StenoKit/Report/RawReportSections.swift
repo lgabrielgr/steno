@@ -138,7 +138,33 @@ public enum RawReportSections {
     /// point they can judge whether a Jira comment belongs in a spoken
     /// stand-up.
     private static func authored(_ task: GatheredTask) -> [String] {
-        task.events.filter { $0.kind.isUserAuthored }.map(\.body)
+        task.events.filter { isBullet($0, on: task) }.map(\.body)
+    }
+
+    /// Whether `event` becomes a detail line on `task`'s bullet.
+    ///
+    /// **A currently-blocked task's `blockedReason` events are excluded, because
+    /// `reason(_:)` already says them.** `StatusService.addBlockedReason` stamps
+    /// `now()`, so a task blocked since the last stand-up — the ordinary case,
+    /// not an exotic one — carries its reason both as an event inside the window
+    /// and on `GatheredTask.blockedReason` (D-069). Without this the daily
+    /// report says the reason under *Since last stand-up* and again under
+    /// *Blockers*, and the periodic report says it twice inside a single bullet.
+    ///
+    /// **Conditioned on status rather than dropping the kind outright**, because
+    /// D-069 leaves `blockedReason` `nil` for anything not currently blocked. On
+    /// a task that was blocked during the window and has since been unblocked,
+    /// the event is the *only* carrier of what the user wrote; filtering the
+    /// kind unconditionally would delete their words rather than de-duplicate
+    /// them.
+    ///
+    /// **One accepted gap**, consistent with the one D-069 already takes: a task
+    /// blocked, unblocked, and re-blocked inside one window shows only the
+    /// current reason, and the superseded one is dropped rather than listed as
+    /// a note.
+    private static func isBullet(_ event: GatheredEvent, on task: GatheredTask) -> Bool {
+        guard event.kind.isUserAuthored else { return false }
+        return !(task.status == .blocked && event.kind == .blockedReason)
     }
 
     /// A blocked task's reason as zero or one detail line.

@@ -130,6 +130,14 @@ cannot occur before M4 — gets a deliberate decision from whoever adds the conn
 produces it, at the point where they can judge whether a Jira comment belongs in a spoken
 stand-up.
 
+**A currently-blocked task's `blockedReason` events are excluded as well** — added after review
+caught the duplicate. `StatusService.addBlockedReason` stamps `now()`, so a task blocked since the
+last stand-up carries its reason both as an in-window event and on `GatheredTask.blockedReason`
+(D-069); counting both made the daily report say it under two headings and the periodic report say
+it twice in one bullet. Conditioned on `status == .blocked` rather than dropping the kind outright,
+because D-069 leaves `blockedReason` `nil` for anything not currently blocked — on a task unblocked
+during the window, the event is the only carrier of what the user wrote.
+
 **Consequence, stated rather than discovered:** a task moved to `done` with no notes yields a
 bullet with empty `details`. That is honest — the user wrote nothing — and it is the same
 empty-details case D-068 already forced on this renderer for quiet in-progress tasks.

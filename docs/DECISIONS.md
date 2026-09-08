@@ -1683,6 +1683,18 @@ already established for "did the user type this". M4's `externalUpdate` is there
 default and gets a deliberate decision from whoever adds the connector that writes it, at the
 point they can judge whether a Jira comment belongs in a spoken stand-up.
 
+**Amended in review, before merge: a currently-blocked task's `blockedReason` events are excluded
+too, because the reason is already surfaced separately.** `StatusService.addBlockedReason` stamps
+`now()`, so a task blocked since the last stand-up — the ordinary case — carries its reason both as
+an event inside the window and on `GatheredTask.blockedReason` (D-069). Counting it as an authored
+bullet made the daily report say the reason under *Since last stand-up* and again under *Blockers*,
+and made the periodic report say it **twice inside one bullet**. The exclusion is conditioned on
+`status == .blocked` rather than dropping the kind outright: D-069 leaves `blockedReason` `nil` for
+anything not currently blocked, so on a task unblocked during the window the event is the only
+carrier of what the user wrote, and filtering it unconditionally would delete their words instead
+of de-duplicating them. **Accepted gap,** matching D-069's own: a task blocked, unblocked, and
+re-blocked inside one window shows the current reason only.
+
 **Consequence:** a task moved to `done` with no notes renders as a title with no details. That is
 honest — the user wrote nothing — and it is the same empty-details case D-068 already forced on
 this renderer for quiet in-progress tasks. It is also why D-070's membership test needs its

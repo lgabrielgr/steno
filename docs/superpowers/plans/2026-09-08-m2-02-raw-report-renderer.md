@@ -519,6 +519,57 @@ func dailyOmitsAQuietTodoTask() {
     #expect(sections.map(\.bullets.count) == [0, 0, 0])
 }
 
+@Test("A reason captured inside the window is said once, not twice")
+func dailyDoesNotRepeatAnInWindowBlockedReason() {
+    // The common case, not an exotic one: StatusService.addBlockedReason
+    // stamps now(), so a task blocked since the last stand-up has its reason
+    // event *inside* the window as well as on GatheredTask.blockedReason.
+    let sections = RawReportSections.build(
+        from: SectionInput.window(
+            .daily,
+            [
+                SectionInput.task(
+                    "Webhook replay", status: .blocked, blockedReason: "waiting on infra",
+                    events: [
+                        SectionInput.event("raised INFRA-9"),
+                        SectionInput.event("waiting on infra", kind: .blockedReason),
+                    ])
+            ]))
+
+    #expect(
+        SectionInput.section("Since last stand-up", of: sections)
+            == [ReportBullet(text: "Webhook replay", details: ["raised INFRA-9"])])
+    #expect(
+        SectionInput.section("Blockers", of: sections)
+            == [ReportBullet(text: "Webhook replay", details: ["waiting on infra"])])
+}
+
+@Test("A reason from a block that has since lifted is still the user's words")
+func anUnblockedTaskKeepsItsFormerBlockedReason() {
+    // D-069 leaves GatheredTask.blockedReason nil for anything not currently
+    // blocked, so this event is the only carrier of what the user wrote. It
+    // must survive, or the report loses words the user typed.
+    let sections = RawReportSections.build(
+        from: SectionInput.window(
+            .daily,
+            [
+                SectionInput.task(
+                    "Webhook replay", status: .inProgress,
+                    events: [
+                        SectionInput.event("was waiting on infra", kind: .blockedReason),
+                        SectionInput.event("creds arrived, unblocked"),
+                    ])
+            ]))
+
+    #expect(
+        SectionInput.section("Since last stand-up", of: sections)
+            == [
+                ReportBullet(
+                    text: "Webhook replay",
+                    details: ["was waiting on infra", "creds arrived, unblocked"])
+            ])
+}
+
 // MARK: - Periodic
 
 @Test("D17 periodic: every task lands in exactly one section")
@@ -553,11 +604,15 @@ func periodicBlockersCarryReasonThenNotes() {
             [
                 SectionInput.task(
                     "Webhook replay", status: .blocked, blockedReason: "waiting on infra",
-                    events: [SectionInput.event("raised INFRA-9")])
+                    events: [
+                        SectionInput.event("raised INFRA-9"),
+                        SectionInput.event("waiting on infra", kind: .blockedReason),
+                    ])
             ]))
 
     // Periodic has no second section for the notes to live in, so losing them
-    // here would lose the user's words outright.
+    // here would lose the user's words outright — and the in-window reason
+    // event must not make the bullet say "waiting on infra" twice.
     #expect(
         SectionInput.section("Blockers & risks", of: sections)
             == [
@@ -795,7 +850,33 @@ public enum RawReportSections {
     /// point they can judge whether a Jira comment belongs in a spoken
     /// stand-up.
     private static func authored(_ task: GatheredTask) -> [String] {
-        task.events.filter { $0.kind.isUserAuthored }.map(\.body)
+        task.events.filter { isBullet($0, on: task) }.map(\.body)
+    }
+
+    /// Whether `event` becomes a detail line on `task`'s bullet.
+    ///
+    /// **A currently-blocked task's `blockedReason` events are excluded, because
+    /// `reason(_:)` already says them.** `StatusService.addBlockedReason` stamps
+    /// `now()`, so a task blocked since the last stand-up — the ordinary case,
+    /// not an exotic one — carries its reason both as an event inside the window
+    /// and on `GatheredTask.blockedReason` (D-069). Without this the daily
+    /// report says the reason under *Since last stand-up* and again under
+    /// *Blockers*, and the periodic report says it twice inside a single bullet.
+    ///
+    /// **Conditioned on status rather than dropping the kind outright**, because
+    /// D-069 leaves `blockedReason` `nil` for anything not currently blocked. On
+    /// a task that was blocked during the window and has since been unblocked,
+    /// the event is the *only* carrier of what the user wrote; filtering the
+    /// kind unconditionally would delete their words rather than de-duplicate
+    /// them.
+    ///
+    /// **One accepted gap**, consistent with the one D-069 already takes: a task
+    /// blocked, unblocked, and re-blocked inside one window shows only the
+    /// current reason, and the superseded one is dropped rather than listed as
+    /// a note.
+    private static func isBullet(_ event: GatheredEvent, on task: GatheredTask) -> Bool {
+        guard event.kind.isUserAuthored else { return false }
+        return !(task.status == .blocked && event.kind == .blockedReason)
     }
 
     /// A blocked task's reason as zero or one detail line.
@@ -927,9 +1008,18 @@ private func goldenTasks() -> [GatheredTask] {
         SectionInput.task(
             "Spike: cache warming", status: .todo,
             events: [SectionInput.event("read the redis docs, not obviously worth it")]),
+        // The reason is present both as an in-window event and on
+        // blockedReason, which is what StatusService.addBlockedReason actually
+        // produces for a task blocked since the last stand-up. The expected
+        // output below says it exactly once; that it did not change when this
+        // event was added is the assertion.
         SectionInput.task(
             "Webhook replay", status: .blocked, ticketKeys: ["PAY-401"],
-            blockedReason: "waiting on infra for the DLQ credentials"),
+            blockedReason: "waiting on infra for the DLQ credentials",
+            events: [
+                SectionInput.event(
+                    "waiting on infra for the DLQ credentials", kind: .blockedReason)
+            ]),
     ]
 }
 
