@@ -42,7 +42,7 @@ public struct ReportGatherer {
         let buckets = try eventsByTaskID(start: start, end: end, taskIDs: Set(tasks.map(\.id)))
 
         let gathered =
-            tasks
+            try tasks
             .filter { Self.isReportable($0, hasEvents: !(buckets[$0.id] ?? []).isEmpty) }
             .sorted(by: Self.precedes)
             .map { task in
@@ -54,6 +54,7 @@ public struct ReportGatherer {
                         .filter { $0.kind == .jiraIssue }
                         .map(\.identifier)
                         .sorted(),
+                    blockedReason: try blockedReason(for: task),
                     events: buckets[task.id] ?? []
                 )
             }
@@ -82,6 +83,27 @@ public struct ReportGatherer {
                 GatheredEvent(timestamp: event.timestamp, kind: event.kind, body: event.body))
         }
         return buckets
+    }
+
+    /// `GatheredTask.blockedReason`: the most recent non-redacted
+    /// `blockedReason` event's body for a task currently `.blocked`, `nil`
+    /// otherwise.
+    ///
+    /// **Independent of the window, on purpose** — the same reason
+    /// `ticketKeys` reads `task.sourceRefs` rather than an in-window event. A
+    /// task blocked before the window opened, still blocked, with nothing new
+    /// said, is exactly the case FR-4's Blockers section describes, and it has
+    /// no event inside `[start, end]` to carry the reason.
+    ///
+    /// Reuses `EventQueries.timeline(forTaskID:)` rather than a bespoke fetch:
+    /// it is already sorted newest-first and already excludes redacted rows,
+    /// so "most recent non-redacted" is just "first match" here. The kind
+    /// check happens after the fetch, for `EventQueries`' own reason — an
+    /// `EventKind` inside a `#Predicate` does not compile, in either spelling.
+    private func blockedReason(for task: TaskItem) throws -> String? {
+        guard task.status == .blocked else { return nil }
+        return try context.fetch(EventQueries.timeline(forTaskID: task.id))
+            .first { $0.kind == .blockedReason }?.body
     }
 
     /// The project's live tasks. Archived tasks are not reported on.
@@ -141,6 +163,11 @@ public struct ReportGatherer {
     /// Dates, never task content. The condition re-derives the clamp rather
     /// than having `ReportWindow.bounds` report it, so that stays a pure
     /// function of its arguments.
+    ///
+    /// **This condition must track `ReportWindow.bounds`'s clamp** (`min(requested,
+    /// now)` there is `last > end` here, restated). The two are deliberately
+    /// independent code, so a change to one's clamp rule does not fail loudly in
+    /// the other — whoever edits either should read both.
     private func warnIfClamped(project: Project, end: Date) {
         guard let last = project.lastStandupAt, last > end else { return }
         Log.report.notice(

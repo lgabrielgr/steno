@@ -94,5 +94,6 @@ func aFirstReportDoesNotReadAnotherProjectsClock() throws {
     let window = try fixture.gatherer(nowOffset: 0).gather(for: fixture.alpha)
 
     #expect(window.start == ReportFixture.origin.addingTimeInterval(-86_400))
-    #expect(window.tasks[0].events.map(\.body) == ["eight hours ago"])
+    let task0 = try #require(window.tasks.first)
+    #expect(task0.events.map(\.body) == ["eight hours ago"])
 }

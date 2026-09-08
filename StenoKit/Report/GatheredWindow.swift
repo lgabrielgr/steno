@@ -57,6 +57,22 @@ public struct GatheredTask: Sendable, Equatable {
     /// constraint exists to prevent. Sorted so the output is deterministic.
     public let ticketKeys: [String]
 
+    /// The most recent non-redacted `blockedReason` event's body, for a task
+    /// currently `.blocked`. `nil` for any other status.
+    ///
+    /// **Sourced independent of the window, for the reason `ticketKeys` is.**
+    /// FR-4's own report structure needs it: "**Blockers** — BLOCKED tasks
+    /// with reasons" describes a task blocked last week, still blocked, with
+    /// nothing new said since — which is exactly `events` empty. Reading the
+    /// reason only when it happens to fall inside the window would hand M2-02
+    /// a blocked task it cannot render a reason for, in the common case.
+    ///
+    /// **One accepted gap:** if a task was blocked, unblocked, and re-blocked
+    /// without a fresh reason, this surfaces the earlier reason rather than
+    /// nothing. That is what a person recalling the task from memory would
+    /// say too, and better than the alternative of silently going blank.
+    public let blockedReason: String?
+
     /// This task's non-redacted events inside the window, oldest first.
     ///
     /// **May be empty**, and a renderer must handle that honestly rather than
@@ -70,12 +86,14 @@ public struct GatheredTask: Sendable, Equatable {
         title: String,
         status: Status,
         ticketKeys: [String],
+        blockedReason: String?,
         events: [GatheredEvent]
     ) {
         self.id = id
         self.title = title
         self.status = status
         self.ticketKeys = ticketKeys
+        self.blockedReason = blockedReason
         self.events = events
     }
 }

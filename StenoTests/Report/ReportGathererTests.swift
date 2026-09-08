@@ -33,7 +33,8 @@ func eventsOutsideTheWindowAreExcluded() throws {
 
     let window = try fixture.gatherer(nowOffset: 300).gather(for: fixture.alpha)
 
-    #expect(window.tasks[0].events.map(\.body) == ["inside"])
+    let task0 = try #require(window.tasks.first)
+    #expect(task0.events.map(\.body) == ["inside"])
 }
 
 @MainActor
@@ -47,7 +48,8 @@ func redactedEventsAreExcluded() throws {
 
     let window = try fixture.gatherer(nowOffset: 300).gather(for: fixture.alpha)
 
-    #expect(window.tasks[0].events.map(\.body) == ["kept"])
+    let task0 = try #require(window.tasks.first)
+    #expect(task0.events.map(\.body) == ["kept"])
 }
 
 @MainActor
@@ -63,7 +65,8 @@ func theLastReportsOwnEventIsNotGathered() throws {
 
     let window = try fixture.gatherer(nowOffset: 300).gather(for: fixture.alpha)
 
-    #expect(window.tasks[0].events.map(\.body) == ["real work"])
+    let task0 = try #require(window.tasks.first)
+    #expect(task0.events.map(\.body) == ["real work"])
 }
 
 @MainActor
@@ -79,8 +82,9 @@ func anOrdinaryEventOnTheBoundaryIsKept() throws {
 
     // This is the test that keeps the standupReported exclusion falsifiable. A
     // half-open interval would pass the test above and fail this one.
+    let task0 = try #require(window.tasks.first)
     #expect(
-        window.tasks[0].events.map(\.body) == ["on the start boundary", "on the end boundary"])
+        task0.events.map(\.body) == ["on the start boundary", "on the end boundary"])
 }
 
 @MainActor
@@ -114,7 +118,8 @@ func ticketKeysCarryEveryJiraRefSorted() throws {
 
     let window = try fixture.gatherer(nowOffset: 300).gather(for: fixture.alpha)
 
-    #expect(window.tasks[0].ticketKeys == ["ACC-2", "PAY-14"])
+    let task0 = try #require(window.tasks.first)
+    #expect(task0.ticketKeys == ["ACC-2", "PAY-14"])
 }
 
 @MainActor
@@ -129,7 +134,8 @@ func aFirstReportGetsATwentyFourHourWindow() throws {
     let window = try fixture.gatherer(nowOffset: 0).gather(for: fixture.alpha)
 
     #expect(window.start == ReportFixture.origin.addingTimeInterval(-86_400))
-    #expect(window.tasks[0].events.map(\.body) == ["yesterday evening"])
+    let task0 = try #require(window.tasks.first)
+    #expect(task0.events.map(\.body) == ["yesterday evening"])
 }
 
 @MainActor
@@ -254,4 +260,67 @@ func tasksCreatedTogetherAreTieBrokenById() throws {
 
     #expect(ReportGatherer.precedes(low, high))
     #expect(ReportGatherer.precedes(high, low) == false)
+}
+
+@MainActor
+@Test("a task blocked before the window opened still carries its reason")
+func aQuietlyBlockedTaskCarriesItsReason() throws {
+    let fixture = try ReportFixture()
+    // Blocked directly, with its reason dated well before the window opens —
+    // the exact "blocked last week, still blocked, nothing new said" case
+    // D-068 cites. No event of any kind falls inside [start, end].
+    let task = try fixture.task("waiting on infra", in: fixture.alpha, status: .blocked)
+    try fixture.event(
+        "waiting on the infra ticket", on: task, at: -172_800, kind: .blockedReason)
+    try fixture.setLastStandup(ReportFixture.origin, on: fixture.alpha)
+
+    let window = try fixture.gatherer(nowOffset: 300).gather(for: fixture.alpha)
+
+    let task0 = try #require(window.tasks.first)
+    #expect(task0.events.isEmpty, "precondition: no in-window events carry the reason")
+    #expect(task0.blockedReason == "waiting on the infra ticket")
+}
+
+@MainActor
+@Test("a task that is not blocked has no blockedReason, even with one in its history")
+func aNonBlockedTaskHasNoBlockedReason() throws {
+    let fixture = try ReportFixture()
+    let task = try fixture.task("previously stuck", in: fixture.alpha, status: .inProgress)
+    try fixture.event("old blocker", on: task, at: -3_600, kind: .blockedReason)
+    try fixture.setLastStandup(ReportFixture.origin, on: fixture.alpha)
+
+    let window = try fixture.gatherer(nowOffset: 300).gather(for: fixture.alpha)
+
+    let task0 = try #require(window.tasks.first)
+    #expect(task0.blockedReason == nil)
+}
+
+@MainActor
+@Test("the most recent blockedReason wins")
+func theMostRecentBlockedReasonWins() throws {
+    let fixture = try ReportFixture()
+    let task = try fixture.task("waiting on infra", in: fixture.alpha, status: .blocked)
+    try fixture.event("older reason", on: task, at: -7_200, kind: .blockedReason)
+    try fixture.event("newer reason", on: task, at: -3_600, kind: .blockedReason)
+    try fixture.setLastStandup(ReportFixture.origin, on: fixture.alpha)
+
+    let window = try fixture.gatherer(nowOffset: 300).gather(for: fixture.alpha)
+
+    let task0 = try #require(window.tasks.first)
+    #expect(task0.blockedReason == "newer reason")
+}
+
+@MainActor
+@Test("a redacted blockedReason is not used, even when it is the only one")
+func aRedactedBlockedReasonIsNotUsed() throws {
+    let fixture = try ReportFixture()
+    let task = try fixture.task("waiting on infra", in: fixture.alpha, status: .blocked)
+    try fixture.event(
+        "withdrawn reason", on: task, at: -3_600, kind: .blockedReason, redacted: true)
+    try fixture.setLastStandup(ReportFixture.origin, on: fixture.alpha)
+
+    let window = try fixture.gatherer(nowOffset: 300).gather(for: fixture.alpha)
+
+    let task0 = try #require(window.tasks.first)
+    #expect(task0.blockedReason == nil)
 }
