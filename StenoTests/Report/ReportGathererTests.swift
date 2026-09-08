@@ -156,6 +156,24 @@ func aFutureLastStandupYieldsAnEmptyWindow() throws {
 }
 
 @MainActor
+@Test("a project with no tasks gathers nothing, and takes nothing from its neighbours")
+func aProjectWithNoTasksGathersNothing() throws {
+    let fixture = try ReportFixture()
+    // Beta has work in the window; alpha has no tasks at all. This asserts the
+    // behaviour, not the early return that makes it cheap — with an empty task
+    // set the `where` clause discards every row anyway, so the two are
+    // indistinguishable from the outside and no test can claim otherwise.
+    let theirs = try fixture.task("beta work", in: fixture.beta, status: .inProgress)
+    try fixture.event("beta note", on: theirs, at: 60)
+    try fixture.setLastStandup(ReportFixture.origin, on: fixture.alpha)
+
+    let window = try fixture.gatherer(nowOffset: 300).gather(for: fixture.alpha)
+
+    #expect(window.tasks.isEmpty)
+    #expect(window.projectID == fixture.alpha.id)
+}
+
+@MainActor
 @Test("D17: cadence travels with the window")
 func cadenceTravelsWithTheWindow() throws {
     let fixture = try ReportFixture()

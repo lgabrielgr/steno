@@ -73,9 +73,19 @@ public struct ReportGatherer {
     /// predicate is the other construct not worth betting a fetch on. D18 caps a
     /// project under 20 tasks, so the fetch is the cost and the filtering is
     /// free.
+    ///
+    /// **The empty-`taskIDs` guard is a performance fix, not a behavioural one,
+    /// and no test can tell it is there.** With no task IDs the `where` clause
+    /// rejects every row, so the result is `[:]` either way — but the fetch
+    /// still reads every non-redacted event in the window, across every
+    /// project, to discard all of them. It is reachable: a project with no
+    /// tasks yet, or one whose tasks are all archived, and a `periodic` cadence
+    /// makes that window a fortnight wide.
     private func eventsByTaskID(
         start: Date, end: Date, taskIDs: Set<UUID>
     ) throws -> [UUID: [GatheredEvent]] {
+        guard !taskIDs.isEmpty else { return [:] }
+
         var buckets: [UUID: [GatheredEvent]] = [:]
         for event in try context.fetch(EventQueries.inWindow(start: start, end: end))
         where taskIDs.contains(event.taskID) && event.kind != .standupReported {
