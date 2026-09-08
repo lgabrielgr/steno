@@ -1760,6 +1760,44 @@ by a few words, at the cost of the only branch this design otherwise does not ha
 
 ---
 
+### D-075 — CI fails when `make format` would change anything
+**2026-09-08** · chore · **Status:** accepted
+
+The `build-test-lint` job runs `make format` and fails if it rewrote anything under `Steno`,
+`StenoKit` or `StenoTests`.
+
+**D-013 assigns layout to swift-format and semantics to SwiftLint, but only SwiftLint's half was
+enforced.** A file could therefore merge unformatted and stay that way indefinitely: nothing
+checked, and the only signal was the *next* author running `make format` as §9.5 step 4 requires
+and finding an unrelated file in their working tree. That is not hypothetical —
+`EventQueriesTests.swift` drifted at M1-06, was rediscovered twice during M2-02, and was fixed in
+its own PR (#24) precisely because it did not belong in a feature diff.
+
+**The step runs last, and that placement is load-bearing.** `make format` writes in place, so
+asking "is this formatted" necessarily mutates the checkout. No later step may observe a tree that
+no commit corresponds to.
+
+**It carries `if: '!cancelled()'`, for the reason `make lint` already does.** Formatting is
+independent of compiling, so a red build must not hide it, and one run should report every problem
+rather than surfacing them one push at a time.
+
+**The diff is scoped to the three directories the target writes to**, so a failure always names
+formatting rather than some other step having dirtied the tree. `Steno.xcodeproj` and
+`Local.xcconfig` are gitignored, which makes the scope belt-and-braces rather than load-bearing.
+
+**The cost, stated rather than discovered: formatting now has veto power over a build.** A correct,
+passing change can be blocked on whitespace. Mitigated by the fix always being exactly
+`make format`, by the error message saying so, and by the step running last so it never masks a
+real failure.
+
+**Alternatives:** a separate `format` job — rejected because branch protection matches the single
+required check `build-test-lint` verbatim, so a second job would need adding to the protection rule
+to mean anything, and a job that is not required is a gate that does not gate (D-008, D-014 are
+this repo's history of exactly that); a pre-commit hook — rejected because §9.5's gate must hold
+without an agent's or a contributor's cooperation, which is the whole argument for M1-07.
+
+---
+
 ## Open — decided by the task that owns them
 
 Each of these is a real choice the spec leaves open. The owning task decides it, records it in
