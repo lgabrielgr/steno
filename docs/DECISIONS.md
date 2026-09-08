@@ -1606,6 +1606,160 @@ thing on different rows of the same report.
 
 ---
 
+### D-070 — The daily sections are not a partition
+**2026-09-08** · M2-02 · **Status:** accepted
+
+Under `daily` cadence a task may appear under two headings. *Since last stand-up* takes any task
+that is `.done` or has a user-authored event in the window; *Today* takes every `.inProgress`
+task; *Blockers* takes every `.blocked` task. A task appearing twice never repeats itself — the
+first carries its notes, the others carry a title and, for blockers, the reason.
+
+**FR-4 defines these three sections by two different criteria, and both readings are its own.**
+*Since last stand-up* is "completed and progressed work" — window activity. *Today* is "current
+IN-PROGRESS tasks" and *Blockers* is "BLOCKED tasks with reasons" — current status. A task that
+is in progress and was worked on satisfies both, and that is exactly how a stand-up is spoken:
+"yesterday I found the race in TokenRefresher; today I'm still on it." §7.3's daily schema agrees
+outright — the same `task_id` may appear in more than one of its three arrays.
+
+**The membership test for the first section has two clauses because FR-4's phrase has two words.**
+An activity-only test loses the task a user captured, finished, and never wrote a note on: D-072
+excludes its `statusChanged` body, leaving it with no details and no matching heading. The most
+reportable thing that happened all day would be silently absent.
+
+**One accepted gap, stated rather than hidden:** a task now `.todo` whose only window event is a
+status change appears under no daily heading. A bare title under *Since last stand-up* would
+assert progress that did not happen. It does appear under `periodic`'s *In flight*, which is a
+partition and must place every task somewhere.
+
+**Alternatives:** a status partition, the literal reading of §7.4's "raw events grouped by status"
+— rejected because a task worked on all week and still in progress would appear only under
+*Today*, dropping the week's notes from the report entirely.
+
+---
+
+### D-071 — Periodic is a real remapping, not a heading rename
+**2026-09-08** · M2-02 · **Status:** accepted
+
+Under `periodic` cadence, *Completed* takes `.done`, *In flight* takes `.inProgress` and `.todo`,
+and *Blockers & risks* takes `.blocked`. Written as an exhaustive `switch` over `Status` with no
+`default`, so every task lands in exactly one section and a fifth status is a compile error here
+rather than a silent omission from every periodic report.
+
+**The headings are not synonyms for daily's.** *Completed* means finished, where *Since last
+stand-up* means everything that moved. Emitting a fortnight of in-flight work under a heading
+that says "Completed" would be a false claim about the work — and D17 and FR-4 both insist the
+daily/periodic distinction is real ("a daily DSU is a status ping, a biweekly sync is a summary").
+
+**`todo`-with-events goes under *In flight*.** D-068 admits such a task to the window, and a
+partition must place it. It is neither completed nor blocked, and the work demonstrably happened;
+a slightly loose heading is a smaller violation than dropping the user's words.
+
+**The blockers asymmetry between the two cadences is forced, not incidental.** *Blockers* carries
+reason-only under daily and reason-plus-notes under periodic, because under daily a blocked task's
+notes already appear under *Since last stand-up* and under periodic there is no second section for
+them to live in. Making the two "consistent" means choosing between duplicating the notes and
+losing them.
+
+**Alternatives:** rename daily's headings and keep its mapping — rejected as a false label on a
+fortnight of work; group by theme as §7.3 requires of the model — impossible without a model, and
+the task file accepts that a periodic raw window will be long (M3-03 is what makes it concise).
+
+---
+
+### D-072 — Only user-authored events become bullets
+**2026-09-08** · M2-02 · **Status:** accepted
+
+The renderer's detail lines come from events where `EventKind.isUserAuthored` is true — `note` and
+`blockedReason`. `created` and `statusChanged` produce no bullet.
+
+**Their bodies are the app's words, not the user's.** `CaptureService` writes `"Task created"` and
+`StatusTransition.eventBody` writes `"In Progress → Done"`. This output is read aloud to a team.
+Under both D-070's and D-071's mappings a task's status is already expressed by *which section it
+is in*, so emitting the transition as well is redundant rather than faithful. §7.3's verbatim
+constraint binds the user's words; it does not oblige the app to speak its own.
+
+**Filtered through `isUserAuthored` rather than by re-listing kinds**, which is the seam D-045
+already established for "did the user type this". M4's `externalUpdate` is therefore excluded by
+default and gets a deliberate decision from whoever adds the connector that writes it, at the
+point they can judge whether a Jira comment belongs in a spoken stand-up.
+
+**Amended in review, before merge: a currently-blocked task's `blockedReason` events are excluded
+too, because the reason is already surfaced separately.** `StatusService.addBlockedReason` stamps
+`now()`, so a task blocked since the last stand-up — the ordinary case — carries its reason both as
+an event inside the window and on `GatheredTask.blockedReason` (D-069). Counting it as an authored
+bullet made the daily report say the reason under *Since last stand-up* and again under *Blockers*,
+and made the periodic report say it **twice inside one bullet**. The exclusion is conditioned on
+`status == .blocked` rather than dropping the kind outright: D-069 leaves `blockedReason` `nil` for
+anything not currently blocked, so on a task unblocked during the window the event is the only
+carrier of what the user wrote, and filtering it unconditionally would delete their words instead
+of de-duplicating them. **Accepted gap,** matching D-069's own: a task blocked, unblocked, and
+re-blocked inside one window shows the current reason only.
+
+**Consequence:** a task moved to `done` with no notes renders as a title with no details. That is
+honest — the user wrote nothing — and it is the same empty-details case D-068 already forced on
+this renderer for quiet in-progress tasks. It is also why D-070's membership test needs its
+`.done` clause.
+
+**Alternatives:** render every kind verbatim — rejected because the user then reads "Task created"
+to their team; render `statusChanged` only — rejected as redundant with the section heading under
+daily, and it was the weaker half of the pair.
+
+---
+
+### D-073 — Slack `mrkdwn`, with literal bullet characters and no escaping
+**2026-09-08** · M2-02 · **Status:** accepted
+
+`SlackMarkdown` emits a heading as `*Title*` alone on its line, bullets as the literal characters
+`•` and `◦`, an empty section as `_None_`, one blank line between sections, and no trailing
+newline. User-authored bodies are never escaped. No bullet carries a timestamp.
+
+**Slack's `mrkdwn` has no heading syntax** — `## Since last stand-up` pastes in as a literal `##`
+— so bold is the only heading available. Literal bullet characters are used rather than `-`
+because a literal bullet *is* a bullet in any paste target, with no dependence on Slack's composer
+choosing to convert a hyphen on paste.
+
+**Nothing is escaped, deliberately.** A body containing `*` or `_` renders with unintended
+emphasis in Slack. Backslash-escaping it would put characters on screen the user never typed —
+visible in M2-03's *editable* draft and persisted into `StandupReport.markdownBody` — and "ticket
+keys, service names, function names, and error strings appear verbatim as the user typed them" is
+an acceptance criterion of M2-02, where correct Slack emphasis is not.
+
+**A multi-line body hangs rather than escaping its bullet.** `NoteService.addNote` trims only
+outer whitespace and `NoteComposerView` is a `TextEditor`, so interior newlines are reachable from
+the UI. The first line follows `◦ `, the rest are indented six spaces; an interior blank line is
+emitted bare so nothing persisted carries trailing whitespace. Every character survives — only
+leading indentation is added, which is layout, not editing.
+
+**Omitting timestamps is what makes determinism structural.** With no date formatting anywhere,
+the renderer has no locale or timezone input at all, and "same window, same markdown, every time"
+follows from the code's shape rather than from a test that reruns it.
+
+**Alternatives:** CommonMark (`##`, `-`) — rejected because D6's paste target is Slack and `##`
+would appear literally; escaping metacharacters — rejected against the verbatim criterion above.
+
+---
+
+### D-074 — Every section always renders, so the empty window is not a special case
+**2026-09-08** · M2-02 · **Status:** accepted
+
+`SlackMarkdown` emits every section it is given, and an empty one renders `_None_` beneath its
+heading rather than being dropped.
+
+**"No blockers" is a sentence people say at stand-ups.** Omitting the heading throws away
+information the user wants to speak, which is the opposite of what a recall tool is for.
+
+**It also removes a branch rather than adding one.** M2-02's acceptance criterion — "an empty
+window produces something honest and usable, not a crash or a blank string" — is satisfied with no
+empty-window code path at all: a window with no tasks is three headings that each say `_None_`.
+A dedicated "no activity" line would have been a branch reachable only in that one case, which is
+precisely the code that rots untested.
+
+**Alternatives:** omit empty sections — loses the spoken "no blockers" and needs a special case
+for the all-empty window anyway; a dedicated replacement line when all three are empty — friendlier
+by a few words, at the cost of the only branch this design otherwise does not have.
+
+---
+
 ## Open — decided by the task that owns them
 
 Each of these is a real choice the spec leaves open. The owning task decides it, records it in
