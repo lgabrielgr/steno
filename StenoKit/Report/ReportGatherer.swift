@@ -43,6 +43,8 @@ public struct ReportGatherer {
 
         let gathered =
             tasks
+            .filter { Self.isReportable($0, hasEvents: !(buckets[$0.id] ?? []).isEmpty) }
+            .sorted(by: Self.precedes)
             .map { task in
                 GatheredTask(
                     id: task.id,
@@ -91,6 +93,47 @@ public struct ReportGatherer {
         FetchDescriptor<TaskItem>(
             predicate: #Predicate { $0.projectID == id && !$0.isArchived }
         )
+    }
+
+    /// Report order: oldest task first, ties broken by id.
+    ///
+    /// Explicit, because SwiftData does not specify fetch order without a
+    /// `SortDescriptor`, and M2-02 must render the same markdown from the same
+    /// window every time.
+    ///
+    /// **The tie-break is not decoration.** `sorted(by:)` is not documented as
+    /// stable, so two tasks created in the same instant would otherwise have an
+    /// unspecified relative order — the exact nondeterminism this sort exists to
+    /// remove. It is a named function rather than a closure because that
+    /// instability does not reproduce at the sizes D18 permits: a test on a
+    /// handful of tasks cannot distinguish a missing tie-break from a stable
+    /// sort, so the rule is asserted here directly instead of inferred from an
+    /// output order that would agree either way.
+    ///
+    /// `UUID` is not `Comparable`, so the tie-break goes through `uuidString`.
+    static func precedes(_ lhs: TaskItem, _ rhs: TaskItem) -> Bool {
+        (lhs.createdAt, lhs.id.uuidString) < (rhs.createdAt, rhs.id.uuidString)
+    }
+
+    /// Whether `task` belongs in the report: active **or** open.
+    ///
+    /// The obvious reading of FR-4 step 3 — gather the events in the window — is
+    /// not sufficient, because FR-4's own report structure two paragraphs later
+    /// needs more than activity. **Today** is "current IN-PROGRESS tasks" and
+    /// **Blockers** is "BLOCKED tasks with reasons": both are defined by current
+    /// status, not by window activity. A task set in progress on Friday and left
+    /// quiet over the weekend is exactly what Monday's stand-up is for, and an
+    /// activity-only rule drops it.
+    ///
+    /// Exhaustive with no `default`, so a status added later is a compile error
+    /// here rather than a silent omission from every report.
+    private static func isReportable(_ task: TaskItem, hasEvents: Bool) -> Bool {
+        switch task.status {
+        case .inProgress, .blocked:
+            true
+        case .todo, .done:
+            hasEvents
+        }
     }
 
     /// Record a clamped window (§5.2 of the design; §8 permits log metadata).

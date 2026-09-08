@@ -161,3 +161,97 @@ func cadenceTravelsWithTheWindow() throws {
 
     #expect(window.cadence == .periodic)
 }
+
+@MainActor
+@Test("a quiet in-progress task is still reported, with no events")
+func aQuietOpenTaskSurvives() throws {
+    let fixture = try ReportFixture()
+    // Set in progress on Friday; nothing said over the weekend. FR-4's "Today"
+    // section is about exactly this task.
+    try fixture.task("carried over", in: fixture.alpha, status: .inProgress)
+    try fixture.setLastStandup(ReportFixture.origin, on: fixture.alpha)
+
+    let window = try fixture.gatherer(nowOffset: 300).gather(for: fixture.alpha)
+
+    #expect(window.tasks.count == 1)
+    #expect(window.tasks[0].title == "carried over")
+    #expect(window.tasks[0].events.isEmpty)
+}
+
+@MainActor
+@Test("a quiet blocked task is still reported")
+func aQuietBlockedTaskSurvives() throws {
+    let fixture = try ReportFixture()
+    try fixture.task("waiting on infra", in: fixture.alpha, status: .blocked)
+    try fixture.setLastStandup(ReportFixture.origin, on: fixture.alpha)
+
+    let window = try fixture.gatherer(nowOffset: 300).gather(for: fixture.alpha)
+
+    #expect(window.tasks.map(\.title) == ["waiting on infra"])
+}
+
+@MainActor
+@Test("a quiet finished task is dropped")
+func aQuietFinishedTaskIsDropped() throws {
+    let fixture = try ReportFixture()
+    try fixture.task("shipped last month", in: fixture.alpha, status: .done)
+    try fixture.task("not started", in: fixture.alpha, status: .todo)
+    try fixture.setLastStandup(ReportFixture.origin, on: fixture.alpha)
+
+    let window = try fixture.gatherer(nowOffset: 300).gather(for: fixture.alpha)
+
+    #expect(window.tasks.isEmpty)
+}
+
+@MainActor
+@Test("a finished task that moved during the window is reported")
+func aTaskCompletedInsideTheWindowIsReported() throws {
+    let fixture = try ReportFixture()
+    let task = try fixture.task("shipped this morning", in: fixture.alpha, status: .done)
+    try fixture.event("TODO → DONE", on: task, at: 60, kind: .statusChanged)
+    try fixture.setLastStandup(ReportFixture.origin, on: fixture.alpha)
+
+    let window = try fixture.gatherer(nowOffset: 300).gather(for: fixture.alpha)
+
+    #expect(window.tasks.map(\.title) == ["shipped this morning"])
+}
+
+@MainActor
+@Test("tasks are ordered by createdAt, not by whatever the fetch returns")
+func tasksAreOrderedByCreatedAt() throws {
+    let fixture = try ReportFixture()
+    // Inserted newest-first, deliberately. A test that inserted them in the
+    // expected order would pass against no sort at all: SwiftData returns
+    // insertion order here, so the two would agree and the assertion would be
+    // measuring nothing. Making insertion order disagree with the sort key is
+    // what gives this test the power to fail.
+    for index in (0..<6).reversed() {
+        try fixture.task(
+            "task \(index)", in: fixture.alpha, status: .inProgress,
+            createdAt: ReportFixture.origin.addingTimeInterval(Double(index)))
+    }
+    try fixture.setLastStandup(ReportFixture.origin, on: fixture.alpha)
+
+    let window = try fixture.gatherer(nowOffset: 300).gather(for: fixture.alpha)
+
+    #expect(window.tasks.map(\.title) == (0..<6).map { "task \($0)" })
+}
+
+@MainActor
+@Test("tasks created in the same instant are ordered by id, in both directions")
+func tasksCreatedTogetherAreTieBrokenById() throws {
+    let fixture = try ReportFixture()
+    let earlier = try fixture.task(
+        "a", in: fixture.alpha, createdAt: ReportFixture.origin)
+    let later = try fixture.task(
+        "b", in: fixture.alpha, createdAt: ReportFixture.origin)
+
+    // Asserted on the comparator, not on a gathered order: at the sizes D18
+    // permits, `sorted(by:)` is stable in practice, so an output-order test
+    // would pass just as well with no tie-break at all.
+    let (low, high) =
+        earlier.id.uuidString < later.id.uuidString ? (earlier, later) : (later, earlier)
+
+    #expect(ReportGatherer.precedes(low, high))
+    #expect(ReportGatherer.precedes(high, low) == false)
+}
