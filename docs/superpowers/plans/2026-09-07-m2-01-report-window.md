@@ -1414,7 +1414,7 @@ Expected: empty. A mutation left behind here would ship.
 **Files:**
 - Modify: `docs/DECISIONS.md` — append four entries
 - Modify: `docs/ARCHITECTURE.md` — mark `Report/` as existing
-- Modify: `docs/tasks/README.md` — only if a merged row is untucked (see Step 3)
+- Modify: `docs/tasks/README.md` — only if a merged row is unticked (see Step 3)
 
 - [ ] **Step 1: Append the decisions**
 
@@ -1439,7 +1439,7 @@ Change it to:
   Report/         window computation (exists, M2-01); renderers (M2-02)
 ```
 
-- [ ] **Step 3: Check for untucked merged rows**
+- [ ] **Step 3: Check for unticked merged rows**
 
 CLAUDE.md step 4 requires this, because nothing else prompts it and §9.5 forbids a direct commit to `main`.
 

@@ -17,8 +17,10 @@ public enum Log {
 
     /// The report path (FR-4).
     ///
-    /// Its own category so a clamped or empty window can be found without
-    /// reading every `app` line:
+    /// Its own category so a clamped window can be found without reading every
+    /// `app` line. **Clamping is the only thing this category emits today** —
+    /// `ReportGatherer.warnIfClamped` is its single call site, and an empty
+    /// window is silent because it is a normal outcome, not an anomaly:
     ///
     ///     /usr/bin/log show --last 1h --info --predicate \
     ///       'subsystem == "com.lgabrielgr.steno" AND category == "report"'
