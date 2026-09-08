@@ -1418,12 +1418,12 @@ Expected: empty. A mutation left behind here would ship.
 
 - [ ] **Step 1: Append the decisions**
 
-Add to `docs/DECISIONS.md`, following the existing format (`### D-0NN — title`, then a bold date/task/status line, prose, and an **Alternatives:** line). Use the next free numbers — `D-056` is the last one taken as of this plan, so these are **D-057** through **D-060**:
+Add to `docs/DECISIONS.md`, following the existing format (`### D-0NN — title`, then a bold date/task/status line, prose, and an **Alternatives:** line). Use the next free numbers — `D-064` is the last one taken as of this plan, so these are **D-065** through **D-068**:
 
-- **D-057 — A gathered window is a `Sendable` value snapshot.** `GatheredWindow` carries values, not `@Model` rows, because M3-03 hands it across an async boundary to an `AIProvider`. Alternatives: returning live `TaskItem`/`Event` (not `Sendable`; the snapshot types get written anyway in M3-03, under a review gate about prompts rather than about payload shape).
-- **D-058 — `standupReported` events are never gathered.** A declared interpretation of FR-4 step 3's "all events". A report is not work, and Copy stamps `lastStandupAt` and its events with one instant, so a closed interval returns them every time. Alternatives: a half-open interval (deviates from FR-4, drops legitimate boundary notes, and leaves mid-window report events in); doing both (makes the interval change untestable — nothing could distinguish it once the kind is excluded).
-- **D-059 — An inverted window is clamped, not fatal.** `lastStandupAt` ahead of `now` is reachable through §10.1's "take the later timestamp" merge. Clamping keeps `windowStart <= windowEnd` true for every `StandupReport` M2-03 persists and M2-04 reads back. Alternatives: 24h fallback (silently re-reports a day already said aloud); throwing (§7.4 says the user must never arrive empty-handed).
-- **D-060 — Report inclusion is active-or-open.** FR-4's **Today** and **Blockers** sections are defined by current status, not window activity. Alternatives: activity-only (drops the task Monday's stand-up is about, and forces M2-02 to open a second read path into the store); every non-archived task (pushes the reportability judgement into M3-03's prompt as noise).
+- **D-065 — A gathered window is a `Sendable` value snapshot.** `GatheredWindow` carries values, not `@Model` rows, because M3-03 hands it across an async boundary to an `AIProvider`. Alternatives: returning live `TaskItem`/`Event` (not `Sendable`; the snapshot types get written anyway in M3-03, under a review gate about prompts rather than about payload shape).
+- **D-066 — `standupReported` events are never gathered.** A declared interpretation of FR-4 step 3's "all events". A report is not work, and Copy stamps `lastStandupAt` and its events with one instant, so a closed interval returns them every time. Alternatives: a half-open interval (deviates from FR-4, drops legitimate boundary notes, and leaves mid-window report events in); doing both (makes the interval change untestable — nothing could distinguish it once the kind is excluded).
+- **D-067 — An inverted window is clamped, not fatal.** `lastStandupAt` ahead of `now` is reachable through §10.1's "take the later timestamp" merge. Clamping keeps `windowStart <= windowEnd` true for every `StandupReport` M2-03 persists and M2-04 reads back. Alternatives: 24h fallback (silently re-reports a day already said aloud); throwing (§7.4 says the user must never arrive empty-handed).
+- **D-068 — Report inclusion is active-or-open.** FR-4's **Today** and **Blockers** sections are defined by current status, not window activity. Alternatives: activity-only (drops the task Monday's stand-up is about, and forces M2-02 to open a second read path into the store); every non-archived task (pushes the reportability judgement into M3-03's prompt as noise).
 
 - [ ] **Step 2: Update the architecture map**
 
@@ -1461,8 +1461,8 @@ All three must be green. Do not open the PR otherwise (§9.5 step 4, §13).
 git add docs/DECISIONS.md docs/ARCHITECTURE.md docs/tasks/README.md
 git commit -m "docs: record M2-01's four decisions and mark Report/ as landed
 
-D-057 the Sendable snapshot, D-058 excluding standupReported, D-059 the
-inverted-window clamp, D-060 active-or-open inclusion. Two of them are
+D-065 the Sendable snapshot, D-066 excluding standupReported, D-067 the
+inverted-window clamp, D-068 active-or-open inclusion. Two of them are
 interpretations FR-4 does not state; both are declared in the PR body rather
 than applied silently.
 
@@ -1480,7 +1480,7 @@ The PR body must state, per §9.5 and CLAUDE.md:
 - **Requirement IDs:** D8, D16, D17, FR-4 steps 2–3, §3.3, §3.5.
 - **What was done:** `StenoKit/Report/` gains `ReportWindow` and `ReportGatherer`; `EventQueries` gains `inWindow`.
 - **How it was verified:** `make build`, `make test`, `make lint` all green; eleven mutations applied to the finished tree and every one caught by a named test.
-- **Two declared interpretations of FR-4** — spell both out, with the reasoning from D-058 and D-059, and say plainly that FR-4 does not state either. Note that the `standupReported` collision was *measured* against SwiftData, not inferred: the closed interval really does return an event stamped at exactly `windowStart`.
+- **Two declared interpretations of FR-4** — spell both out, with the reasoning from D-066 and D-067, and say plainly that FR-4 does not state either. Note that the `standupReported` collision was *measured* against SwiftData, not inferred: the closed interval really does return an event stamped at exactly `windowStart`.
 - **What was deliberately left out:** rendering (M2-02), the clock advance and Copy (M2-03), undo (M2-04), ref refresh (M4-01).
 - **One constraint inherited by M2-04:** it cannot get its `standupReported` rows from a `GatheredWindow`, since this path never returns that kind and `StandupReport` stores no event IDs. It must query them itself.
 

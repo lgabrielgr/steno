@@ -150,7 +150,7 @@ StenoKit/         framework — everything testable
                   hotkey chord, conflict detection, Carbon monitor (M1-03);
                   chord validation (M1-08, D-063 — a rule, not a view model)
   Status/         status service, transition and cycle           (exists, M1-05)
-  Report/         window computation, renderers          (M2-01, M2-02)
+  Report/         window computation (exists, M2-01); renderers  (M2-02)
   Portability/    export, import, merge                  (M2.5)
   AI/             AIProvider, AnthropicProvider          (M3)
   Sources/        SourceConnector, Jira, Confluence, MCP (M4, M5)
