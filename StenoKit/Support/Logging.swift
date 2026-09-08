@@ -15,6 +15,17 @@ public enum Log {
 
     public static let app = Logger(subsystem: subsystem, category: "app")
 
+    /// The report path (FR-4).
+    ///
+    /// Its own category so a clamped or empty window can be found without
+    /// reading every `app` line:
+    ///
+    ///     /usr/bin/log show --last 1h --info --predicate \
+    ///       'subsystem == "com.lgabrielgr.steno" AND category == "report"'
+    ///
+    /// Spell out `/usr/bin/log` — zsh has a `log` builtin that shadows it.
+    public static let report = Logger(subsystem: subsystem, category: "report")
+
     /// Intervals around the capture path.
     ///
     /// §1.1 makes capture latency a P0 functional requirement and §13 requires
