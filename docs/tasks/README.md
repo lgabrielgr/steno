@@ -67,8 +67,8 @@ something better than paper. **M2 is the true MVP; M6 is the finish line.**
 ### M2 — Report, no AI
 > Exit: the user can run a real stand-up from the app. **This is the MVP.**
 
-- [ ] [M2-01](M2-01-report-window.md) — window computation and event gathering (D8)
-- [ ] [M2-02](M2-02-raw-report-renderer.md) — deterministic markdown for both cadences; also the §7.4 fallback
+- [x] [M2-01](M2-01-report-window.md) — window computation and event gathering (D8)
+- [x] [M2-02](M2-02-raw-report-renderer.md) — deterministic markdown for both cadences; also the §7.4 fallback
 - [ ] [M2-03](M2-03-report-ui-and-copy.md) — editable draft, clipboard, and the three Copy side effects
 - [ ] [M2-04](M2-04-undo-standup.md) — undo via redaction (FR-4.1)
 
