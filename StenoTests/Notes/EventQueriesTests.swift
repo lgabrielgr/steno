@@ -32,9 +32,11 @@ func theWindowQueryIsClosedAtBothEnds() throws {
     let context = ModelContext(try StenoStore.inMemory())
     let taskID = UUID()
     let events = [
-        Event(taskID: taskID, timestamp: origin.addingTimeInterval(-1), kind: .note, body: "before"),
+        Event(
+            taskID: taskID, timestamp: origin.addingTimeInterval(-1), kind: .note, body: "before"),
         Event(taskID: taskID, timestamp: origin, kind: .note, body: "start"),
-        Event(taskID: taskID, timestamp: origin.addingTimeInterval(30), kind: .note, body: "middle"),
+        Event(
+            taskID: taskID, timestamp: origin.addingTimeInterval(30), kind: .note, body: "middle"),
         Event(taskID: taskID, timestamp: origin.addingTimeInterval(60), kind: .note, body: "end"),
         Event(taskID: taskID, timestamp: origin.addingTimeInterval(61), kind: .note, body: "after"),
     ]
