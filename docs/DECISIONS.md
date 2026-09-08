@@ -1456,6 +1456,156 @@ whose subject is not shipping claims the code disproves.
 
 ---
 
+### D-065 — A gathered window is a `Sendable` value snapshot
+**2026-09-07** · M2-01 · **Status:** accepted
+
+`GatheredWindow`, `GatheredTask` and `GatheredEvent` — `ReportGatherer.gather(for:)`'s return type
+— carry plain values, not the `@Model` rows they were read from. All three are `Sendable`.
+
+**Why:** M3-03 hands a `GatheredWindow` to an `AIProvider` across an async boundary, and `TaskItem`
+and `Event` are `@Model` classes — not `Sendable`, not safe to touch from another isolation domain.
+Returning live rows would only defer the problem: the snapshot types would still get built, later,
+in a task whose review gate is about prompt construction rather than about the shape of the report
+payload. Building them here puts the question in front of the reviewer who is actually thinking
+about it.
+
+It doubles as half of FR-4's side-effect guarantee expressed as a type rather than a convention: a
+caller holding a `GatheredWindow` has nothing in hand that it *could* mutate. `ReportGatherer`
+itself has no `save` parameter for the same reason.
+
+`GatheredEvent` carries no `id` — an earlier draft gave it one, justified as what M2-04 would use
+to find the events it redacts. That was false: M2-04 redacts `standupReported` events, and D-066
+excludes that kind from gathering entirely, so nothing reads the field. It was dropped rather than
+shipped unused on a type three downstream tasks depend on.
+
+**Alternatives:** returning live `TaskItem`/`Event` (not `Sendable`; the snapshot types get written
+anyway in M3-03, under a review gate about prompts rather than about payload shape).
+
+---
+
+### D-066 — `standupReported` events are never gathered
+**2026-09-07** · M2-01 · **Status:** accepted · a declared interpretation of FR-4 step 3
+
+`ReportGatherer` excludes `Event`s of kind `.standupReported` from the window it returns, even
+though FR-4 step 3's interval is closed and unqualified by kind.
+
+**The collision is measured, not theorised.** Copy sets `project.lastStandupAt = now` and appends
+`standupReported` events stamped with that same `now`. The next report's `windowStart` is
+therefore exactly equal to those events' timestamps, and `EventQueries.inWindow` is a closed
+interval — `timestamp >= start && timestamp <= end`. A runtime probe against SwiftData on this
+branch confirmed the closed interval returns an event stamped at exactly `windowStart`. So every
+report after a project's first one would open with "a report was generated" as reported work,
+every time, not rarely.
+
+The exclusion stands on its own merits independent of that tie: a report is not work. "Yesterday I
+generated a stand-up" is not something the user says out loud at today's stand-up, so the kind
+should never reach the renderer or the prompt regardless of timestamps — including the case where
+two reports happen in one day and the earlier one's event sits in the middle of the next window,
+where an interval change alone would not help.
+
+**M2-04 inherits a constraint from this.** Undo must redact the `standupReported` events Copy
+appended, and this path deliberately never returns that kind — so M2-04 cannot get them from a
+`GatheredWindow`. `StandupReport` stores `projectID`, `windowStart` and `windowEnd` but no event
+IDs, so M2-04 has to query for them itself: `standupReported` events for the project's tasks at or
+after the report's `windowEnd`.
+
+**Alternatives:** a half-open interval `(windowStart, now]` (deviates from FR-4's stated interval,
+drops a legitimate note stamped at exactly `windowStart`, and leaves mid-window `standupReported`
+events flowing in — narrowing the problem rather than solving it); doing both (makes the interval
+change untestable — once the kind is excluded, no fixture can distinguish half-open from closed, so
+it would be a line of code nothing can verify).
+
+---
+
+### D-067 — An inverted window is clamped, not fatal
+**2026-09-07** · M2-01 · **Status:** accepted · a declared interpretation of FR-4 step 2
+
+`ReportWindow.bounds(lastStandupAt:now:)` clamps `start` to `min(requested, now)` rather than
+letting `windowStart` land after `windowEnd`.
+
+**This is reachable through a supported path, not defensive padding.** §10.1 merges
+`lastStandupAt` by "take the later timestamp." Report on a Mac whose clock runs a few minutes fast,
+export, import onto a Mac whose clock does not — the second machine's stored `lastStandupAt` is
+genuinely ahead of its own `now`. M2.5 is core rather than optional (§10), so this arrives by
+design.
+
+Clamping yields an empty window: a thin report, with open tasks still surfacing per D-068, rather
+than a crash or a fabricated 24-hour window. It also keeps `windowStart <= windowEnd` true for
+every `StandupReport` M2-03 persists, which M2-04's undo reads back — an inverted interval left
+unclamped would let M2-04 restore a future `lastStandupAt` from it, turning a transient clock skew
+into a permanent one. The clamp is logged (dates only, never task content) by `ReportGatherer`, not
+by `ReportWindow`, so the rule itself stays a pure function of its arguments.
+
+**Alternatives:** a 24-hour fallback (silently re-reports work already said aloud on the other Mac,
+and overloads the first-run rule — 24h would then mean "reported recently elsewhere" as well as
+"never reported"); throwing (§7.4's posture is that the user must never arrive at a stand-up
+empty-handed; failing the app's core feature over a clock disagreement of minutes is a bad trade).
+
+---
+
+### D-068 — Report inclusion is active-or-open
+**2026-09-07** · M2-01 · **Status:** accepted
+
+A task is included in a `GatheredWindow` when it is not archived and either it has at least one
+non-redacted event in the window, or its current status is `.inProgress` or `.blocked`. A quiet
+open task appears with an empty `events` array rather than being dropped.
+
+**This is the rule that makes FR-4's own report structure satisfiable, not a departure from it.**
+FR-4 step 3 speaks about gathering *events*; two paragraphs later, FR-4's report structure requires
+current **Today** ("IN-PROGRESS tasks") and **Blockers** ("BLOCKED tasks with reasons") sections —
+defined by current *status*, not by window activity. Neither half of FR-4 is being deviated from
+here: active-or-open reconciles the two, because an events-only reading of step 3 would leave
+Today and Blockers empty in exactly the case FR-4 requires them populated. A task set to
+in-progress on Friday and left quiet over the weekend is exactly what Monday's stand-up is for;
+activity-only gathering drops it, and the report would omit the thing the user is actually working
+on.
+
+**Consequence for M2-02, named here so it is not rediscovered as a gap:** `GatheredTask.events` may
+be empty, and the renderer must produce something honest for that case rather than a blank bullet.
+
+**Alternatives:** activity-only (drops the task Monday's stand-up is about, and pushes M2-02 toward
+opening a second, unreviewed read path into the store to recover open tasks on its own — splitting
+"what is in the report" across two files); every non-archived task (pushes the reportability
+judgement downstream into M3-03's prompt as noise — shipping every long-finished task to the model
+as context it must learn to ignore).
+
+---
+
+### D-069 — `blockedReason` is sourced independent of the report window
+**2026-09-07** · M2-01 · **Status:** accepted
+
+`GatheredTask.blockedReason` carries the most recent non-redacted `blockedReason` event's body for
+a task whose current status is `.blocked`, found by querying that task's full timeline rather than
+the window's bucketed events — `nil` for any other status.
+
+**D-068 includes a quiet blocked task precisely because FR-4's report structure demands it — but
+gathering the reason from the window alone would have handed back the task with nothing to say.**
+FR-4's structure specifies "**Blockers** — BLOCKED tasks with reasons". `blockedReason` is an
+ordinary `Event`, so a task blocked before the window opened and quiet since — the common case: it
+was blocked last week, is still blocked, and nothing new has happened — arrives with an empty
+`events` array under D-068's own rule, and the one event that explains *why* it is blocked sits
+outside `[start, end]`. The type would be withholding the very thing that justified including the
+task in the first place.
+
+**The precedent that settles it: `ticketKeys` already reads `task.sourceRefs`, not windowed
+events.** Nothing about "ticket references survive outside the window but blocked reasons don't"
+is defensible — the two fields disagreeing was the defect. Making `blockedReason` consistent with
+`ticketKeys` is the fix, not a new exception.
+
+**One accepted gap, stated rather than hidden:** if a task was blocked, unblocked, and re-blocked
+without a fresh `blockedReason` event, the earlier reason surfaces — not the current episode's
+reason, because there isn't one yet. That matches how a person recalls the task from memory, and
+is better than the alternative of going silent.
+
+**Alternatives:** let M2-02 query the store for the reason when it renders a blocked task with no
+in-window event — rejected because it reopens the side-effect question inside a renderer task, the
+same argument D-068 already made for putting the inclusion rule in the gatherer rather than the
+renderer; widen the report window for blocked tasks specifically — rejected because the window
+belongs to FR-4, and bending it per-task would make `StandupReport.windowStart` mean a different
+thing on different rows of the same report.
+
+---
+
 ## Open — decided by the task that owns them
 
 Each of these is a real choice the spec leaves open. The owning task decides it, records it in
