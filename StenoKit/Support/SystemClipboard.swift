@@ -1,6 +1,6 @@
 import AppKit
 
-/// D6's clipboard, and the only place in StenoKit that imports AppKit.
+/// D6's clipboard, and the only place in StenoKit that touches `NSPasteboard`.
 ///
 /// **Wrapped rather than called inline so `StandupService` can be tested.**
 /// §9.4 runs the suite headless; a test that reached `NSPasteboard.general`
