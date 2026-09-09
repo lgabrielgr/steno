@@ -103,7 +103,7 @@ struct ReportFixture {
     func standupService(
         nowOffset: TimeInterval,
         save: @escaping (ModelContext) throws -> Void = { try $0.save() },
-        copy: @escaping (String) -> Bool = { _ in true }
+        copy: @escaping @MainActor (String) -> Bool = { _ in true }
     ) -> StandupService {
         StandupService(
             context: context,

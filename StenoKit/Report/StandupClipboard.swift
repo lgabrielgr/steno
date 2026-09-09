@@ -24,6 +24,7 @@ public enum StandupClipboard {
     /// The default `copy` seam for `StandupService`. Composes the conversion
     /// with the pasteboard write so `SystemClipboard` stays a dumb wrapper and
     /// this file stays the only place that knows the dialect.
+    @MainActor
     @discardableResult
     public static func write(_ markdown: String) -> Bool {
         SystemClipboard.write(markdown, rtf: rtf(from: markdown))

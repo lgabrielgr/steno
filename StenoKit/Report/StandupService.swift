@@ -37,13 +37,20 @@ public struct StandupService {
     private let context: ModelContext
     private let now: () -> Date
     private let save: (ModelContext) throws -> Void
-    private let copy: (String) -> Bool
+    /// **Main-actor-bound at the type level, not merely in practice.** The
+    /// default reaches `NSPasteboard`, which is main-thread-only, and this type
+    /// being `@MainActor` made that true at runtime without the compiler
+    /// enforcing it — a seam stored and called from anywhere else would have
+    /// compiled. The annotation also removes the `nonisolated(unsafe)` a test
+    /// previously needed to capture state inside the closure, which is a better
+    /// outcome than justifying the escape hatch.
+    private let copy: @MainActor (String) -> Bool
 
     public init(
         context: ModelContext,
         now: @escaping () -> Date = Date.init,
         save: @escaping (ModelContext) throws -> Void = { try $0.save() },
-        copy: @escaping (String) -> Bool = StandupClipboard.write
+        copy: @escaping @MainActor (String) -> Bool = StandupClipboard.write
     ) {
         self.context = context
         self.now = now

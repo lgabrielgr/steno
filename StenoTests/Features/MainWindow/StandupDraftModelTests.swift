@@ -14,7 +14,7 @@ private let editedDraft = "the user rewrote every word of this by hand"
 private func draftReadyToCopy(
     _ fixture: ReportFixture,
     save: @escaping (ModelContext) throws -> Void = { try $0.save() },
-    copy: @escaping (String) -> Bool = { _ in true }
+    copy: @escaping @MainActor (String) -> Bool = { _ in true }
 ) throws -> (model: StandupDraftModel, window: GatheredWindow) {
     let task = try fixture.task("ship the thing", in: fixture.alpha, status: .inProgress)
     try fixture.event("found the race in setUp", on: task, at: 60)
@@ -152,6 +152,10 @@ func successfulRetryClearsTheError() throws {
     // One mutable flag rather than two services: the model holds its service
     // for life, so the only way to fail once and then succeed is for the
     // injected save to change its mind.
+    // Still `nonisolated(unsafe)`, unlike the clipboard seam: this is captured by
+    // the `save` closure, which is `(ModelContext) throws -> Void` across every
+    // service in the app and is not main-actor-bound. Annotating that one is a
+    // wider change than this task owns.
     nonisolated(unsafe) var shouldFail = true
     let model = StandupDraftModel(
         service: fixture.standupService(

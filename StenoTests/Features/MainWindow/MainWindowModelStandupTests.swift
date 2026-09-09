@@ -16,7 +16,7 @@ private let origin = Date(timeIntervalSince1970: 1_000_000)
 @MainActor
 private func modelWithReportableWork(
     now: @escaping () -> Date = { origin },
-    copy: @escaping (String) -> Bool = { _ in true }
+    copy: @escaping @MainActor (String) -> Bool = { _ in true }
 ) throws -> (MainWindowModel, Project) {
     let container = try StenoStore.inMemory()
     // `ModelContext(container)` retains its container; `container.mainContext`

@@ -116,7 +116,7 @@ public final class MainWindowModel: MainWindowActions {
         context: ModelContext,
         now: @escaping () -> Date = Date.init,
         save: @escaping (ModelContext) throws -> Void = { try $0.save() },
-        copy: @escaping (String) -> Bool = StandupClipboard.write,
+        copy: @escaping @MainActor (String) -> Bool = StandupClipboard.write,
         settings: AppSettings = AppSettings()
     ) {
         self.context = context

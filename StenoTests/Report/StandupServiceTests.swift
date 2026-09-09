@@ -163,7 +163,7 @@ func refusedClipboardStillCommits() throws {
 func theEditedTextReachesTheClipboard() throws {
     let fixture = try ReportFixture()
     let window = try windowWithOneTask(fixture)
-    nonisolated(unsafe) var copied: String?
+    var copied: String?
 
     let result = try fixture.standupService(
         nowOffset: 900,
