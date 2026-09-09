@@ -1866,6 +1866,15 @@ recorded but not copied, and M2-04's undo is the recovery.
 `throws` and the flag are two channels because the two failures need different responses — after a
 throw, retrying is safe; after a refused clipboard, retrying double-reports the window.
 
+**One latent assumption, recorded because it is invisible at the call site.**
+`MainWindowModel` hands the same `ModelContext` to all five of its services, so
+the `context.rollback()` above discards *every* pending change on that context,
+not only this transaction's. That is safe today only because each service saves
+immediately after it mutates, leaving nothing else pending when Copy runs. A
+service that batches writes would have them silently destroyed by a failed
+Copy — so whoever adds one needs either its own context or a narrower recovery
+than `rollback()`.
+
 ### D-079 — `standupReported` events carry their report's id in `payload`
 
 **2026-09-09** · M2-03 · **Status:** accepted

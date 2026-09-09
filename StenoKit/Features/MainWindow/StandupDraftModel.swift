@@ -100,8 +100,9 @@ public final class StandupDraftModel {
     @discardableResult
     public func commit(to project: Project) -> Bool {
         guard let window, phase == .editing else { return false }
-        // Read once, so what is asserted about `markdownBody` is the same
-        // string that reached the clipboard even if a keystroke lands mid-call.
+        // Read once so the clipboard and `markdownBody` are provably the same
+        // string. Not a concurrency guard — this method is synchronous and
+        // `@MainActor`, with no suspension point for a keystroke to land in.
         let draft = text
 
         do {

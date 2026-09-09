@@ -29,14 +29,14 @@ public enum EventQueries {
 
     /// Every non-redacted event in `[start, end]`, oldest first (FR-4 step 3).
     ///
-    /// **Closed at both ends, as FR-4 specifies**, and that is load-bearing
-    /// rather than incidental: M2-03's Copy stamps `project.lastStandupAt` and
-    /// the `standupReported` events it appends with the same instant, so the
-    /// next report's `start` equals those events' timestamps exactly. The
-    /// interval therefore returns them every time — which is why
-    /// `ReportGatherer` drops the kind, rather than this descriptor narrowing
-    /// to a half-open range that would also drop a legitimate note stamped on
-    /// the boundary.
+    /// **Closed at both ends, as FR-4 specifies.** A `standupReported` event
+    /// can land exactly on a later window's `start` — D-076 stamps
+    /// `lastStandupAt` with the *generate* instant while the events carry the
+    /// *Copy* instant, so the two coincide only when the user copies the moment
+    /// they generate, but that is a normal thing to do rather than a contrived
+    /// one. `ReportGatherer` drops the kind unconditionally, which is what makes
+    /// the boundary case safe; narrowing this descriptor to a half-open range
+    /// instead would also drop a legitimate note stamped on the boundary.
     ///
     /// Not scoped to a task or a project. `Event` carries no `projectID` and
     /// this predicate stays `Date && Date && !Bool` — a `taskIDs.contains(...)`

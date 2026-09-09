@@ -116,6 +116,10 @@ func dismissDiscardsTheDraft() throws {
     let fixture = try ReportFixture()
     let (model, _) = try draftReadyToCopy(fixture)
     model.text = editedDraft
+    // Commit first, so `phase` is `.copied` going in and the reset below is a
+    // proven clear rather than a value that was already correct.
+    #expect(model.commit(to: fixture.alpha))
+    #expect(model.phase == .copied, "precondition")
 
     model.dismiss()
 
@@ -133,4 +137,42 @@ func commitWithoutAWindowIsANoOp() throws {
 
     #expect(model.commit(to: fixture.alpha) == false)
     #expect(try fixture.reportsInStore().isEmpty)
+}
+
+@MainActor
+@Test("a successful retry clears the error the failed attempt left behind")
+func successfulRetryClearsTheError() throws {
+    struct Boom: Error {}
+    let fixture = try ReportFixture()
+    let task = try fixture.task("ship the thing", in: fixture.alpha, status: .inProgress)
+    try fixture.event("found the race in setUp", on: task, at: 60)
+    try fixture.setLastStandup(ReportFixture.origin, on: fixture.alpha)
+    let window = try fixture.gatherer(nowOffset: 300).gather(for: fixture.alpha)
+
+    // One mutable flag rather than two services: the model holds its service
+    // for life, so the only way to fail once and then succeed is for the
+    // injected save to change its mind.
+    nonisolated(unsafe) var shouldFail = true
+    let model = StandupDraftModel(
+        service: fixture.standupService(
+            nowOffset: 900,
+            save: { context in
+                if shouldFail { throw Boom() }
+                try context.save()
+            }))
+    model.begin(window: window, text: editedDraft)
+
+    #expect(model.commit(to: fixture.alpha))
+    #expect(model.lastError != nil, "precondition: the first attempt failed")
+
+    shouldFail = false
+    #expect(model.commit(to: fixture.alpha))
+
+    // Without `lastError = nil` on the success branch, the sheet shows
+    // "Nothing was saved — try again" in red directly beneath the bold
+    // "Copied to clipboard" headline — the contradiction D-082 exists to
+    // prevent, in the one state that reaches it.
+    #expect(model.phase == .copied)
+    #expect(model.lastError == nil)
+    #expect(try fixture.reportsInStore().count == 1)
 }

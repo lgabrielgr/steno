@@ -57,6 +57,13 @@ func generatingIsFreeOfSideEffects() throws {
     #expect(counter.posts == 0)
     #expect(project.lastStandupAt == nil, "the clock only advances on Copy, never on generate")
     #expect(model.lastError == nil)
+    // The spec's third gate, and the one the other two cannot stand in for: a
+    // stray insert that never posted `.stenoDidWrite` would satisfy both of
+    // the assertions above. Read through the model's own context rather than a
+    // fresh one, deliberately — a pending insert is visible to the context
+    // that made it even before any save, so this catches a stray write that a
+    // store-only read would miss entirely.
+    #expect(try model.context.fetch(FetchDescriptor<StandupReport>()).isEmpty)
 }
 
 @MainActor

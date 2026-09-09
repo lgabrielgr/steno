@@ -15,7 +15,15 @@ extension MainWindowModel {
     /// is no single window to compute and no single clock to advance. The
     /// footer button and the ⌘R menu item both read this, so they cannot
     /// disagree about when the action is live.
-    public var canPrepareStandup: Bool { selectedProject != nil }
+    ///
+    /// **False while the draft sheet is up**, which is what keeps ⌘R from
+    /// silently overwriting an edited draft: `begin(window:text:)` replaces
+    /// `text` unconditionally, and the sheet does not re-present, so the user
+    /// would watch their own words disappear with nothing to undo. FR-4 step 6
+    /// and §7.3 make the user's phrasing the final word; this is the one path
+    /// that could take it away. It also protects the `.copied` state M2-04
+    /// hangs undo on from being reset to `.editing`.
+    public var canPrepareStandup: Bool { selectedProject != nil && activeSheet == nil }
 
     /// The project the stand-up acts on, or `nil` under "All".
     ///
@@ -39,7 +47,9 @@ extension MainWindowModel {
     /// window's existing inline banner instead. A modal whose only content is
     /// an error asks the user to dismiss something they did not summon.
     public func prepareStandup() {
-        guard let project = selectedProject else { return }
+        // Gates on the same property the button and menu item read, so a path
+        // that bypasses the UI cannot do what the UI refuses to offer.
+        guard canPrepareStandup, let project = selectedProject else { return }
 
         let window: GatheredWindow
         do {
@@ -51,6 +61,11 @@ extension MainWindowModel {
             return
         }
 
+        // Matches `perform(_:_:)`: a success clears the banner its own failure
+        // would have left behind, so a retry does not open the sheet with a
+        // stale "could not prepare" message sitting behind it.
+        lastError = nil
+
         standupDraft.begin(
             window: window,
             text: SlackMarkdown.render(RawReportSections.build(from: window)))
@@ -58,6 +73,15 @@ extension MainWindowModel {
     }
 
     /// FR-4 step 7, from the sheet's Copy button.
+    ///
+    /// **The project comes from the draft's own window, not from `selection`.**
+    /// The window was frozen when the user pressed Prepare, while `selection`
+    /// stays live — and "Next Project" (⌘⌥↓) is reachable from the menu while
+    /// this sheet is up. Reading `selection` here would hand one project's
+    /// window to another project's row, which the service refuses, leaving the
+    /// user in a sheet whose only advice ("try again") can never work. Resolving
+    /// from the window makes the draft self-contained: what the user reviewed is
+    /// what gets committed, whatever the sidebar has since done.
     ///
     /// Reloads on every outcome the draft model reports, including failures —
     /// see `StandupDraftModel.commit(to:)` for why a rollback is not something
@@ -71,7 +95,9 @@ extension MainWindowModel {
     /// `lastStandupAt` moves FR-3's DONE cutoff for this project, so the task
     /// list is stale until it runs.
     public func copyStandup() {
-        guard let project = selectedProject else { return }
+        guard let projectID = standupDraft.window?.projectID,
+            let project = project(withID: projectID)
+        else { return }
         if standupDraft.commit(to: project) { reload() }
     }
 

@@ -49,10 +49,12 @@ func theWindowQueryIsClosedAtBothEnds() throws {
     let found = try context.fetch(
         EventQueries.inWindow(start: origin, end: origin.addingTimeInterval(60)))
 
-    // Both boundaries inclusive. FR-4 step 3 specifies a closed interval, and
-    // M2-03's Copy stamps lastStandupAt and its standupReported events with the
-    // same instant — so this is the behaviour ReportGatherer's kind filter
-    // exists to absorb.
+    // Both boundaries inclusive. FR-4 step 3 specifies a closed interval, and a
+    // standupReported event can land exactly on a later window's start — D-076
+    // stamps lastStandupAt with the generate instant while the event carries
+    // the Copy instant, so they coincide whenever the user copies the moment
+    // they generate. This is the behaviour ReportGatherer's kind filter exists
+    // to absorb.
     #expect(found.map(\.body) == ["start", "middle", "end"])
 }
 

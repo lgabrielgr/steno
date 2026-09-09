@@ -92,21 +92,35 @@ struct StandupDraftSheet: View {
     @ViewBuilder
     private var buttons: some View {
         HStack {
+            // ⌘↩ rather than a plain-Return default button, and the hint is
+            // part of the fix. The first responder here is a multi-line
+            // `TextEditor`, which consumes Return as `insertNewline(_:)`, so a
+            // `.defaultAction` binding never fires — leaving Esc (which
+            // *discards* the draft) as the only working key. FR-3 asks for a
+            // keyboard path to the primary action, not to the destructive one.
+            // `NoteComposerView` pairs a `TextEditor` with ⌘↩ and its own hint
+            // for exactly this reason.
+            if draft.phase == .editing {
+                Text("⌘↩ to copy")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
             Spacer()
             switch draft.phase {
             case .editing:
                 Button("Cancel", action: onClose)
                     .keyboardShortcut(.cancelAction)
                 Button("Copy", action: onCopy)
-                    .keyboardShortcut(.defaultAction)
+                    .keyboardShortcut(.return, modifiers: .command)
                     .disabled(!draft.canCopy)
             case .copied:
-                // Esc and Return both close: once the store is committed there
-                // is no second action to protect, and M2-04 adds Undo here.
+                // One button, not two: the earlier pair existed only to carry
+                // two key equivalents, and two buttons that do the same thing
+                // read as a choice the user does not have. Esc closes, which is
+                // the only action left once the store is committed. M2-04 adds
+                // Undo beside this.
                 Button("Close", action: onClose)
                     .keyboardShortcut(.cancelAction)
-                Button("Done", action: onClose)
-                    .keyboardShortcut(.defaultAction)
             }
         }
     }
