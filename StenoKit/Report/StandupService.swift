@@ -75,9 +75,12 @@ public struct StandupService {
         // 1. The pair must describe the same project. `NoteService.correct`
         //    guards its own pair for this reason: a mismatch would advance one
         //    project's clock against another project's window, which is exactly
-        //    what D16 forbids. Unreachable through the only caller, which draws
-        //    both from the same selection; this makes it unreachable through
-        //    any caller.
+        //    what D16 forbids. Unreachable through the only caller: `copyStandup()`
+        //    resolves the project *from* `window.projectID`, so the pair it passes
+        //    cannot disagree by construction. Retained anyway — the guard is one
+        //    line, and it is what stops a future caller that reads a live
+        //    selection (as `copyStandup()` itself once did) from advancing one
+        //    project's clock against another's window.
         guard window.projectID == project.id else {
             throw StandupError.windowBelongsToAnotherProject
         }
