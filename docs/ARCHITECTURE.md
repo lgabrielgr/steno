@@ -152,6 +152,7 @@ StenoKit/         framework — everything testable
   Status/         status service, transition and cycle           (exists, M1-05)
   Report/         window computation (M2-01); section mapping and Slack
                   markdown (M2-02); StandupService, StandupReportedPayload,
+                  StandupClipboard (rich text, D-083),
                   the Copy write path (M2-03)                   (exists)
   Portability/    export, import, merge                  (M2.5)
   AI/             AIProvider, AnthropicProvider          (M3)

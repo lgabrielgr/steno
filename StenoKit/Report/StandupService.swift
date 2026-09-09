@@ -43,7 +43,7 @@ public struct StandupService {
         context: ModelContext,
         now: @escaping () -> Date = Date.init,
         save: @escaping (ModelContext) throws -> Void = { try $0.save() },
-        copy: @escaping (String) -> Bool = SystemClipboard.write
+        copy: @escaping (String) -> Bool = StandupClipboard.write
     ) {
         self.context = context
         self.now = now

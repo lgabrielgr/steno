@@ -1952,6 +1952,42 @@ Found in review, not in planning. The plan's header expression was wrong; the sp
 
 ---
 
+### D-083 — Emphasis goes on the clipboard as real rich text, not as markup
+
+**2026-09-09** · M2-03 · **Status:** accepted
+
+`StandupClipboard` puts two flavours on the pasteboard: RTF where headings are genuinely bold and
+D-074's `_None_` is genuinely italic, and the markdown unchanged as the plain-text fallback.
+
+**Slack's composer converts `*bold*` as you type, not when you paste.** Markup arriving on the
+clipboard therefore stays literal, and a heading emitted as `*Today*` reached the channel as
+`*Today*`. Found by the user on the first real stand-up — it is M2-03's D6 acceptance criterion
+("pasting into Slack produces correctly formatted output") and no agent can verify it, which is
+exactly why it survived review.
+
+**D-073 already had the right principle and this extends it.** It chose the literal `•` and `◦`
+characters over `-` "because a literal bullet character *is* a bullet in any paste target and does
+not depend on Slack's composer choosing to convert a hyphen" — then emitted headings that depended
+on precisely that. Bold that is actually bold is the same idea applied to emphasis.
+
+**One rule, whole-line only:** a line entirely wrapped in `*` becomes bold, a line entirely wrapped
+in `_` becomes italic, delimiters dropped. Those are the only two constructs `SlackMarkdown` emits.
+A line carrying more than one delimiter pair is left plain rather than guessed at.
+
+**Inline emphasis inside a note body is deliberately untouched**, which is D-073's verbatim rule
+holding: a body containing `*` or `_` is passed through unescaped because "appear verbatim as the
+user typed them" is an acceptance criterion and correct Slack emphasis is not. Resolving an interior
+delimiter here would overturn that decision in the one place the user cannot see it happen.
+
+`StandupReport.markdownBody` still stores the markdown. M2-04's undo and §10's export read that
+field and neither wants a document format — and the plain flavour means pasting into a plain-text
+target is no worse than before.
+
+**Alternatives:** uppercase headings with no emphasis at all (simplest, but loses the distinction a
+spoken stand-up reads from); asking the user to enable Slack's "Format messages with markup"
+preference (makes correct output depend on per-device config, which D6 assigns to the app, and
+breaks silently on another machine).
+
 ## Open — decided by the task that owns them
 
 Each of these is a real choice the spec leaves open. The owning task decides it, records it in

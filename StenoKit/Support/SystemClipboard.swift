@@ -23,8 +23,30 @@ public enum SystemClipboard {
     /// never made and returns `false`.
     @discardableResult
     public static func write(_ text: String) -> Bool {
+        write(text, rtf: nil)
+    }
+
+    /// As `write(_:)`, but also offering `rtf` as a richer flavour.
+    ///
+    /// **Both flavours, declared richest first.** `declareTypes` fixes the
+    /// pasteboard's preference order, so a target that understands RTF takes the
+    /// formatted version while a plain-text field still gets `text` unchanged.
+    /// Knowing *what* to put in `rtf` is not this type's business — see
+    /// `StandupClipboard`, which owns the dialect; this stays a wrapper over
+    /// `NSPasteboard` and nothing more.
+    ///
+    /// Success is reported on the **plain** write alone. A refused `rtf` costs
+    /// emphasis, which is not worth telling the user their stand-up failed to
+    /// copy when the text itself landed.
+    @discardableResult
+    public static func write(_ text: String, rtf: Data?) -> Bool {
         let pasteboard = NSPasteboard.general
-        pasteboard.clearContents()
+        // `declareTypes` clears the pasteboard and claims ownership in one call,
+        // which is what makes the order below the order a reader sees.
+        pasteboard.declareTypes(rtf == nil ? [.string] : [.rtf, .string], owner: nil)
+        if let rtf {
+            pasteboard.setData(rtf, forType: .rtf)
+        }
         return pasteboard.setString(text, forType: .string)
     }
 }
