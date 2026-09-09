@@ -126,7 +126,7 @@ recovery for the second row is undo, not retry.
 
 `StenoKit/Support/SystemClipboard.swift`: a small `enum` wrapping `NSPasteboard.general`
 (`clearContents()` then `setString(_:forType: .string)`), and the only place in StenoKit that
-imports AppKit. Injected as `copy: (String) -> Bool`, defaulting to it, so `make test` never
+touches `NSPasteboard`. Injected as `copy: (String) -> Bool`, defaulting to it, so `make test` never
 touches the real pasteboard — §9.4's headless bundle has no business mutating the developer's
 clipboard, and a test that did would be order-dependent on anything else that copies.
 

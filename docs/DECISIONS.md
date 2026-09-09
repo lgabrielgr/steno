@@ -1796,6 +1796,151 @@ to mean anything, and a job that is not required is a gate that does not gate (D
 this repo's history of exactly that); a pre-commit hook — rejected because §9.5's gate must hold
 without an agent's or a contributor's cooperation, which is the whole argument for M1-07.
 
+### D-076 — Copy advances the clock to the window's end, not to `now`
+
+**2026-09-09** · M2-03 · **Status:** accepted
+
+`StandupService.commit` sets `project.lastStandupAt = window.end` — the instant the draft was
+generated — and writes the same value to `StandupReport.windowEnd`.
+
+FR-4 step 7 said `lastStandupAt = now`. The window is computed at *generate* time, so the two are
+different instants and the difference is a hole: preview at 09:00, capture a note at 09:15, Copy at
+09:30, and the 09:15 note is in neither today's draft nor tomorrow's window. No report would ever
+contain it.
+
+FR-4's own note shows the requirement was written without noticing: "a user who previews at 09:00,
+gets pulled into a meeting, and reports at 09:30 must get the full window" reasons about the start
+of that interval and not at all about its end.
+
+Three properties follow. Nothing is unreportable, with no special case. `windowStart`/`windowEnd`
+describe exactly the interval the stored `markdownBody` covers, which is what M2-04 reads back and
+what M2.5 exports. And a draft left open for hours becomes *safe* rather than merely stale — the
+cost is a thinner report today, never a lost note.
+
+**Alternatives:** literal compliance (ships the gap); re-gathering at Copy so the window really does
+end at `now` (discards the user's edits or contradicts them, making FR-4 step 6's editable draft a
+lie, and breaking §7.3's "the user's phrasing wins" to satisfy a sentence about a timestamp).
+
+**Spec:** REQUIREMENTS.md amended to v1.15 in the same PR — FR-4 step 7 and §3.5's `windowEnd` row.
+
+### D-077 — FR-3's DONE cutoff is resolved per task, not once per view
+
+**2026-09-09** · M2-03 · **Status:** accepted
+
+`TaskGrouping.groups(from:doneSince:)` takes `(TaskItem) -> Date` rather than a flat `Date`, and
+`MainWindowModel.doneCutoff(for:)` resolves each task's window through `ReportWindow.bounds`.
+
+`doneCutoff()` was `now() - 24h`, and its comment said so honestly: correct "for every state
+reachable today" **because `lastStandupAt` stays nil until M2-03 ships the Copy action that advances
+it". M2-03 shipped it. The constant became a live FR-3 violation — "DONE shows only items completed
+within the current report window" — the first time the user copied a stand-up. A documented
+exception of that shape is a bug filed against whichever task makes it reachable.
+
+Per-task rather than per-view because of the "All" pseudo-project: its tasks span projects with
+different `lastStandupAt` values and different cadences (D17). A single cutoff has to pick one, and
+the only safe pick — the earliest across visible projects — leaks a `periodic` project's
+fortnight-wide window into a `daily` project's DONE section.
+
+Delegating to `ReportWindow.bounds` rather than restating the rule keeps the first-run case correct
+for free: a project never reported on still gets 24 hours, from the one place that decision lives.
+
+`TaskGrouping` stays free of `Project` and of the store — the caller resolves the window — so it
+remains testable against literal arrays with no container, context, or clock.
+
+### D-078 — The clipboard is written after the save, and a refusal is reported rather than reversed
+
+**2026-09-09** · M2-03 · **Status:** accepted
+
+`StandupService.commit` commits the transaction, posts `.stenoDidWrite`, and only then calls `copy`.
+It returns `StandupCommit { report, didReachClipboard }`.
+
+Save-first because the alternative hands the user text to read aloud at a stand-up the app has no
+record of, with no signal that the record is missing. A failed save costs them nothing: the draft is
+still on screen and retrying is safe.
+
+The residual case is real and is **not** rolled back. If the save succeeds and
+`NSPasteboard.setString` returns `false`, the compensation would be deleting an `Event`, which §3.3
+forbids outright. So it is reported: `didReachClipboard = false`, the sheet says the report was
+recorded but not copied, and M2-04's undo is the recovery.
+
+`throws` and the flag are two channels because the two failures need different responses — after a
+throw, retrying is safe; after a refused clipboard, retrying double-reports the window.
+
+### D-079 — `standupReported` events carry their report's id in `payload`
+
+**2026-09-09** · M2-03 · **Status:** accepted
+
+Each event Copy appends carries `payload` = JSON `{"reportID": <uuid>}` (`StandupReportedPayload`).
+
+FR-4.1 must redact the events appended by *one particular* report, and nothing else on the row
+identifies which: `taskID` says where it landed, `kind` says what it is, and a project reported on
+twice in a day has two sets. §3.3 specifies `payload` as a "JSON blob for structured external data";
+this is its first use.
+
+**Alternative:** matching on `timestamp == report.generatedAt`. It works — `commit` stamps both from
+one `now()` — but it couples undo to a coincidence rather than a statement, and a later change that
+stamped events independently would break undo silently, with nothing in either file recording why
+the two values had to agree.
+
+Encoding failure yields `nil` rather than throwing: the cost of a missing payload is that M2-04
+cannot undo *that* report, which is far better than refusing to produce a stand-up over it.
+
+### D-080 — The draft sheet stays open after Copy
+
+**2026-09-09** · M2-03 · **Status:** accepted
+
+`StandupDraftModel` moves to `.copied` and the sheet remains presented, showing a confirmation, the
+still-selectable text, and Close.
+
+FR-4.1 requires undo to be "easy to find right after a Copy" and not to require hunting through
+settings. This confirmed state is that place, and M2-04 adds the button here. Dismissing on Copy
+would leave M2-04 to invent a home for Undo — a menu item, a transient banner — after the affordance
+it belongs beside had already disappeared.
+
+It is also where a refused clipboard is recoverable by hand (D-078): the text is still on screen.
+
+`canCopy` is false in `.copied`, so the button cannot report the same window twice — which would
+append a second report and a second set of events that M2-04 could then only half undo.
+
+### D-081 — Copy marks every task in the window, not every task named in the text
+
+**2026-09-09** · M2-03 · **Status:** accepted
+
+`commit` appends one `standupReported` event per `window.tasks`, regardless of what the user did to
+the draft. Delete a bullet and that task still gets its event.
+
+The alternative is parsing edited markdown back to task ids. It is not merely hard but ill-defined:
+D6's Slack `mrkdwn` carries no identifiers, and making the append-only log depend on a reverse-parse
+of user-edited prose would be the least reliable thing in the system.
+
+The frozen window is the machine-readable record of what was reported on; the text is the user's
+phrasing of it. Those are different facts, and only one of them is recoverable.
+
+### D-082 — The confirmed sheet says whether the clipboard actually took it
+
+**2026-09-09** · M2-03 · **Status:** accepted
+
+`StandupDraftSheet`'s headline is three-way, not two: `Prepare Stand-up` while editing,
+`Copied to clipboard` once copied, and `Recorded — not copied` when the report committed but
+`NSPasteboard` refused the write.
+
+Keying the headline on `phase` alone — which is what this task's own plan specified — announced
+"Copied to clipboard" in bold directly above the notice explaining that the clipboard had refused
+it. The screen asserted two contradictory things, and the false half was the prominent one, at the
+exact moment the user is about to read their stand-up aloud from an empty clipboard.
+
+The report being **recorded** and the text reaching the **clipboard** are two different facts, and
+D-078 creates the one state where they disagree: the transaction commits, the clock advances, and
+the copy fails with no way back (the compensation would be deleting an `Event`, which §3.3
+forbids). A UI keyed on a single flag cannot express that state honestly.
+
+`notice` is the discriminator rather than a second stored flag — it is non-nil exactly when the
+commit succeeded and the clipboard refused, so the view needs nothing new from
+`StandupDraftModel`.
+
+Found in review, not in planning. The plan's header expression was wrong; the spec was not —
+§6 asks `.copied` to show "a confirmation" and never asks it to claim a success it did not have.
+
 ---
 
 ## Open — decided by the task that owns them
