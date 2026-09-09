@@ -75,6 +75,11 @@ public final class MainWindowModel: MainWindowActions {
     /// than an optional assigned after `self` becomes available.
     public let noteComposer: NoteComposerModel
 
+    /// FR-4's draft sheet. A `let` built in `init` for `noteComposer`'s reason:
+    /// it holds no reference back to this model, so it needs nothing that only
+    /// becomes available after `self` does.
+    public let standupDraft: StandupDraftModel
+
     /// FR-1.4: a task needs a project to belong to, and this window offers no
     /// way to create one implicitly.
     public var canCreateTask: Bool { !projects.isEmpty }
@@ -103,10 +108,15 @@ public final class MainWindowModel: MainWindowActions {
     /// `now` is injected so the DONE window is testable without waiting.
     /// `save` is injected so the rollback path in `perform(_:_:)` is testable
     /// — a real `ModelContext` cannot be made to fail its save on demand.
+    /// `copy` is injected so the headless bundle never reaches the real
+    /// pasteboard: a test that did would mutate the developer's clipboard and
+    /// would be order-dependent on anything else in the process that copies
+    /// (§9.4).
     public init(
         context: ModelContext,
         now: @escaping () -> Date = Date.init,
         save: @escaping (ModelContext) throws -> Void = { try $0.save() },
+        copy: @escaping (String) -> Bool = SystemClipboard.write,
         settings: AppSettings = AppSettings()
     ) {
         self.context = context
@@ -115,6 +125,8 @@ public final class MainWindowModel: MainWindowActions {
         self.settings = settings
         self.noteComposer = NoteComposerModel(
             service: NoteService(context: context, now: now, save: save), now: now)
+        self.standupDraft = StandupDraftModel(
+            service: StandupService(context: context, now: now, save: save, copy: copy))
         reload()
 
         // Registered last, deliberately: `self` may only be captured once
@@ -139,8 +151,10 @@ public final class MainWindowModel: MainWindowActions {
     // MARK: - Reading
 
     public func reload() {
+        // `projects` first: `doneCutoff(for:)` resolves each task's project
+        // through it, so the order of these two lines is load-bearing.
         projects = fetchProjects()
-        groups = TaskGrouping.groups(from: fetchTasks(), doneSince: doneCutoff())
+        groups = TaskGrouping.groups(from: fetchTasks(), doneSince: doneCutoff(for:))
 
         // A task that has scrolled out of the DONE window, or whose project was
         // just archived, must not leave the detail pane showing a stale row.
@@ -228,13 +242,27 @@ public final class MainWindowModel: MainWindowActions {
         return fetch(descriptor, "load your projects")
     }
 
-    /// Superseded by M2-01: FR-3 scopes DONE to the current report window,
-    /// which is computed from `project.lastStandupAt` (D8) and does not exist
-    /// until M2-01. That field stays nil until M2-03 ships the Copy action
-    /// that advances it, and FR-4 step 2 makes the first-run window 24 hours —
-    /// so for every state reachable today this returns the same answer.
-    private func doneCutoff() -> Date {
-        now().addingTimeInterval(-24 * 60 * 60)
+    /// FR-3's "current report window", for one task.
+    ///
+    /// **This used to be a flat `now() - 24h`**, correct only because
+    /// `lastStandupAt` stayed nil until M2-03 shipped the Copy action that
+    /// advances it. M2-03 shipped it, so the constant became a live FR-3
+    /// violation the first time the user copied a stand-up — the shape of
+    /// documented exception that is really a bug filed against whichever task
+    /// makes it reachable.
+    ///
+    /// Delegates to `ReportWindow.bounds` rather than restating the rule, which
+    /// also keeps the first-run case right for free: a project never reported
+    /// on still gets 24 hours, from the one place that decision lives (D-077).
+    ///
+    /// A task whose project is not visible — archived between the fetch and
+    /// this call — resolves through the same `nil` path as a never-reported
+    /// project. It is about to be filtered out of the list anyway.
+    private func doneCutoff(for task: TaskItem) -> Date {
+        ReportWindow.bounds(
+            lastStandupAt: project(withID: task.projectID)?.lastStandupAt,
+            now: now()
+        ).start
     }
 
     /// Tasks for the current selection.

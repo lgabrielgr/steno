@@ -18,6 +18,13 @@ public enum ActiveSheet: Identifiable, Hashable, Sendable {
     /// the sheet is not a cancellation — it is declining to annotate.
     case blockedReason(UUID)
 
+    /// FR-4 steps 6–7's editable draft (M2-03).
+    ///
+    /// Carries no project id, unlike its neighbours: the draft's subject is
+    /// `StandupDraftModel.window`, frozen at generate time, and a second copy
+    /// of that identity here would be one the two could disagree about.
+    case standupDraft
+
     public var id: Self { self }
 }
 
@@ -44,6 +51,11 @@ public protocol MainWindowActions: AnyObject {
     /// for the reason above.
     var canAddNote: Bool { get }
 
+    /// FR-4 reports on exactly one project (D16), so the menu gates on this
+    /// rather than offering "Prepare Stand-up" under the "All" pseudo-project,
+    /// where there is no single window to compute or clock to advance.
+    var canPrepareStandup: Bool { get }
+
     func newTask()
     func newProject()
     func selectNextProject()
@@ -53,4 +65,8 @@ public protocol MainWindowActions: AnyObject {
 
     /// FR-2: focus the note composer for the selected task. Writes nothing.
     func addNoteToSelection()
+
+    /// FR-4 steps 1–6: gather the window and show the draft. **Writes
+    /// nothing** — only Copy advances the clock.
+    func prepareStandup()
 }

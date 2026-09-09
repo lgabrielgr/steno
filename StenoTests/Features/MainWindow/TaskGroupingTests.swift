@@ -24,14 +24,15 @@ func groupsUseFR3Order() {
         task("p", .inProgress),
     ]
 
-    let groups = TaskGrouping.groups(from: tasks, doneSince: origin.addingTimeInterval(-3600))
+    let groups = TaskGrouping.groups(
+        from: tasks, doneSince: { _ in origin.addingTimeInterval(-3600) })
 
     #expect(groups.map(\.status) == [.inProgress, .blocked, .todo, .done])
 }
 
 @Test("a status with no tasks produces no group")
 func emptyGroupsAreOmitted() {
-    let groups = TaskGrouping.groups(from: [task("t", .todo)], doneSince: origin)
+    let groups = TaskGrouping.groups(from: [task("t", .todo)], doneSince: { _ in origin })
 
     #expect(groups.count == 1)
     #expect(groups.first?.status == .todo)
@@ -43,7 +44,7 @@ func doneHonoursCutoff() {
     let recent = task("recent", .done, changedAt: origin.addingTimeInterval(-3600))
     let ancient = task("ancient", .done, changedAt: origin.addingTimeInterval(-30 * 3600))
 
-    let groups = TaskGrouping.groups(from: [recent, ancient], doneSince: cutoff)
+    let groups = TaskGrouping.groups(from: [recent, ancient], doneSince: { _ in cutoff })
 
     #expect(groups.count == 1)
     #expect(groups[0].status == .done)
@@ -62,7 +63,7 @@ func neverCompletedIsNotInDone() {
     // with a nil `completedAt`.
     let fresh = TaskItem(title: "fresh", projectID: UUID(), createdAt: origin)
 
-    let groups = TaskGrouping.groups(from: [fresh], doneSince: origin)
+    let groups = TaskGrouping.groups(from: [fresh], doneSince: { _ in origin })
 
     #expect(groups.map(\.status) == [.todo])
 }
@@ -72,7 +73,26 @@ func groupsSortByRecency() {
     let older = task("older", .todo, changedAt: origin.addingTimeInterval(-7200))
     let newer = task("newer", .todo, changedAt: origin.addingTimeInterval(-60))
 
-    let groups = TaskGrouping.groups(from: [older, newer], doneSince: origin)
+    let groups = TaskGrouping.groups(from: [older, newer], doneSince: { _ in origin })
 
     #expect(groups[0].tasks.map(\.title) == ["newer", "older"])
+}
+
+@Test("the DONE cutoff is resolved per task, not once for the whole list")
+func doneCutoffIsPerTask() {
+    // The case that makes this necessary: under FR-3's "All" pseudo-project the
+    // visible tasks span projects with different `lastStandupAt` values. Both
+    // tasks completed at the same instant; only their windows differ. A single
+    // cutoff — of any value — either shows both or hides both.
+    let daily = task("daily", .done, changedAt: origin.addingTimeInterval(-3600))
+    let fortnightly = task("fortnightly", .done, changedAt: origin.addingTimeInterval(-3600))
+
+    let groups = TaskGrouping.groups(from: [daily, fortnightly]) { task in
+        task.id == daily.id
+            ? origin.addingTimeInterval(-60)  // 1 minute: excludes `daily`
+            : origin.addingTimeInterval(-14 * 24 * 3600)  // 2 weeks: includes it
+    }
+
+    #expect(groups.count == 1)
+    #expect(groups[0].tasks.map(\.title) == ["fortnightly"])
 }

@@ -21,12 +21,22 @@ public enum TaskGrouping {
     /// other reason cannot silently reorder the user's window.
     public static let order: [Status] = [.inProgress, .blocked, .todo, .done]
 
-    /// Sections in FR-3 order, omitting any that would be empty.
+    /// `doneSince` scopes the DONE section to FR-3's "current report window".
     ///
-    /// `doneSince` scopes the DONE section. FR-3 scopes it to the current
-    /// report window; see `MainWindowModel.doneCutoff()` for why a fixed 24
-    /// hours is the same answer until M2-01 lands.
-    public static func groups(from tasks: [TaskItem], doneSince cutoff: Date) -> [TaskGroup] {
+    /// **A function of the task, not one date for the whole list** (D-077).
+    /// Under the "All" pseudo-project the visible tasks span projects with
+    /// different `lastStandupAt` values and different cadences, and a single
+    /// cutoff has to pick one of them. The only safe pick — the earliest across
+    /// visible projects — leaks a `periodic` project's fortnight-wide window
+    /// into a `daily` project's DONE section, showing two weeks of finished
+    /// work under a heading FR-3 scopes to one day.
+    ///
+    /// This stays free of `Project` and of the store: the caller resolves each
+    /// task's window, so this remains testable against literal arrays with no
+    /// container, no context, and no clock.
+    public static func groups(
+        from tasks: [TaskItem], doneSince cutoff: (TaskItem) -> Date
+    ) -> [TaskGroup] {
         order.compactMap { status in
             let matching =
                 tasks
@@ -36,7 +46,7 @@ public enum TaskGrouping {
                     // A DONE task with no completedAt cannot be placed in the
                     // window, so it is not shown rather than always shown.
                     guard let completedAt = task.completedAt else { return false }
-                    return completedAt >= cutoff
+                    return completedAt >= cutoff(task)
                 }
                 .sorted { $0.statusChangedAt > $1.statusChangedAt }
 
