@@ -1,12 +1,13 @@
 # REQUIREMENTS.md — Steno
 
-**Status:** Draft v1.14
+**Status:** Draft v1.15
 **Date:** 2026-09-02
 **Audience:** Engineering agents in future sessions. This document is the source of truth for task generation and implementation.
 
 > **Steno** — a stenographer records what was said, verbatim, without editorializing. That is the product in one word: an accurate record of what you did, lightly organized, never embellished.
 
 **Changelog**
+- *v1.15* — FR-4 step 7 no longer sets `lastStandupAt = now`. It sets it to the **end of the window the draft was generated from**, and §3.5's `windowEnd` records the same instant. Read literally, the old wording opened a hole: the window is computed at generate time, so anything captured between generating and copying fell into neither the draft nor the next window and no report would ever contain it. FR-4's own note reasons carefully about the *start* of that interval — "a user who previews at 09:00 and reports at 09:30 must get the full window" — and not at all about its end. For a tool whose promise is that nothing captured is lost, that is the worst available failure mode. The side effects, their atomicity, and the "clock only advances on Copy" rule are all unchanged. Found while implementing M2-03; the implementation choice is `DECISIONS.md` D-076, which points here. §3.5's `generatedAt` row gains a note for the same reason: the field now means "when Copy ran", which is no longer the same instant as `windowEnd`.
 - *v1.14* — FR-2's redact-and-reappend now says the replacement is "a new event **of the same kind**" rather than "a new `note` event". FR-2 was written when `note` was the only correctable kind; M1-05 then added `blockedReason`, which the user also types free-hand and can therefore mistype. Read literally, the old wording relabelled a corrected blocked reason as a note — changing what the row *means*, not just what it says, and losing the fact that the prose was a blocking explanation from every timeline and report that reads `kind`. The redact-and-reappend mechanism, the original timestamp, and the append-only invariant are all unchanged. Found while implementing M1-06; the implementation choice is `DECISIONS.md` D-046, which points here.
 - *v1.13* — FR-1.2's "today's in-progress tasks" now points at `DECISIONS.md` D-037, which resolved it to *every* in-progress task with no date filter. A task started Monday and still running Thursday is exactly what gets reported at stand-up, so a date filter would hide the case the popover exists to surface. The wording is unchanged and the pointer carries the reading, because FR-1.2 read on its own would have a later reader implement the filter that M1-04 deliberately does not have. Found while implementing M1-04.
 - *v1.12* — Corrected §9.3. It claimed FR-1's global hotkey requires Accessibility permission, granted by TCC against the code signature. It does not: `RegisterEventHotKey` is not TCC-gated, unlike the `NSEvent` global monitor and `CGEventTap` alternatives. The stable-signing conclusion is unchanged and its reasoning is now correct. Left uncorrected, M1-03 would have shipped a permissions subsystem for a state that cannot occur, plus a banner on the launch path of a feature whose whole argument is that it interrupts nothing. Found while implementing M1-03.
@@ -193,9 +194,9 @@ A reference from a task to an external system, extracted automatically from task
 |---|---|---|
 | `id` | UUID | |
 | `projectID` | UUID | |
-| `generatedAt` | Date | |
+| `generatedAt` | Date | When **Copy** ran. Since v1.15 this is later than `windowEnd`, which holds the instant the draft was generated |
 | `windowStart` | Date | = previous `lastStandupAt`; on first run for a project, 24h before now (matches FR-4 step 2) |
-| `windowEnd` | Date | |
+| `windowEnd` | Date | The instant the window was generated. Copy writes this same value to `lastStandupAt` (v1.15) |
 | `markdownBody` | String | Final text as copied |
 | `wasAIGenerated` | Bool | False when fallback used |
 | `modelUsed` | String? | For debugging quality regressions |
@@ -266,7 +267,7 @@ Three-column layout:
 6. User reviews the draft in an **editable** text view.
 7. User clicks "Copy". This:
    - Places Slack-flavored markdown on the clipboard,
-   - Sets `project.lastStandupAt = now`,
+   - Sets `project.lastStandupAt` to the **end of the generated window** (see v1.15; *not* the instant of the click, which would skip anything captured while the draft was open),
    - Appends a `standupReported` event to each included task,
    - Persists the `StandupReport`.
 

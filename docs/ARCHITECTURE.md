@@ -142,7 +142,7 @@ tested without a window server, it does not belong in `Steno/`** (D-010, amendin
 ```
 StenoKit/         framework — everything testable
   Support/        Logging.swift, ProjectPalette.swift, WriteNotifications.swift,
-                  LoginItem.swift  (exists, M0-02/M1-02/M1-05/M1-04)
+                  LoginItem.swift, SystemClipboard.swift  (exists, M0-02/M1-02/M1-05/M1-04/M2-03)
   Settings/       AppSettings — the one UserDefaults facade (D-056)  (exists, M1-08)
   Models/         SwiftData models, enums                (exists, M0-03)
   Persistence/    StenoStore — schema, store location    (exists, M0-04)
@@ -151,7 +151,9 @@ StenoKit/         framework — everything testable
                   chord validation (M1-08, D-063 — a rule, not a view model)
   Status/         status service, transition and cycle           (exists, M1-05)
   Report/         window computation (M2-01); section mapping and Slack
-                  markdown (M2-02)                              (exists)
+                  markdown (M2-02); StandupService, StandupReportedPayload,
+                  StandupClipboard (rich text, D-083),
+                  the Copy write path (M2-03)                   (exists)
   Portability/    export, import, merge                  (M2.5)
   AI/             AIProvider, AnthropicProvider          (M3)
   Sources/        SourceConnector, Jira, Confluence, MCP (M4, M5)

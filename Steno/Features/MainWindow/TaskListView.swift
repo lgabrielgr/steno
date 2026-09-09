@@ -59,6 +59,37 @@ struct TaskListView: View {
             model.addNoteToSelection()
             return .handled
         }
+        // FR-4's "prominent, always-visible button on the project view", and
+        // the reason it is here rather than in the toolbar: the toolbar renders
+        // New Task as a bare `+`, which is the opposite of prominent, and this
+        // column is already scoped to one project — so "which project am I
+        // reporting on" is answered by what sits directly above the button.
+        //
+        // `safeAreaInset` rather than a row in the `List`: pinned, so no amount
+        // of scrolling can hide the core value delivery.
+        .safeAreaInset(edge: .bottom) {
+            VStack(spacing: 0) {
+                Divider()
+                Button {
+                    model.prepareStandup()
+                } label: {
+                    Label("Prepare Stand-up", systemImage: "text.bubble")
+                        .frame(maxWidth: .infinity)
+                }
+                .controlSize(.large)
+                .buttonStyle(.borderedProminent)
+                // D16: exactly one project per meeting, so "All" has no window
+                // to compute and no clock to advance.
+                .disabled(!model.canPrepareStandup)
+                .help(
+                    model.canPrepareStandup
+                        ? "Generate a stand-up draft for this project (⌘R)"
+                        : "Select a single project to prepare its stand-up"
+                )
+                .padding(10)
+            }
+            .background(.bar)
+        }
         .navigationSplitViewColumnWidth(min: 260, ideal: 320)
         .toolbar {
             Button {

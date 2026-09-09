@@ -79,6 +79,30 @@ func appendOnlyHoldsAcrossEveryWritePath() throws {
     #expect(try allEvents(context).count == 8)
 }
 
+/// `StandupService.commit` is a write path too — the design spec's
+/// verification table promised it coverage here, and it shipped without any.
+/// A window with no tasks would append zero `standupReported` events and let
+/// the invariant check pass over nothing, so `fixture.task` and `fixture.event`
+/// exist to put one task in the window before the commit runs.
+@MainActor
+@Test("StandupService.commit holds the append-only invariant")
+func appendOnlyHoldsForStandupCommit() throws {
+    let fixture = try ReportFixture()
+    let task = try fixture.task("ship the thing", in: fixture.alpha, status: .inProgress)
+    try fixture.event("found the race in setUp", on: task, at: 60)
+    try fixture.setLastStandup(ReportFixture.origin, on: fixture.alpha)
+    let window = try fixture.gatherer(nowOffset: 300).gather(for: fixture.alpha)
+    let service = fixture.standupService(nowOffset: 900)
+
+    try expectingAppendOnly(fixture.context) {
+        _ = try service.commit("the draft body", of: window, for: fixture.alpha)
+    }
+
+    // Proof the check exercised a real write, not zero new events passing
+    // trivially.
+    #expect(try fixture.eventsInStore(kind: .standupReported).count == 1)
+}
+
 private let sampleID = UUID()
 private let sampleTaskID = UUID()
 

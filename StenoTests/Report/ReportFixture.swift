@@ -93,4 +93,42 @@ struct ReportFixture {
         return try fresh.fetch(FetchDescriptor<Project>(predicate: #Predicate { $0.id == id }))
             .first
     }
+
+    /// The service under test, with its clock pinned to `origin + offset`.
+    ///
+    /// `copy` defaults to a closure that accepts and discards rather than to
+    /// `SystemClipboard.write`: §9.4's headless bundle has no business mutating
+    /// the developer's clipboard, and a test that did would be order-dependent
+    /// on anything else in the process that copies.
+    func standupService(
+        nowOffset: TimeInterval,
+        save: @escaping (ModelContext) throws -> Void = { try $0.save() },
+        copy: @escaping @MainActor (String) -> Bool = { _ in true }
+    ) -> StandupService {
+        StandupService(
+            context: context,
+            now: { Self.origin.addingTimeInterval(nowOffset) },
+            save: save,
+            copy: copy)
+    }
+
+    /// Every persisted report, read through a context that has never seen them.
+    ///
+    /// The independent context is the whole point: a fetch on `context` returns
+    /// the objects it already holds, so it would report a rolled-back insert as
+    /// present and the all-or-none assertions would pass against a broken
+    /// transaction.
+    func reportsInStore() throws -> [StandupReport] {
+        try ModelContext(container).fetch(FetchDescriptor<StandupReport>())
+    }
+
+    /// Every persisted event of `kind`, read through an independent context.
+    ///
+    /// The kind is filtered in memory: an `EventKind` inside a `#Predicate`
+    /// does not compile in either spelling, which `EventQueries` and
+    /// `ReportGatherer` both already record.
+    func eventsInStore(kind: EventKind) throws -> [Event] {
+        try ModelContext(container).fetch(FetchDescriptor<Event>())
+            .filter { $0.kind == kind }
+    }
 }

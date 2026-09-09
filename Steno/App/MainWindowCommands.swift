@@ -48,6 +48,19 @@ struct MainWindowCommands: Commands {
             Button("Add Note") { actions?.addNoteToSelection() }
                 .keyboardShortcut("a", modifiers: [.command, .shift])
                 .disabled(actions?.canAddNote != true)
+
+            Divider()
+
+            // FR-3 lists "generate report" among the actions needing a
+            // shortcut, and FR-4 is the reason the app exists. ⌘R is free here
+            // — Steno has no Reload — and it is the conventional macOS chord
+            // for "produce this again", which is exactly what it does.
+            //
+            // Generating writes nothing (FR-4), so an accidental ⌘R costs a
+            // sheet the user presses Esc on, never a corrupted window.
+            Button("Prepare Stand-up") { actions?.prepareStandup() }
+                .keyboardShortcut("r")
+                .disabled(actions?.canPrepareStandup != true)
         }
 
         // FR-3 lists "switch project" among the actions needing a shortcut,
