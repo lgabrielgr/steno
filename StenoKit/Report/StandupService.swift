@@ -62,8 +62,13 @@ public struct StandupService {
     /// compensation for an appended `Event` is a delete, and §3.3 forbids that
     /// outright.
     ///
-    /// `throws` covers the save, and nothing else. A refused clipboard is
-    /// reported through `StandupCommit`, not thrown — see below.
+    /// **`throws` covers two failures, and a refused clipboard is not one of
+    /// them.** The save can fail, and the `window`/`project` guard below can
+    /// refuse the call before anything is written; both leave the store
+    /// untouched, so a caller that catches either one can retry safely. A
+    /// clipboard refusal happens *after* the transaction has committed and
+    /// cannot be retried without double-reporting, so it is reported through
+    /// `StandupCommit.didReachClipboard` instead — see below.
     ///
     /// **`body` is the caller's text, not a re-render of `window`.** FR-4 step 6
     /// makes the draft editable and §7.3's whole philosophy is that the user's

@@ -151,10 +151,18 @@ public final class MainWindowModel: MainWindowActions {
     // MARK: - Reading
 
     public func reload() {
-        // `projects` first: `doneCutoff(for:)` resolves each task's project
+        // `projects` first: `doneCutoff(for:at:)` resolves each task's project
         // through it, so the order of these two lines is load-bearing.
         projects = fetchProjects()
-        groups = TaskGrouping.groups(from: fetchTasks(), doneSince: doneCutoff(for:))
+        // One clock reading for the whole reload. `doneCutoff(for:at:)` is
+        // called once per task, so reading `now()` inside it would evaluate two
+        // tasks against cutoffs microseconds apart — and a completion sitting
+        // on the boundary could then be included for one task and excluded for
+        // the next, or flicker between reloads. `StandupService.commit` takes a
+        // single `stamp` for the same reason: one logical operation gets one
+        // clock reading, so its own facts cannot disagree.
+        let instant = now()
+        groups = TaskGrouping.groups(from: fetchTasks()) { doneCutoff(for: $0, at: instant) }
 
         // A task that has scrolled out of the DONE window, or whose project was
         // just archived, must not leave the detail pane showing a stale row.
@@ -261,10 +269,11 @@ public final class MainWindowModel: MainWindowActions {
     /// `reload()` assigns `projects` first with no suspension point between.
     /// It resolves to the same 24-hour first-run window a never-reported
     /// project gets, which is the right answer if a later caller does reach it.
-    private func doneCutoff(for task: TaskItem) -> Date {
+    /// `instant` is passed in rather than read here — see `reload()`.
+    private func doneCutoff(for task: TaskItem, at instant: Date) -> Date {
         ReportWindow.bounds(
             lastStandupAt: project(withID: task.projectID)?.lastStandupAt,
-            now: now()
+            now: instant
         ).start
     }
 
