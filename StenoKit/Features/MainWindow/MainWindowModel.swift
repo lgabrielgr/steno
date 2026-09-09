@@ -255,9 +255,12 @@ public final class MainWindowModel: MainWindowActions {
     /// also keeps the first-run case right for free: a project never reported
     /// on still gets 24 hours, from the one place that decision lives (D-077).
     ///
-    /// A task whose project is not visible — archived between the fetch and
-    /// this call — resolves through the same `nil` path as a never-reported
-    /// project. It is about to be filtered out of the list anyway.
+    /// The `nil` path — a task whose project is not in `projects` — is
+    /// unreachable by construction rather than merely unlikely: `fetchTasks()`
+    /// filters against the same `projects` snapshot this resolves through, and
+    /// `reload()` assigns `projects` first with no suspension point between.
+    /// It resolves to the same 24-hour first-run window a never-reported
+    /// project gets, which is the right answer if a later caller does reach it.
     private func doneCutoff(for task: TaskItem) -> Date {
         ReportWindow.bounds(
             lastStandupAt: project(withID: task.projectID)?.lastStandupAt,

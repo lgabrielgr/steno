@@ -66,6 +66,11 @@ struct MainWindowView: View {
                     placeholder: "Optional — waiting on what?",
                     confirm: "Add Reason"
                 ) { model.addBlockedReason($0, to: id) }
+            case .standupDraft:
+                StandupDraftSheet(
+                    draft: model.standupDraft,
+                    onCopy: { model.copyStandup() },
+                    onClose: { model.dismissStandupDraft() })
             case .editProject(let id):
                 if let project = model.project(withID: id) {
                     ProjectEditSheet(
