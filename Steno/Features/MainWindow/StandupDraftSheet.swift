@@ -54,7 +54,7 @@ struct StandupDraftSheet: View {
     private var header: some View {
         if let window = draft.window {
             VStack(alignment: .leading, spacing: 2) {
-                Text(draft.phase == .copied ? "Copied to clipboard" : "Prepare Stand-up")
+                Text(headline)
                     .font(.headline)
                 // Built as a `String` first: interpolating into `Text` yields a
                 // `LocalizedStringKey`, which has no `+`.
@@ -70,6 +70,23 @@ struct StandupDraftSheet: View {
         let span = window.start.formatted(.dateTime) + " – " + window.end.formatted(.dateTime)
         let count = window.tasks.count
         return span + " · \(count) task" + (count == 1 ? "" : "s")
+    }
+
+    /// The sheet's headline for each reachable state.
+    ///
+    /// **Three cases, not two.** A refused clipboard still moves `phase` to
+    /// `.copied` — the report is committed and the clock has advanced, which is
+    /// not reversible here — so keying the headline on `phase` alone would
+    /// announce "Copied to clipboard" directly above the notice saying the
+    /// clipboard refused it. The report being *recorded* and the text reaching
+    /// the *clipboard* are two different facts, and this is the one state where
+    /// they disagree.
+    ///
+    /// `notice` is non-nil exactly when the commit succeeded and the clipboard
+    /// refused, so it is the discriminator rather than a second stored flag.
+    private var headline: String {
+        guard draft.phase == .copied else { return "Prepare Stand-up" }
+        return draft.notice == nil ? "Copied to clipboard" : "Recorded — not copied"
     }
 
     @ViewBuilder
