@@ -1988,6 +1988,153 @@ spoken stand-up reads from); asking the user to enable Slack's "Format messages 
 preference (makes correct output depend on per-device config, which D6 assigns to the app, and
 breaks silently on another machine).
 
+### D-084 — FR-4.1's undo is its own service, not a method on `StandupService`
+
+**2026-09-10** · M2-04 · **Status:** accepted
+
+`StandupUndoService` owns every write undo makes. It takes `context` and an injected `save`, and
+deliberately takes **no `now` and no clipboard**: it reads every timestamp it needs out of the
+report being undone, and the markdown is already in the user's paste buffer.
+
+**Why not a method on `StandupService`.** That type's `init` carries a
+`copy: @MainActor (String) -> Bool` seam undo never reaches, so every undo test would have to
+supply a clipboard stub for a path that cannot touch one. Its doc comment declares it "the one
+place the stand-up clock advances", which undo makes false in a way no reader would expect from
+the name. And D-044 already records that the two guard on different things: `StandupService` on
+project identity, undo on report recency.
+
+**Why not `NoteService`.** D-044 says it outright — `redact` guards on `EventKind.isUserAuthored`,
+which is `false` for `standupReported` (D-045), so it refuses precisely the events FR-4.1 must
+redact, and refuses by returning `false` rather than throwing. The misuse would be silent.
+
+**Alternatives:** putting the logic on `MainWindowModel+Standup` (D-044's own reasoning applies
+again — the guard is about reports and events, not about what is on screen, and it would put a
+store write behind a surface the headless bundle cannot reach).
+
+---
+
+### D-085 — The `reportID` payload discriminates; the timestamp only narrows the fetch
+
+**2026-09-10** · M2-04 · **Status:** accepted · consumes D-079, D-066
+
+Undo finds its events in two steps, because neither half of the test is expressible in a
+`#Predicate` — an `EventKind` does not compile there in either spelling, and `payload` is `Data`
+with no predicate operation that could read a UUID out of it:
+
+1. `EventQueries.notRedacted(atOrAfter:)` bounds the fetch at the report's `windowEnd`, which is
+   the bound D-066 named.
+2. The caller filters in memory on `kind == .standupReported` and a decoded
+   `reportID == report.id`.
+
+**The payload decides.** D-079 added it for exactly this and rejected matching on
+`timestamp == report.generatedAt`, which works today only because `StandupService` stamps both
+from one `now()` — a coincidence it is free to stop honouring, and whose loss would break undo
+silently. Since the payload match is exact, the fetch bound costs a few extra rows rather than
+correctness, which is why an over-broad bound is the safe direction.
+
+**The redaction filter stays in `EventQueries`** rather than being restated here: §3.3's rule
+already lives in one place, and a bespoke `!isRedacted` predicate in the service would be the
+second copy and the first to drift.
+
+Two tests keep this falsifiable rather than merely stated. One builds two reports whose events
+straddle the later report's `windowEnd` — the boundary case D-066 calls normal, where the bound
+alone cannot separate them. The other inserts a `standupReported` row carrying the right
+`reportID` and a *different* timestamp, and asserts it is still redacted. Dropping the payload
+clause fails the first; matching on `generatedAt` fails the second.
+
+---
+
+### D-086 — One query answers both of FR-4.1's eligibility rules
+
+**2026-09-10** · M2-04 · **Status:** accepted
+
+`undoableReport(for:)` fetches `StandupReport` where `projectID` matches, sorted by `generatedAt`
+descending with `fetchLimit = 1`, and returns it only when `!isUndone`.
+
+That single query is three requirements at once. "Undo applies only to the most recent report"
+falls out of the sort and the limit. "And only while it is the most recent" falls out of it being
+evaluated at call time rather than cached when the report was written. And an already-undone
+report yields `nil`, so undo is not itself undoable — matching `Event.redact()`, which is one-way
+by design and names this requirement as the reason there is no `unredact()`.
+
+**A `generatedAt` tie cannot be broken and does not need to be.** `SortDescriptor` has no
+secondary key available — `UUID` is not `Comparable`, the wall `EventQueries.timeline` documents
+for its own tie case — but two Copies stamped at the same instant are unreachable, because
+`StandupDraftModel.canCopy` is `false` once `phase` leaves `.editing`.
+
+This is the first read path over `StandupReport`; M2-03 only inserted.
+
+---
+
+### D-087 — Undoing a project's *first* report restores `windowStart`, not `nil`
+
+**2026-09-10** · M2-04 · **Status:** accepted · a declared interpretation of FR-4.1
+
+`Project.lastStandupAt` is `Date?` and is `nil` until a project's first Copy. Undo restores
+`report.windowStart` in every case — for a first report that is a frozen "24h before Prepare ran",
+not the `nil` the field actually held.
+
+**This is the better direction, not an accepted approximation.** `StandupReport` records no "was
+this the first" flag, so `nil` could only be inferred; and restoring it would make the next
+Prepare compute a *sliding* 24-hour window, silently losing everything between the original
+cutoff and the new one. The frozen cutoff yields a window that is a superset of the one the user
+would have had if they had never pressed Copy. FR-4.1's promise is that undo loses nothing — a
+slightly wider window keeps it, a sliding one breaks it.
+
+D-067's clamp is what makes this safe rather than merely defensible: `windowStart <= windowEnd`
+holds for every persisted report, so undo can never install a *future* `lastStandupAt`.
+
+**Alternatives:** storing the previous `lastStandupAt` on `StandupReport` as its own field (§3.5
+already defines `windowStart` as exactly that value, so the field would be a second copy of one
+fact and a new import-merge question for M2.5-02).
+
+---
+
+### D-088 — Undo takes its report explicitly rather than resolving it
+
+**2026-09-10** · M2-04 · **Status:** accepted
+
+`undo(_ report: StandupReport, for project: Project)` — not `undo(for: project)`, which would be
+one fewer parameter and one fewer error case.
+
+Resolving the report internally turns "undo is unavailable once a newer report exists" from a
+refusal the caller can observe into a **silent substitution of a different report** — reversing a
+window the user never asked about. The acceptance criterion would then be testable only by
+inspecting which rows changed. The explicit pair also mirrors `commit(_:of:for:)`, so the two
+halves of FR-4 step 7 read alike, and it keeps the project-pair guard meaningful.
+
+The service still guards recency through the same `undoableReport(for:)` the UI gates on, so a
+menu item that went stale between a reload and a click cannot undo a report that has since
+stopped being the most recent.
+
+---
+
+### D-089 — Undo is a menu item with no key equivalent, and the sheet owns it while open
+
+**2026-09-10** · M2-04 · **Status:** accepted
+
+Two surfaces. The draft sheet gains an Undo button in its `.copied` phase and a third `.undone`
+phase — D-080 kept the sheet open after Copy precisely so this button would have somewhere to
+live. `MainWindowModel` also caches `undoableStandupReport` and exposes `canUndoStandup`, so
+"Undo Last Stand-up" sits in the `Task` menu beside Prepare Stand-up and **outlives the sheet**,
+which is when the misclick FR-4.1 exists for is actually noticed.
+
+**No keyboard shortcut.** ⌘Z is the system's text-editing undo, and this window puts `TextEditor`s
+inside the very sheet that produces the report — binding a store transaction to it would make the
+two indistinguishable at the moment the user most wants them apart. FR-3 asks for shortcuts on the
+primary actions; this is a recovery action.
+
+**`canUndoStandup` includes `activeSheet == nil`**, so while the sheet is up it owns undo. A menu
+path firing behind it would leave `phase` reading `.copied` over a report that has just been taken
+back, and the sheet would still be offering to undo it. Gating rather than reconciling two paths
+is what `canPrepareStandup` does for the same collision.
+
+The cached report is refreshed in `reload()` rather than fetched on demand because
+`canUndoStandup` is read from `MainWindowCommands.body` — a fetch behind it would be a store read
+on SwiftUI's render path, the hazard `selectedTaskEvents` documents.
+
+---
+
 ## Open — decided by the task that owns them
 
 Each of these is a real choice the spec leaves open. The owning task decides it, records it in
