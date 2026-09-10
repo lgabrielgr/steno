@@ -875,9 +875,17 @@ git commit -m "test: prove the undo round-trip loses nothing, first report inclu
 
 The sheet's state machine learns that a committed report can be taken back.
 
+> **This task also touches one app-target file, and must.** Adding a case to
+> `StandupDraftPhase` makes *both* of `StandupDraftSheet`'s switches over it —
+> `headline` and `buttons` — non-exhaustive the instant it lands. Leaving them to
+> Task 6 makes this commit fail `make build`, which only executing the plan
+> revealed. Rendering the new phase belongs here; the button that reaches it
+> belongs in Task 6.
+
 **Files:**
 - Modify: `StenoKit/Features/MainWindow/StandupDraftModel.swift`
 - Modify: `StenoKit/Features/MainWindow/MainWindowModel.swift` (the `init` wiring only)
+- Modify: `Steno/Features/MainWindow/StandupDraftSheet.swift` (keep the switches exhaustive)
 - Test: `StenoTests/Features/MainWindow/StandupDraftModelTests.swift`
 
 **Interfaces:**
@@ -1148,15 +1156,63 @@ In `StenoKit/Features/MainWindow/MainWindowModel.swift`:
             undoService: StandupUndoService(context: context, save: save))
 ```
 
-- [ ] **Step 6: Run the tests to verify they pass**
+- [ ] **Step 6: Keep the sheet's switches exhaustive**
 
-Run: `make test`
-Expected: PASS — six new tests, and the three pre-existing draft tests still green.
+`make build` fails here with `switch must be exhaustive` — twice — until this is done.
 
-- [ ] **Step 7: Commit**
+In `Steno/Features/MainWindow/StandupDraftSheet.swift`, replace `headline`:
+
+```swift
+    /// The sheet's headline for each reachable state.
+    ///
+    /// **Four cases, not two.** A refused clipboard still moves `phase` to
+    /// `.copied` — the report is committed and the clock has advanced — so
+    /// keying the headline on `phase` alone would announce "Copied to
+    /// clipboard" directly above the notice saying the clipboard refused it.
+    /// The report being *recorded* and the text reaching the *clipboard* are
+    /// two different facts, and `.copied` is the one state where they disagree.
+    /// `notice` is non-nil exactly then, so it is the discriminator rather than
+    /// a second stored flag.
+    ///
+    /// `.undone` is its own line rather than a return to "Prepare Stand-up".
+    /// The store has changed twice and is back where it started, and a headline
+    /// that reverted would leave the user unable to tell a successful undo from
+    /// a button that did nothing.
+    private var headline: String {
+        switch draft.phase {
+        case .editing:
+            "Prepare Stand-up"
+        case .copied:
+            draft.notice == nil ? "Copied to clipboard" : "Recorded — not copied"
+        case .undone:
+            "Stand-up undone"
+        }
+    }
+```
+
+And add a `.undone` arm to `buttons`, immediately after the existing `case .copied:`
+arm and before the `switch`'s closing brace. Leave `.copied` alone — its Undo button
+needs a closure Task 6 supplies:
+
+```swift
+            case .undone:
+                // One button. Undo is not itself undoable — `Event.redact()` is
+                // one-way by design and names this requirement as the reason
+                // there is no `unredact()` — and Copy stays dead because the
+                // draft's window has already been reported once.
+                Button("Close", action: onClose)
+                    .keyboardShortcut(.cancelAction)
+```
+
+- [ ] **Step 7: Run the tests to verify they pass**
+
+Run: `make build && make test`
+Expected: build succeeds; PASS — six new tests, and the three pre-existing draft tests still green (395 total).
+
+- [ ] **Step 8: Commit**
 
 ```bash
-make format && git add StenoKit/Features/MainWindow/StandupDraftModel.swift StenoKit/Features/MainWindow/MainWindowModel.swift StenoTests/Features/MainWindow/StandupDraftModelTests.swift
+make format && git add StenoKit/Features/MainWindow/StandupDraftModel.swift StenoKit/Features/MainWindow/MainWindowModel.swift Steno/Features/MainWindow/StandupDraftSheet.swift StenoTests/Features/MainWindow/StandupDraftModelTests.swift
 git commit -m "feat: give the draft sheet an undone phase (M2-04)"
 ```
 
@@ -1456,43 +1512,12 @@ In `StandupDraftSheet`'s stored properties, between `onCopy` and `onClose`:
     let onUndo: () -> Void
 ```
 
-- [ ] **Step 2: Make the headline exhaustive over three phases**
+- [ ] **Step 2: Add the Undo button**
 
-Replace `headline`:
+`headline` and the `.undone` arm already landed in Task 4, because the switches had
+to stay exhaustive the moment the enum gained a case. All that is left is the button.
 
-```swift
-    /// The sheet's headline for each reachable state.
-    ///
-    /// **Four cases, not two.** A refused clipboard still moves `phase` to
-    /// `.copied` — the report is committed and the clock has advanced — so
-    /// keying the headline on `phase` alone would announce "Copied to
-    /// clipboard" directly above the notice saying the clipboard refused it.
-    /// The report being *recorded* and the text reaching the *clipboard* are
-    /// two different facts, and `.copied` is the one state where they disagree.
-    /// `notice` is non-nil exactly then, so it is the discriminator rather than
-    /// a second stored flag.
-    ///
-    /// `.undone` is its own line rather than a return to "Prepare Stand-up".
-    /// The store has changed twice and is back where it started, and a headline
-    /// that reverted would leave the user unable to tell a successful undo from
-    /// a button that did nothing.
-    private var headline: String {
-        switch draft.phase {
-        case .editing:
-            "Prepare Stand-up"
-        case .copied:
-            draft.notice == nil ? "Copied to clipboard" : "Recorded — not copied"
-        case .undone:
-            "Stand-up undone"
-        }
-    }
-```
-
-- [ ] **Step 3: Add the Undo button and the `.undone` case**
-
-In `buttons`, replace the single `case .copied:` arm with these **two** arms. The
-`switch` is over `StandupDraftPhase`, which gained a case in Task 4, so it does not
-compile until both are present — leave the closing brace of the `switch` where it is:
+In `buttons`, replace the `case .copied:` arm — leave `.undone` exactly as it is:
 
 ```swift
             case .copied:
@@ -1513,7 +1538,7 @@ compile until both are present — leave the closing brace of the `switch` where
                     .keyboardShortcut(.cancelAction)
 ```
 
-- [ ] **Step 4: Pass the closure from the window**
+- [ ] **Step 3: Pass the closure from the window**
 
 In `Steno/Features/MainWindow/MainWindowView.swift`:
 
@@ -1526,7 +1551,7 @@ In `Steno/Features/MainWindow/MainWindowView.swift`:
                     onClose: { model.dismissStandupDraft() })
 ```
 
-- [ ] **Step 5: Add the menu item**
+- [ ] **Step 4: Add the menu item**
 
 In `Steno/App/MainWindowCommands.swift`, after the Prepare Stand-up button and inside the same `CommandMenu("Task")`:
 
@@ -1544,7 +1569,7 @@ In `Steno/App/MainWindowCommands.swift`, after the Prepare Stand-up button and i
                 .disabled(actions?.canUndoStandup != true)
 ```
 
-- [ ] **Step 6: Verify what can be verified**
+- [ ] **Step 5: Verify what can be verified**
 
 Run: `make build && make test && make lint`
 Expected: build succeeds, **398** tests pass, 0 lint violations.
@@ -1557,7 +1582,7 @@ Expected: build succeeds, **398** tests pass, 0 lint violations.
 4. ⌘R, Copy, Close, then the `Task` menu → "Undo Last Stand-up" is **live**. Choose it; any DONE task that scrolled out of the list on Copy comes back.
 5. Select "All" in the sidebar → the item is greyed again.
 
-- [ ] **Step 7: Commit**
+- [ ] **Step 6: Commit**
 
 ```bash
 make format && git add Steno/
