@@ -6,6 +6,9 @@ public enum StandupDraftPhase: Equatable, Sendable {
     case editing
     /// Step 7 has run. The store is committed; the sheet stays up.
     case copied
+    /// FR-4.1 has run against the report step 7 wrote. The store is back where
+    /// Copy found it, and there is nothing left to do but close.
+    case undone
 }
 
 /// FR-4 steps 6–7: the draft, what the user did to it, and what Copy did.
@@ -53,14 +56,33 @@ public final class StandupDraftModel {
     /// window twice. A single field cannot say which.
     public private(set) var notice: String?
 
-    private let service: StandupService
+    /// The row Copy wrote, which FR-4.1's undo acts on.
+    ///
+    /// M2-03 discarded this value: `commit(to:)` read `didReachClipboard` off
+    /// the result and dropped the report. Undo is what needs it — the sheet
+    /// undoes *the report it just wrote*, not "whatever is most recent", so
+    /// that identity has to survive the commit rather than be re-derived.
+    public private(set) var committedReport: StandupReport?
 
-    public init(service: StandupService) {
+    private let service: StandupService
+    private let undoService: StandupUndoService
+
+    public init(service: StandupService, undoService: StandupUndoService) {
         self.service = service
+        self.undoService = undoService
     }
 
     /// Copy is live only with a window to commit, and only once.
     public var canCopy: Bool { window != nil && phase == .editing }
+
+    /// Undo is live only over a report this sheet actually wrote, and only
+    /// before it has been undone.
+    ///
+    /// Reads `committedReport` as well as `phase` rather than `phase` alone:
+    /// the two are set together, but a `.copied` phase with no report is a
+    /// state `undo(to:)` would have to refuse anyway, and a button that is live
+    /// only to refuse is worse than one that is not offered.
+    public var canUndo: Bool { committedReport != nil && phase == .copied }
 
     /// FR-4 steps 5–6: show `text` as the draft for `window`.
     ///
@@ -72,6 +94,7 @@ public final class StandupDraftModel {
         self.window = window
         self.text = text
         phase = .editing
+        committedReport = nil
         lastError = nil
         notice = nil
     }
@@ -86,6 +109,7 @@ public final class StandupDraftModel {
         window = nil
         text = ""
         phase = .editing
+        committedReport = nil
         lastError = nil
         notice = nil
     }
@@ -108,6 +132,7 @@ public final class StandupDraftModel {
         do {
             let result = try service.commit(draft, of: window, for: project)
             phase = .copied
+            committedReport = result.report
             lastError = nil
             notice =
                 result.didReachClipboard
@@ -120,6 +145,40 @@ public final class StandupDraftModel {
             // Stays `.editing` with `text` untouched: the store rolled back, so
             // pressing Copy again is safe and is the obvious next move.
             lastError = "Could not copy your stand-up. Nothing was saved — try again."
+        }
+        return true
+    }
+
+    /// FR-4.1, from the sheet's Undo button. Never throws, for `commit(to:)`'s
+    /// reason — a sheet has nowhere to propagate to.
+    ///
+    /// Returns whether the window must refetch, on the same contract:
+    /// `false` only when nothing was attempted, and **`true` after a failure**,
+    /// because what a rolled-back write leaves in the objects this window still
+    /// holds is not dependable (D-051).
+    ///
+    /// **The clipboard is deliberately untouched.** The markdown is already in
+    /// the user's paste buffer and may already be in Slack; §7 of this task's
+    /// design records why putting it back is neither possible to verify nor one
+    /// of the three effects FR-4.1 names.
+    @discardableResult
+    public func undo(to project: Project) -> Bool {
+        guard let committedReport, phase == .copied else { return false }
+
+        do {
+            try undoService.undo(committedReport, for: project)
+            phase = .undone
+            lastError = nil
+            // Cleared, not kept: it said the clipboard refused a report that no
+            // longer exists, so leaving it up would have the sheet advising the
+            // user to copy text for a stand-up it has just taken back.
+            notice = nil
+        } catch {
+            Log.app.error(
+                "could not undo the stand-up: \(String(describing: error), privacy: .public)")
+            // Stays `.copied` with `committedReport` intact: the store rolled
+            // back, so pressing Undo again is safe and is the obvious next move.
+            lastError = "Could not undo your stand-up. Nothing was changed — try again."
         }
         return true
     }

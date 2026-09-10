@@ -126,7 +126,8 @@ public final class MainWindowModel: MainWindowActions {
         self.noteComposer = NoteComposerModel(
             service: NoteService(context: context, now: now, save: save), now: now)
         self.standupDraft = StandupDraftModel(
-            service: StandupService(context: context, now: now, save: save, copy: copy))
+            service: StandupService(context: context, now: now, save: save, copy: copy),
+            undoService: StandupUndoService(context: context, save: save))
         reload()
 
         // Registered last, deliberately: `self` may only be captured once

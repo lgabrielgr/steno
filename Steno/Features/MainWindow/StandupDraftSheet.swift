@@ -84,9 +84,30 @@ struct StandupDraftSheet: View {
     ///
     /// `notice` is non-nil exactly when the commit succeeded and the clipboard
     /// refused, so it is the discriminator rather than a second stored flag.
+    /// The sheet's headline for each reachable state.
+    ///
+    /// **Four cases, not two.** A refused clipboard still moves `phase` to
+    /// `.copied` — the report is committed and the clock has advanced — so
+    /// keying the headline on `phase` alone would announce "Copied to
+    /// clipboard" directly above the notice saying the clipboard refused it.
+    /// The report being *recorded* and the text reaching the *clipboard* are
+    /// two different facts, and `.copied` is the one state where they disagree.
+    /// `notice` is non-nil exactly then, so it is the discriminator rather than
+    /// a second stored flag.
+    ///
+    /// `.undone` is its own line rather than a return to "Prepare Stand-up".
+    /// The store has changed twice and is back where it started, and a headline
+    /// that reverted would leave the user unable to tell a successful undo from
+    /// a button that did nothing.
     private var headline: String {
-        guard draft.phase == .copied else { return "Prepare Stand-up" }
-        return draft.notice == nil ? "Copied to clipboard" : "Recorded — not copied"
+        switch draft.phase {
+        case .editing:
+            "Prepare Stand-up"
+        case .copied:
+            draft.notice == nil ? "Copied to clipboard" : "Recorded — not copied"
+        case .undone:
+            "Stand-up undone"
+        }
     }
 
     @ViewBuilder
@@ -119,6 +140,13 @@ struct StandupDraftSheet: View {
                 // read as a choice the user does not have. Esc closes, which is
                 // the only action left once the store is committed. M2-04 adds
                 // Undo beside this.
+                Button("Close", action: onClose)
+                    .keyboardShortcut(.cancelAction)
+            case .undone:
+                // One button. Undo is not itself undoable — `Event.redact()` is
+                // one-way by design and names this requirement as the reason
+                // there is no `unredact()` — and Copy stays dead because the
+                // draft's window has already been reported once.
                 Button("Close", action: onClose)
                     .keyboardShortcut(.cancelAction)
             }
