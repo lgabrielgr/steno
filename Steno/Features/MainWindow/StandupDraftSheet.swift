@@ -13,6 +13,7 @@ import SwiftUI
 struct StandupDraftSheet: View {
     @Bindable var draft: StandupDraftModel
     let onCopy: () -> Void
+    let onUndo: () -> Void
     let onClose: () -> Void
 
     var body: some View {
@@ -74,18 +75,6 @@ struct StandupDraftSheet: View {
 
     /// The sheet's headline for each reachable state.
     ///
-    /// **Three cases, not two.** A refused clipboard still moves `phase` to
-    /// `.copied` — the report is committed and the clock has advanced, which is
-    /// not reversible here — so keying the headline on `phase` alone would
-    /// announce "Copied to clipboard" directly above the notice saying the
-    /// clipboard refused it. The report being *recorded* and the text reaching
-    /// the *clipboard* are two different facts, and this is the one state where
-    /// they disagree.
-    ///
-    /// `notice` is non-nil exactly when the commit succeeded and the clipboard
-    /// refused, so it is the discriminator rather than a second stored flag.
-    /// The sheet's headline for each reachable state.
-    ///
     /// **Four cases, not two.** A refused clipboard still moves `phase` to
     /// `.copied` — the report is committed and the clock has advanced — so
     /// keying the headline on `phase` alone would announce "Copied to
@@ -135,11 +124,12 @@ struct StandupDraftSheet: View {
                     .keyboardShortcut(.return, modifiers: .command)
                     .disabled(!draft.canCopy)
             case .copied:
-                // One button, not two: the earlier pair existed only to carry
-                // two key equivalents, and two buttons that do the same thing
-                // read as a choice the user does not have. Esc closes, which is
-                // the only action left once the store is committed. M2-04 adds
-                // Undo beside this.
+                // FR-4.1 requires undo to be "easy to find right after a Copy"
+                // and not to require hunting through settings. This is that
+                // place — D-080 kept the sheet open after Copy precisely so
+                // this button would have somewhere to live.
+                Button("Undo", action: onUndo)
+                    .disabled(!draft.canUndo)
                 Button("Close", action: onClose)
                     .keyboardShortcut(.cancelAction)
             case .undone:
