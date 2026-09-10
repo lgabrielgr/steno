@@ -70,6 +70,7 @@ struct MainWindowView: View {
                 StandupDraftSheet(
                     draft: model.standupDraft,
                     onCopy: { model.copyStandup() },
+                    onUndo: { model.undoStandupDraft() },
                     onClose: { model.dismissStandupDraft() })
             case .editProject(let id):
                 if let project = model.project(withID: id) {

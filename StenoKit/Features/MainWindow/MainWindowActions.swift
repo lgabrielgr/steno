@@ -56,6 +56,11 @@ public protocol MainWindowActions: AnyObject {
     /// where there is no single window to compute or clock to advance.
     var canPrepareStandup: Bool { get }
 
+    /// FR-4.1 undoes the selected project's most recent report, and only while
+    /// it stays the most recent — so the menu gates on this rather than
+    /// offering an action that would be refused.
+    var canUndoStandup: Bool { get }
+
     func newTask()
     func newProject()
     func selectNextProject()
@@ -69,4 +74,8 @@ public protocol MainWindowActions: AnyObject {
     /// FR-4 steps 1–6: gather the window and show the draft. **Writes
     /// nothing** — only Copy advances the clock.
     func prepareStandup()
+
+    /// FR-4.1: reverse the selected project's most recent Copy, by redaction.
+    /// The sheet has its own button; this is the path that outlives it.
+    func undoLastStandup()
 }

@@ -134,3 +134,69 @@ func copyMovesTheDoneWindow() throws {
     // would still have shown it.
     #expect(!model.groups.contains { $0.status == .done })
 }
+
+@MainActor
+@Test("FR-4.1: the menu offers undo only after a Copy, and only with the sheet closed")
+func undoMenuItemGating() throws {
+    let (model, _) = try modelWithReportableWork()
+
+    #expect(model.canUndoStandup == false, "nothing has been reported yet")
+
+    model.prepareStandup()
+    model.copyStandup()
+    #expect(
+        model.canUndoStandup == false,
+        "while the sheet is up it owns undo — its own button, and its own .undone phase")
+
+    model.dismissStandupDraft()
+    #expect(model.canUndoStandup, "and after Close the menu takes over")
+
+    model.selection = .all
+    #expect(model.canUndoStandup == false, "D16: the All pseudo-project has no clock to restore")
+}
+
+@MainActor
+@Test("FR-4.1: the menu path restores the clock and the DONE window with it")
+func undoFromTheMenuRestoresTheClock() throws {
+    // The same task `copyMovesTheDoneWindow` uses: finished 12 hours ago, so it
+    // is inside the first-run 24h window and outside the window Copy leaves.
+    let (model, project) = try modelWithReportableWork()
+    let finished = TaskItem(
+        title: "finished earlier", projectID: project.id,
+        createdAt: origin.addingTimeInterval(-13 * 3600))
+    model.context.insert(finished)
+    finished.setStatus(.done, at: origin.addingTimeInterval(-12 * 3600))
+    try model.context.save()
+    model.reload()
+
+    model.prepareStandup()
+    let restoredCutoff = model.standupDraft.window?.start
+    model.copyStandup()
+    model.dismissStandupDraft()
+    #expect(!model.groups.contains { $0.status == .done }, "precondition: Copy moved the cutoff")
+
+    model.undoLastStandup()
+
+    #expect(project.lastStandupAt == restoredCutoff)
+    // The reload is load-bearing beyond the timeline: moving `lastStandupAt`
+    // *backwards* moves FR-3's DONE cutoff back too, so the completion the
+    // mistaken Copy scrolled out of view has to come back with it.
+    #expect(model.groups.contains { $0.status == .done })
+    #expect(model.canUndoStandup == false, "and there is nothing left to undo")
+    #expect(model.lastError == nil)
+}
+
+@MainActor
+@Test("FR-4.1: the sheet's Undo button reverses the Copy it just made")
+func undoFromTheSheet() throws {
+    let (model, project) = try modelWithReportableWork()
+    model.prepareStandup()
+    let windowStart = model.standupDraft.window?.start
+    model.copyStandup()
+
+    model.undoStandupDraft()
+
+    #expect(model.standupDraft.phase == .undone)
+    #expect(project.lastStandupAt == windowStart)
+    #expect(model.activeSheet == .standupDraft, "the sheet stays up to confirm what happened")
+}

@@ -112,6 +112,17 @@ struct ReportFixture {
             copy: copy)
     }
 
+    /// FR-4.1's service, over the same context.
+    ///
+    /// Takes `save` for `standupService`'s reason and no `now` or `copy` at
+    /// all: undo reads its timestamps out of the report it is undoing and
+    /// touches no clipboard.
+    func standupUndoService(
+        save: @escaping (ModelContext) throws -> Void = { try $0.save() }
+    ) -> StandupUndoService {
+        StandupUndoService(context: context, save: save)
+    }
+
     /// Every persisted report, read through a context that has never seen them.
     ///
     /// The independent context is the whole point: a fetch on `context` returns

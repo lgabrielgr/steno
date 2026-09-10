@@ -79,3 +79,31 @@ func theWindowQueryIsAscending() throws {
     // forwards, while a timeline shows the newest note first.
     #expect(found.map(\.body) == ["at 10", "at 30", "at 50"])
 }
+
+@MainActor
+@Test("the undo query is inclusive at its bound and excludes redacted rows")
+func theUndoQueryBoundsAndExcludesRedacted() throws {
+    let context = ModelContext(try StenoStore.inMemory())
+    let taskID = UUID()
+    // Inserted out of order, so a passing result cannot come from insertion
+    // order agreeing with the assertion by accident.
+    for (offset, body) in [(30, "after"), (-10, "before"), (0, "on the bound")] {
+        context.insert(
+            Event(
+                taskID: taskID, timestamp: origin.addingTimeInterval(Double(offset)),
+                kind: .standupReported, body: body))
+    }
+    let redacted = Event(
+        taskID: taskID, timestamp: origin.addingTimeInterval(20),
+        kind: .standupReported, body: "already redacted")
+    context.insert(redacted)
+    redacted.redact()
+    try context.save()
+
+    let found = try context.fetch(EventQueries.notRedacted(atOrAfter: origin))
+
+    // Inclusive at the bound: `StandupUndoService` calls this with the report's
+    // `windowEnd`, and an event stamped exactly there is the boundary case
+    // D-066 describes — the user copying the instant they generate.
+    #expect(Set(found.map(\.body)) == ["on the bound", "after"])
+}

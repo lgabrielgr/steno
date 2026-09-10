@@ -61,6 +61,18 @@ struct MainWindowCommands: Commands {
             Button("Prepare Stand-up") { actions?.prepareStandup() }
                 .keyboardShortcut("r")
                 .disabled(actions?.canPrepareStandup != true)
+
+            // FR-4.1's safety net, reachable after the sheet is closed — which
+            // is when the misclick it exists for is actually noticed.
+            //
+            // **No key equivalent, deliberately.** ⌘Z is the system's
+            // text-editing undo, and this window puts `TextEditor`s inside the
+            // very sheet that produces the report; binding a store transaction
+            // to it would make the two indistinguishable at the moment the user
+            // most wants them apart. FR-3 asks for shortcuts on the primary
+            // actions, and this is a recovery action.
+            Button("Undo Last Stand-up") { actions?.undoLastStandup() }
+                .disabled(actions?.canUndoStandup != true)
         }
 
         // FR-3 lists "switch project" among the actions needing a shortcut,

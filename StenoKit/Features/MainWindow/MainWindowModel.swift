@@ -80,6 +80,15 @@ public final class MainWindowModel: MainWindowActions {
     /// becomes available after `self` does.
     public let standupDraft: StandupDraftModel
 
+    /// The report the selected project could undo right now (FR-4.1), or `nil`.
+    ///
+    /// **Cached rather than fetched on demand**, because `canUndoStandup` is
+    /// read from `MainWindowCommands.body`: a fetch behind it would be a store
+    /// read on SwiftUI's render path, the hazard `selectedTaskEvents` documents
+    /// above, arriving through a menu instead of a pane. `internal(set)` for
+    /// `lastError`'s reason — `MainWindowModel+Standup.swift` refreshes it.
+    public internal(set) var undoableStandupReport: StandupReport?
+
     /// FR-1.4: a task needs a project to belong to, and this window offers no
     /// way to create one implicitly.
     public var canCreateTask: Bool { !projects.isEmpty }
@@ -126,7 +135,8 @@ public final class MainWindowModel: MainWindowActions {
         self.noteComposer = NoteComposerModel(
             service: NoteService(context: context, now: now, save: save), now: now)
         self.standupDraft = StandupDraftModel(
-            service: StandupService(context: context, now: now, save: save, copy: copy))
+            service: StandupService(context: context, now: now, save: save, copy: copy),
+            undoService: StandupUndoService(context: context, save: save))
         reload()
 
         // Registered last, deliberately: `self` may only be captured once
@@ -175,6 +185,11 @@ public final class MainWindowModel: MainWindowActions {
         // Unconditional: the selection may be unchanged while its timeline is
         // not — M1-06 appending a note is exactly that case.
         reloadSelectedTaskEvents()
+
+        // After `projects`, which `selectedProject` resolves through. FR-4.1's
+        // eligibility is "is this *still* the most recent report", which only a
+        // fresh read answers — so it refreshes with everything else.
+        refreshUndoableStandupReport()
     }
 
     private func reloadSelectedTaskEvents() {
