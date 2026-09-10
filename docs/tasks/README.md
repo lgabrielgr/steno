@@ -70,7 +70,7 @@ something better than paper. **M2 is the true MVP; M6 is the finish line.**
 - [x] [M2-01](M2-01-report-window.md) — window computation and event gathering (D8) — PR #22
 - [x] [M2-02](M2-02-raw-report-renderer.md) — deterministic markdown for both cadences; also the §7.4 fallback — PR #23
 - [x] [M2-03](M2-03-report-ui-and-copy.md) — editable draft, clipboard, and the three Copy side effects — PR #26
-- [x] [M2-04](M2-04-undo-standup.md) — undo via redaction (FR-4.1)
+- [x] [M2-04](M2-04-undo-standup.md) — undo via redaction (FR-4.1) — PR #27
 
 ### M2.5 — Portability
 > Exit: export from Mac A, import on Mac B, resume with nothing lost. Core, not optional (§10).
