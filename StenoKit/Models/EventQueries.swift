@@ -54,4 +54,24 @@ public enum EventQueries {
             sortBy: [SortDescriptor(\.timestamp, order: .forward)]
         )
     }
+
+    /// Every still-live event stamped at or after `date` (FR-4.1's undo).
+    ///
+    /// **A narrowing, not a match.** `StandupUndoService` is looking for the
+    /// `standupReported` events of one particular report, and neither half of
+    /// that test is expressible here: an `EventKind` inside a `#Predicate` does
+    /// not compile in either spelling, and `payload` is `Data` with no
+    /// predicate operation that could read a `reportID` out of it. So this
+    /// bounds the fetch and the caller decides — which is safe precisely
+    /// because the caller's test is exact (D-079), so an over-broad bound costs
+    /// a few rows rather than correctness.
+    ///
+    /// Redacted rows are excluded for this enum's usual reason and one of its
+    /// own: an event already redacted needs no second redaction, so the count
+    /// the service logs is the number of rows it actually changed.
+    ///
+    /// Unsorted. The caller redacts a set, and a set has no order to get wrong.
+    public static func notRedacted(atOrAfter date: Date) -> FetchDescriptor<Event> {
+        FetchDescriptor<Event>(predicate: #Predicate { $0.timestamp >= date && !$0.isRedacted })
+    }
 }
