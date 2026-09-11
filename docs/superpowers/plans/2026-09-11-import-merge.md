@@ -1,0 +1,1530 @@
+# M2.5-02 — Import & Merge by UUID: implementation plan
+
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+
+**Goal:** Import a §10.2 export by merging it into the local store — idempotent, commutative, non-destructive — with deterministic resolution for every field that is not append-only.
+
+**Architecture:** A pure function over records does all of the deciding. `ImportService` snapshots the local store through the existing exporter, normalizes it to wire precision, hands both sides to `StoreMerge`, and diffs the result into an `ImportPlan` that carries the merged store it was computed from. `apply` writes that plan in one transaction. Nothing below `ImportService` touches SwiftData or the main actor, which is what lets §10.6's three algebraic properties be asserted as comparisons between values.
+
+**Tech Stack:** Swift 6, SwiftData, swift-testing, SwiftLint `--strict`, swift-format. No new dependencies.
+
+**Spec:** [`docs/superpowers/specs/2026-09-11-import-merge-design.md`](../specs/2026-09-11-import-merge-design.md) — the plan argues from the spec; read both.
+
+## Global Constraints
+
+- **Never commit to `main`.** One branch, `feat/import-merge`, one PR, which you do not merge (CLAUDE.md, §9.5).
+- `make build && make test && make lint` must all pass before the PR. **`make build` is not enough** — it does not build the test bundle, so an error inside a `#expect` macro expansion stays invisible until `make test`.
+- `make format` must leave the tree clean; CI fails otherwise (D-075). Run it before every commit and include what it changes.
+- **xcbeautify prints build errors as `❌`, not `error:`.** Grepping for `error:` shows a failing build as clean. The pass signal for the suite is `Test Execute Succeeded`.
+- The event log is append-only (§3.3). The only write to an existing `Event` anywhere in this task is `redact()`; the only write to an existing `StandupReport` is `markUndone()`.
+- Every timestamp comparison in this task happens **at wire precision**. Full-precision `Date` comparisons between a local row and a file are the defect D-101 exists to prevent.
+- Fixture dates used in a direct `==` assertion stay whole seconds or eighths (`0`, `.125`, `.25`, `.375`, `.5`, `.625`, `.75`, `.875`). Everything else is only exact to within 0.5 ms.
+
+## A note on the code below
+
+Every block in this plan was extracted from a tree that compiled, passed  tests, and linted clean at `--strict`. **That is not the same as being correct.** Four defects shipped in blocks of a previous Steno plan that had all been type-checked; two more in this task's own code were found only by building it. If a step looks wrong, it may be — say so and fix it rather than transcribing. Reporting a defect in this plan is the expected behaviour, not a deviation.
+
+---
+
+
+### Task 1: Make the wire format a fixed point
+
+**Files:**
+- Modify: `StenoKit/Portability/ExportDocument.swift`
+- Modify: `StenoKit/Portability/ExportEncoder.swift`
+- Modify: `StenoTests/Portability/ExportDateTests.swift`, `StenoTests/Portability/ExportFixture.swift`
+- Test: `StenoTests/Portability/WireInstantTests.swift` (new)
+
+**Interfaces:**
+- Consumes: `ExportDocument.fractionalSeconds`, `ExportDocument.encoder()` from M2.5-01.
+- Produces: `static func wireString(_ date: Date) -> String` on `ExportDocument` — internal. Every later task compares and sorts through it.
+
+**Why this is first.** M2.5-02's idempotency criterion is false before it. D-091 measured `Date → string → Date` and recorded it honestly; the direction a merge needs is `string → Date → string`, and under the format style's truncation it is not a fixed point. Parsing `…20.481Z` yields a `Double` of `.4809999…`, which truncates back out as `…20.480Z`.
+
+- [ ] **Step 1: Write the failing test**
+
+Create `StenoTests/Portability/WireInstantTests.swift`. The whole file is in the repository; its load-bearing test is:
+
+```swift
+func everyMillisecondValueIsAFixedPoint() throws {
+    let decoder = ExportDocument.decoder()
+    var unstable: [(String, String)] = []
+
+    for epoch in wireEpochs {
+        for millisecond in 0..<1000 {
+            let text = wireText(epoch: epoch, millisecond: millisecond)
+            let emitted = ExportDocument.wireString(try decodeWire(text, using: decoder))
+            if emitted != text { unstable.append((text, emitted)) }
+        }
+    }
+
+    // Falsify by deleting the half-millisecond from `wireString`: measured, this
+    // goes to 1984 of 4000, the first being `…20.002Z → …20.001Z`. The count and
+    // the first pair ride in the message so a failure names the scale of the
+    // regression and one concrete instance of it.
+    #expect(
+        unstable.isEmpty,
+        "\(unstable.count) of 4000 unstable, first: \(unstable.first as Any)")
+}
+```
+
+with these helpers above it:
+
+```swift
+private func decodeWire(_ text: String, using decoder: JSONDecoder) throws -> Date {
+    let decoded = try decoder.decode([Date].self, from: Data("[\"\(text)\"]".utf8))
+    guard let date = decoded.first else { throw WireDecodeFailure(text: text) }
+    return date
+}
+
+/// The whole second at `epoch`, with its fractional part replaced.
+private func wireText(epoch: TimeInterval, millisecond: Int) -> String {
+    ExportDocument.wireString(Date(timeIntervalSince1970: epoch))
+        .replacingOccurrences(of: ".000Z", with: String(format: ".%03dZ", millisecond))
+}
+```
+
+- [ ] **Step 2: Run it and watch it fail**
+
+Run: `make test 2>&1 | grep -E "recorded an issue|Test Execute"`
+
+Expected: `Expectation failed: (unstable.count → 1984) == 0`. **1984 of 4000, not 4000 of 4000** — about half of all millisecond values are already stable by luck, which is exactly why this was never noticed.
+
+- [ ] **Step 3: Add `wireString` and route both call sites through it**
+
+In `ExportDocument.swift`:
+
+```swift
+/// Half a millisecond, added before formatting so that truncation becomes
+/// round-to-nearest. Not a tunable — `wireString` is the only caller.
+private static let halfMillisecond: TimeInterval = 0.0005
+
+/// **The single implementation of what the file says an instant is.**
+///
+/// Every emitted timestamp and every sort key goes through here, and that
+/// is not tidiness: D-092 records what happened the last time truncation
+/// had two implementations — they disagreed in the third decimal place at
+/// `.999`, and only a test written to compare them found it. Rounding makes
+/// that boundary live again, since `…20.9995` now carries to `…21.000`.
+///
+/// **It rounds, and the half-millisecond is what makes it round.** The
+/// obvious reading — that truncation is harmless because the error is under
+/// a millisecond — misses the property M2.5-02 actually needs, which is
+/// that the format be a *fixed point*. It was not: parsing `…20.481Z` gives
+/// a `Double` of `.4809999…`, which truncates back out as `…20.480Z`. So a
+/// value moved every time it crossed a file. Measured over every
+/// millisecond value at four epochs from 2020 to 2033: **496 of 1000
+/// unstable** under truncation, walking backwards up to 2 ms over at most
+/// two hops before sticking; **0 of 4000** unstable once rounded, and 0 of
+/// 50000 for clock-shaped dates. Two things rested on that fixed point —
+/// §10.6's "importing the same file twice changes nothing", and §10.2's
+/// promise that two exports of an unchanged store are byte-identical, which
+/// is what makes M2.5-05's auto-export a history rather than churn.
+///
+/// A round-trip is therefore accurate to within 0.5 ms in either direction,
+/// and **exact** only when the fractional second is an **eighth** — `0`,
+/// `.125`, `.25`, `.375`, `.5`, `.625`, `.75`, `.875` — the only values both
+/// exactly representable in binary and exactly expressible in three
+/// decimals. Not every dyadic value: `.0625` is dyadic and still emits
+/// `.062`, because the added half-millisecond lands just below `.063` at
+/// this magnitude. Behaviour at an exact half-millisecond input is
+/// deterministic but not predictable by arithmetic, which is why the
+/// stability figures above were measured rather than derived.
+///
+/// M2.5-02's "the object graph is identical" means identical at this
+/// precision; an `==` on a clock date there fails in a way that looks like
+/// a merge bug. See D-091 and D-101.
+static func wireString(_ date: Date) -> String {
+    date.addingTimeInterval(halfMillisecond).formatted(fractionalSeconds)
+}
+
+/// **The single implementation of what the file says an instant is.**
+///
+/// Every emitted timestamp and every sort key goes through here, and that
+/// is not tidiness: D-092 records what happened the last time truncation
+/// had two implementations — they disagreed in the third decimal place at
+/// `.999`, and only a test written to compare them found it. Rounding makes
+/// that boundary live again, since `…20.9995` now carries to `…21.000`.
+///
+/// **It rounds, and the half-millisecond is what makes it round.** The
+/// obvious reading — that truncation is harmless because the error is under
+/// a millisecond — misses the property M2.5-02 actually needs, which is
+/// that the format be a *fixed point*. It was not: parsing `…20.481Z` gives
+/// a `Double` of `.4809999…`, which truncates back out as `…20.480Z`. So a
+/// value moved every time it crossed a file. Measured over every
+/// millisecond value at four epochs from 2020 to 2033: **496 of 1000
+/// unstable** under truncation, walking backwards up to 2 ms over at most
+/// two hops before sticking; **0 of 4000** unstable once rounded, and 0 of
+/// 50000 for clock-shaped dates. Two things rested on that fixed point —
+/// §10.6's "importing the same file twice changes nothing", and §10.2's
+/// promise that two exports of an unchanged store are byte-identical, which
+/// is what makes M2.5-05's auto-export a history rather than churn.
+///
+/// A round-trip is therefore accurate to within 0.5 ms in either direction,
+/// and **exact** only when the fractional second is an **eighth** — `0`,
+/// `.125`, `.25`, `.375`, `.5`, `.625`, `.75`, `.875` — the only values both
+/// exactly representable in binary and exactly expressible in three
+/// decimals. Not every dyadic value: `.0625` is dyadic and still emits
+/// `.062`, because the added half-millisecond lands just below `.063` at
+/// this magnitude. Behaviour at an exact half-millisecond input is
+/// deterministic but not predictable by arithmetic, which is why the
+/// stability figures above were measured rather than derived.
+///
+/// M2.5-02's "the object graph is identical" means identical at this
+/// precision; an `==` on a clock date there fails in a way that looks like
+/// a merge bug. See D-091 and D-101.
+static func wireString(_ date: Date) -> String {
+    date.addingTimeInterval(halfMillisecond).formatted(fractionalSeconds)
+}
+```
+
+Change the encoder's date strategy to call it:
+
+```swift
+/// The encoder §10.2's format rules describe.
+///
+/// `.sortedKeys` is what makes the output deterministic at all — see the
+/// type's note. `.withoutEscapingSlashes` is not cosmetic either: without
+/// it a `SourceRef.url` exports as `https:\/\/…`, which defeats grepping
+/// the file for a link, one of the three properties §10.2 asks for by name.
+public static func encoder() -> JSONEncoder {
+    let encoder = JSONEncoder()
+    encoder.outputFormatting = [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]
+    encoder.dateEncodingStrategy = .custom { date, encoder in
+        var container = encoder.singleValueContainer()
+        try container.encode(wireString(date))
+    }
+    return encoder
+}
+```
+
+**And the sort key too** — `ExportEncoder.sortedByWireInstant` formats independently. D-092 records what happened the last time truncation had two implementations: they disagreed at `.999`, and rounding makes that boundary live again, since `…20.9995` now carries into the next whole second.
+
+```swift
+key: ExportDocument.wireString(instant($0)),
+```
+
+> At this point that line is still in `ExportEncoder.swift`; Task 2 moves it. Change it where it is.
+
+- [ ] **Step 4: Fix the assertions that pinned truncation**
+
+`ExportDateTests.aClockDateRoundTripsWithinAMillisecond` asserts `timestamp <= imprecise`, which was true only because the error was one-sided. Rename it and replace that assertion:
+
+```swift
+func aClockDateRoundTripsWithinHalfAMillisecond() throws {
+    let fixture = try ExportFixture()
+    let task = try fixture.task("ship it", in: try fixture.project("Payments"))
+    // Sub-millisecond precision, as `Date.now` produces. Three fractional
+    // digits cannot hold it, so this is the case `==` would fail.
+    let imprecise = Date(timeIntervalSince1970: 1_700_000_000.4817263)
+    try fixture.event("from the clock", on: task, at: imprecise)
+
+    let data = try fixture.encoder().encode()
+    let decoded = try ExportDocument.decoder().decode(ExportDocument.self, from: data)
+
+    let timestamp = try #require(decoded.events.first?.timestamp)
+    // **Rounding, so the error goes in either direction** — this value moves
+    // *up*, to `.482`. That is the assertion that changed in M2.5-02: it read
+    // `timestamp <= imprecise` while the format truncated. Half a millisecond
+    // plus the representation slack measured at this magnitude (0.5002 ms).
+    #expect(abs(timestamp.timeIntervalSince(imprecise)) < 0.000_51)
+    // Stated as plainly as possible, because M2.5-02's "the object graph is
+    // identical" criterion means identical at this precision, and an `==` on a
+    // clock date there would fail in a way that looks like a merge bug.
+    #expect(timestamp != imprecise)
+}
+```
+
+Three comments in `ExportDateTests.swift` and one in `ExportFixture.swift` state that encoding truncates. They are now false; correct them rather than leaving them — a comment asserting a property the code no longer has is the most expensive kind of stale.
+
+- [ ] **Step 5: Verify, then falsify**
+
+Run: `make format && make build && make test && make lint`
+Expected: `Test Execute Succeeded`, `Found 0 violations`.
+
+Then set `halfMillisecond` to `0.0` and run `make test` again. Expected: the fixed-point test fails at **exactly 1984 of 4000**, and the clock-shaped test fails at 2481 of 5000 with `worstError → 0.0009999…`. Restore it.
+
+> **Do not restore with `git checkout <file>` if the file has uncommitted work in it** — that reverts to HEAD and takes your edits with it. It happened twice while building this task.
+
+- [ ] **Step 6: Commit**
+
+```bash
+git add StenoKit/Portability/ExportDocument.swift StenoKit/Portability/ExportEncoder.swift \
+        StenoTests/Portability/ExportDateTests.swift StenoTests/Portability/ExportFixture.swift \
+        StenoTests/Portability/WireInstantTests.swift
+git commit -m "fix: round the wire format to the nearest millisecond, so it is a fixed point"
+```
+
+---
+
+
+### Task 2: Move the export order off the main actor
+
+**Files:**
+- Create: `StenoKit/Portability/ExportOrdering.swift`
+- Modify: `StenoKit/Portability/ExportEncoder.swift` (remove the extension, repoint six call sites)
+- Modify: `StenoTests/Portability/ExportOrderingTests.swift` (one call site)
+
+**Interfaces:**
+- Produces: `enum ExportOrdering` with `precedes(_:_:)` for `ExportedProject` and `ExportedSourceRef`, and `sortedByWireInstant(_:instant:id:)`. Task 4 calls all three.
+
+**Why.** `ExportEncoder` is `@MainActor`, so its static members are isolated. `StoreMerge` is `nonisolated` on purpose, and it must emit arrays in the same order the encoder does — otherwise `merge(A,B) == merge(B,A)` is an assertion about array order rather than about convergence.
+
+- [ ] **Step 1: Move the extension verbatim**
+
+Cut the whole `extension ExportEncoder { … }` block from `ExportEncoder.swift` into a new `ExportOrdering.swift`, renaming only the type. The comparator bodies and their comments do not change. Header:
+
+```swift
+/// The total order every exported array carries (D-092), owned by a type that
+/// is not tied to an actor.
+///
+/// **These comparators lived in `extension ExportEncoder` until M2.5-02.** That
+/// type is `@MainActor`, so its static members are main-actor-isolated too, and
+/// `StoreMerge` is deliberately `nonisolated` — the whole reason §10.6's three
+/// algebraic properties can be asserted over values instead of over two live
+/// stores. Moving them here is what lets the merge emit arrays in the same order
+/// the encoder does, rather than declaring a second order that agrees with the
+/// first until it doesn't.
+enum ExportOrdering {
+    // …the M2.5-01 comparators, unchanged
+}
+```
+
+- [ ] **Step 2: Repoint the call sites**
+
+In `ExportEncoder.snapshot()`, `Self.precedes` → `ExportOrdering.precedes` and `Self.sortedByWireInstant` → `ExportOrdering.sortedByWireInstant` (five call sites). In `ExportOrderingTests.swift`, `ExportEncoder.sortedByWireInstant` → `ExportOrdering.sortedByWireInstant` (one).
+
+- [ ] **Step 3: Verify — this is a pure move, so the existing suite is the test**
+
+Run: `make format && make build && make test && make lint`
+Expected: `Test Execute Succeeded`. No test changes beyond the one renamed call; if anything else needed changing, the move was not pure.
+
+- [ ] **Step 4: Commit**
+
+```bash
+git add -A && git commit -m "refactor: give D-092's export order a home that is not main-actor-isolated"
+```
+
+---
+
+### Task 3: Read a status transition back out of its event body
+
+**Files:**
+- Modify: `StenoKit/Status/StatusTransition.swift` (add the parser; receive `displayName`)
+- Modify: `StenoKit/Features/MainWindow/Status+Display.swift` → **rename** to `Status+MenuOrder.swift`, keeping only `menuOrder`
+- Test: `StenoTests/Status/StatusTransitionTests.swift` (append)
+
+**Interfaces:**
+- Produces: `StatusTransition.init?(eventBody: String)` and `Status.init?(displayName: String)`, both `public`. Task 4's status derivation is the only caller of the first.
+
+**Why parsing at all.** §10.1 requires deriving `TaskItem.status` from the newest `statusChanged` event, and `StatusService` writes that event with a human-readable body and a `nil` payload. Every event already in every store is written that way, so a structured payload cannot be retrofitted onto history. This is the only option the data model offers, not the preferred one.
+
+- [ ] **Step 1: Write the failing tests**
+
+Append to `StenoTests/Status/StatusTransitionTests.swift`:
+
+```swift
+func everyTransitionSurvivesTheRoundTrip() throws {
+    // All sixteen ordered pairs, `allCases` squared rather than a written list:
+    // a list would still compile with a status missing, and the missing one
+    // would be a transition import cannot read rather than a build error.
+    for from in Status.allCases {
+        for into in Status.allCases {
+            let original = StatusTransition(from: from, into: into)
+            let parsed = try #require(
+                StatusTransition(eventBody: original.eventBody),
+                "\(original.eventBody) did not parse")
+
+            #expect(parsed == original)
+            #expect(parsed.eventBody == original.eventBody)
+        }
+    }
+}
+```
+
+and the negative cases, which are the ones that matter — a parser that guesses is worse than one that refuses:
+
+```swift
+func anUnreadableBodyParsesAsNil() {
+    // §10.2 chose JSON partly so a file could be hand-edited, so these are
+    // reachable in practice rather than defensive. Import falls back to the
+    // record's own clock and reports the event; it does not refuse the file and
+    // it does not pick a status.
+    let unreadable = [
+        "",
+        "TODO",
+        "TODO -> DONE",  // ASCII arrow: the divergence §3.3's byte-level check exists for
+        "TODO→DONE",  // no spaces
+        "TODO → NOPE",  // right half is not a status
+        "NOPE → DONE",  // left half is not a status
+        "TODO → IN-PROGRESS → DONE",  // two arrows
+        "todo → done",  // wrong case
+        "Reported to standup",  // a real body, from a different event kind
+    ]
+
+    for body in unreadable {
+        #expect(StatusTransition(eventBody: body) == nil, "\(body) should not parse")
+    }
+}
+```
+
+- [ ] **Step 2: Run them and watch them fail**
+
+Run: `make test 2>&1 | grep -E "❌|recorded an issue"`
+Expected: `❌ … value of type 'StatusTransition' has no member 'init(eventBody:)'` — a **build** failure, which masks the other expected failures. That is normal here; get it compiling before reading the assertion output.
+
+- [ ] **Step 3: Add the parser beside `eventBody`**
+
+```swift
+/// The inverse of `eventBody`, and **the reason this type owns both.**
+///
+/// §10.1 requires import to derive `TaskItem.status` from the newest
+/// `statusChanged` event rather than copying the cached field, and
+/// `StatusService` writes `eventBody` with a `nil` payload. So this string
+/// is the only machine-readable record of a transition that exists, and
+/// every event already in every store is written in it — there is no
+/// retrofitting a structured payload onto history.
+///
+/// Both directions live in one type so that a change to the spelling is a
+/// change to a single pair. Split across two files they would drift, and
+/// the symptom would be a task's status quietly reverting after an import.
+///
+/// `nil` rather than a throw: §10.2 chose JSON partly so a file could be
+/// read and edited by hand before import, and a person who retypes an arrow
+/// should not have the whole import refused. M2.5-02 falls back to the
+/// record's own `statusChangedAt` and reports the event in its plan.
+public init?(eventBody: String) {
+    let halves = eventBody.components(separatedBy: Self.arrow)
+    guard halves.count == 2,
+        let from = Status(displayName: halves[0]),
+        let into = Status(displayName: halves[1])
+    else { return nil }
+    self.init(from: from, into: into)
+}
+
+/// U+2192 with a space either side, declared once so `eventBody` and
+/// `init?(eventBody:)` cannot disagree about the separator.
+private static let arrow = " → "
+```
+
+and change `eventBody` to interpolate `Self.arrow` rather than a literal `" → "`, so one declaration owns the separator.
+
+- [ ] **Step 4: Move `displayName` into `StenoKit/Status/`**
+
+Cut it from `Status+Display.swift` and append to `StatusTransition.swift`, with the inverse next to it:
+
+```swift
+/// The inverse of `displayName`, over `allCases`.
+///
+/// Derived from `allCases` rather than written as a second `switch`: a
+/// `switch` here would compile with a case missing from one direction, and
+/// the missing case would be an unparseable transition rather than a build
+/// error.
+public init?(displayName: String) {
+    guard let match = Self.allCases.first(where: { $0.displayName == displayName })
+    else { return nil }
+    self = match
+}
+```
+
+Then `git mv StenoKit/Features/MainWindow/Status+Display.swift StenoKit/Features/MainWindow/Status+MenuOrder.swift`, leaving only `menuOrder` in it.
+
+This move is the point, not housekeeping. `displayName` stopped being display text the moment a merge read it back: a rename in a view-adjacent file would break every import on every machine, and the only symptom would be a task's status reverting after a transfer.
+
+- [ ] **Step 5: Verify, then falsify**
+
+Run: `make format && make build && make test && make lint`
+
+Then make the lookup case-insensitive (`$0.displayName.lowercased() == displayName.lowercased()`) and re-run. Expected: `a body that is not a transition parses as nil, it does not guess` fails, because `"todo → done"` starts parsing. Restore.
+
+- [ ] **Step 6: Commit**
+
+```bash
+git add -A && git commit -m "feat: read a status transition back out of its event body (M2.5-02)"
+```
+
+---
+
+### Task 4: The pure merge
+
+**Files:**
+- Create: `StenoKit/Portability/MergedStore.swift`, `StoreMerge.swift`, `StoreMergeDerivations.swift`, `LastStandupClock.swift`, `ImportError.swift`
+- Test: `StenoTests/Portability/MergeFixture.swift`, `StoreMergePropertyTests.swift`
+
+**Interfaces:**
+- Consumes: `ExportOrdering` (Task 2), `StatusTransition.init?(eventBody:)` (Task 3), `ExportDocument.wireString` (Task 1).
+- Produces: `public struct MergedStore`, `public struct MergeResult { store, unparsedStatusBodies }`, `enum StoreMerge.merge(local:incoming:) throws -> MergeResult`, `public enum ImportError`.
+
+**The file split is not cosmetic.** SwiftLint caps a file at 400 lines and the merge is about 520. Split by responsibility: the store value, the union plus the append-only rules, and the two derived groups.
+
+- [ ] **Step 1: Write `MergedStore` and its normalizer**
+
+```swift
+/// Every `Date` in this store, re-expressed at the precision the file uses.
+///
+/// **Both sides of a merge must be at wire precision or nothing converges.**
+/// The local store holds full-precision `Date`s; the incoming file's were
+/// quantized on the way out. For the very same record the local value is
+/// then almost always the larger of the two, by a fraction of a
+/// millisecond — so every §10.1 rule that compares timestamps hands the
+/// local machine a win it did not earn, and `merge(A,B)` stops equalling
+/// `merge(B,A)`. Commutativity would not fail loudly; it would fail by half
+/// a millisecond.
+///
+/// **Implemented by round-tripping the whole document through the exporter's
+/// own bytes**, rather than by mapping each `Date` through
+/// `ExportDocument.wireString`. The per-field version is cheaper and exactly
+/// equivalent today, and it is rejected anyway: there are twenty-odd date
+/// fields across five record types, a missed one is silent, and D-095
+/// records what happens to a rule that depends on someone remembering a
+/// field. Encoding the document cannot miss one. The cost is one
+/// pretty-printed intermediate of the whole store, on a path that is not
+/// §1.1's.
+func wireNormalized() throws -> MergedStore {
+    let data = try ExportDocument.encoder().encode(document())
+    return MergedStore(try ExportDocument.decoder().decode(ExportDocument.self, from: data))
+}
+```
+
+- [ ] **Step 2: Write the failing property tests**
+
+`StenoTests/Portability/MergeFixture.swift` builds records directly — no `ModelContainer`. **Ids are fixed, not random**, because every exported array's total order ends in `id.uuidString`, so random ids make a commutativity assertion flaky in a way that looks like a merge bug:
+
+```swift
+/// A stable uuid, ordered by its argument so the sorted output of a merge is
+/// predictable when a test needs to index into it.
+static func id(_ number: Int) -> UUID {
+    UUID(uuidString: String(format: "00000000-0000-0000-0000-%012d", number))
+        ?? UUID()
+}
+```
+
+and the store builder, which normalizes **both** sides:
+
+```swift
+/// A store at wire precision, which is the only state a merge ever sees.
+///
+/// Both sides go through this. Skipping it on one side reintroduces exactly
+/// the sub-millisecond asymmetry that makes `merge(A,B)` stop equalling
+/// `merge(B,A)`, and the test would then be asserting the bug.
+static func store(
+    projects: [ExportedProject] = [], tasks: [ExportedTask] = [],
+    events: [ExportedEvent] = [], refs: [ExportedSourceRef] = [],
+    reports: [ExportedReport] = []
+) throws -> MergedStore {
+    try MergedStore(
+        projects: projects, tasks: tasks, events: events, sourceRefs: refs,
+        reports: reports
+    ).wireNormalized()
+}
+```
+
+Then the three properties. The two stores must diverge the way two Macs actually diverge — a rename on one, a transition on the other, a redaction on one, a fetch on the other — because a single-field fixture passes under a merge that resolves whole records wrongly:
+
+```swift
+func mergeIsCommutative() throws {
+    let forward = try StoreMerge.merge(local: storeA(), incoming: storeB())
+    let backward = try StoreMerge.merge(local: storeB(), incoming: storeA())
+
+    #expect(forward.store == backward.store)
+}
+
+func mergeIsIdempotent() throws {
+    let once = try StoreMerge.merge(local: storeA(), incoming: storeB()).store
+    let twice = try StoreMerge.merge(local: once, incoming: storeB()).store
+
+    #expect(twice == once)
+
+    // And a third pass, because an operation can be stable on its second
+    // application and not its third — which is exactly how the truncating wire
+    // format failed before D-101.
+    let thrice = try StoreMerge.merge(local: twice, incoming: storeB()).store
+    #expect(thrice == once)
+}
+```
+
+- [ ] **Step 3: Run them and watch them fail**
+
+Run: `make test 2>&1 | grep -E "❌|recorded an issue"`
+Expected: a build failure naming `StoreMerge`. Expected once it compiles: every property test red.
+
+- [ ] **Step 4: Write the merge entry point**
+
+```swift
+static func merge(local: MergedStore, incoming: MergedStore) throws -> MergeResult {
+    // Events before tasks and reports before projects: both derivations read
+    // the *merged* set, not either side's.
+    let events = try mergeEvents(local.events, incoming.events)
+    let reports = try mergeReports(local.reports, incoming.reports)
+    let refs = try mergeRefs(local.sourceRefs, incoming.sourceRefs)
+    let (tasks, unparsed) = try mergeTasks(local.tasks, incoming.tasks, events: events)
+    let projects = try mergeProjects(local.projects, incoming.projects, reports: reports)
+
+    // D-092's order, so `merge(A,B) == merge(B,A)` is an assertion about
+    // convergence rather than about the order a dictionary happened to
+    // enumerate in.
+    let merged = MergedStore(
+        projects: projects.sorted(by: ExportOrdering.precedes),
+        tasks: ExportOrdering.sortedByWireInstant(
+            tasks, instant: { $0.createdAt }, id: { $0.id }),
+        events: ExportOrdering.sortedByWireInstant(
+            events, instant: { $0.timestamp }, id: { $0.id }),
+        sourceRefs: refs.sorted(by: ExportOrdering.precedes),
+        reports: ExportOrdering.sortedByWireInstant(
+            reports, instant: { $0.generatedAt }, id: { $0.id }))
+
+    try validateClosure(of: merged)
+    return MergeResult(store: merged, unparsedStatusBodies: unparsed)
+}
+```
+
+with the union helper. Its dictionary enumeration order is unspecified and does not matter, because every array is sorted into D-092's total order before it leaves `merge`:
+
+```swift
+/// Union by id, resolving collisions.
+///
+/// The dictionary's enumeration order is unspecified and does not matter:
+/// every array is sorted into D-092's total order before it leaves `merge`.
+private static func union<Element>(
+    _ local: [Element],
+    _ incoming: [Element],
+    id: (Element) -> UUID,
+    resolve: (Element, Element) throws -> Element
+) rethrows -> [Element] {
+    var byID: [UUID: Element] = [:]
+    for element in local { byID[id(element)] = element }
+    for element in incoming {
+        let key = id(element)
+        byID[key] = try byID[key].map { try resolve($0, element) } ?? element
+    }
+    return Array(byID.values)
+}
+```
+
+- [ ] **Step 5: The append-only rules — insert, or flip one flag**
+
+```swift
+private static func mergeEvents(
+    _ local: [ExportedEvent], _ incoming: [ExportedEvent]
+) throws -> [ExportedEvent] {
+    try union(
+        local, incoming, id: { $0.id },
+        resolve: { mine, theirs in
+            // §3.3: an event's content is never rewritten, so one id must mean
+            // one event. A file that disagrees is a different lineage under a
+            // colliding UUID, and picking a winner would silently discard the
+            // other — refusing is the only honest option.
+            guard mine.taskID == theirs.taskID, mine.timestamp == theirs.timestamp,
+                mine.kind == theirs.kind, mine.body == theirs.body,
+                mine.payload == theirs.payload
+            else {
+                throw ImportError.inconsistentRecord(
+                    detail: "Two different events share the id \(mine.id).")
+            }
+            // The one permitted write, and the whole of O-8's answer for events.
+            return ExportedEvent(
+                id: mine.id, taskID: mine.taskID, timestamp: mine.timestamp, kind: mine.kind,
+                body: mine.body, payload: mine.payload,
+                isRedacted: mine.isRedacted || theirs.isRedacted)
+        })
+}
+```
+
+`mergeReports` is the same shape with `isUndone` and the report's own immutable fields. **This is O-8's answer**: both flags are one-way in the domain, so a grow-only boolean converges with no clock and fails in the safe direction.
+
+- [ ] **Step 6: The source-ref rule**
+
+```swift
+/// §10.1: later `lastFetchedAt` wins, `nil` loses to any value, and the two
+/// travel together — exactly as `SourceRef.recordFetch` moves them.
+///
+/// The pair matters: resolving the summary independently of its timestamp
+/// would let a store claim a summary was fetched at a moment it was not.
+private static func resolveCache(
+    _ mine: ExportedSourceRef, _ theirs: ExportedSourceRef
+) throws -> (fetchedAt: Date?, summary: String?) {
+    switch (mine.lastFetchedAt, theirs.lastFetchedAt) {
+    case (nil, .some):
+        return (theirs.lastFetchedAt, theirs.cachedSummary)
+    case (.some, nil):
+        return (mine.lastFetchedAt, mine.cachedSummary)
+    case (.some(let mineAt), .some(let theirsAt)) where theirsAt > mineAt:
+        return (theirs.lastFetchedAt, theirs.cachedSummary)
+    case (.some(let mineAt), .some(let theirsAt)) where mineAt > theirsAt:
+        return (mine.lastFetchedAt, mine.cachedSummary)
+    case (nil, nil), (.some, .some):
+        // A tie on the governing clock. The summaries must therefore agree,
+        // and validating that is what makes "local wins" commutative rather
+        // than merely convenient.
+        guard mine.cachedSummary == theirs.cachedSummary else {
+            throw ImportError.inconsistentRecord(
+                detail:
+                    "Source reference \(mine.identifier) has two different cached summaries "
+                    + "fetched at the same moment.")
+        }
+        return (mine.lastFetchedAt, mine.cachedSummary)
+    }
+}
+```
+
+- [ ] **Step 7: The two derivations**
+
+The status group, all three fields from one place so they cannot disagree with each other:
+
+```swift
+/// §10.1: derive from the newest `statusChanged` event across **both** sets.
+///
+/// All three fields come from one place, so they cannot disagree with each
+/// other, and the arithmetic reproduces `TaskItem.setStatus` exactly —
+/// including a task that went done → todo → done, where `completedAt` must
+/// be the latest completion and not the first.
+private static func resolveStatus(
+    mine: ExportedTask?, theirs: ExportedTask?, id: UUID, events: [ExportedEvent]
+) throws -> StatusResolution {
+    // Redacted events count. §3.3 makes `isRedacted` a visibility flag —
+    // "hidden from summaries; row retained" — and a status cache is not a
+    // summary. Excluding them would let a redaction silently revert a task's
+    // status, which is a mutation of the log by the back door.
+    let newest =
+        events
+        .filter { $0.taskID == id && $0.kind == .statusChanged }
+        .max { lhs, rhs in
+            (ExportDocument.wireString(lhs.timestamp), lhs.id.uuidString)
+                < (ExportDocument.wireString(rhs.timestamp), rhs.id.uuidString)
+        }
+
+    guard let newest else {
+        // The task never transitioned, so there is nothing in the log to
+        // derive from and the field's own clock is the best available.
+        return try cachedStatus(mine: mine, theirs: theirs, unparsedEventID: nil)
+    }
+    guard let transition = StatusTransition(eventBody: newest.body) else {
+        return try cachedStatus(mine: mine, theirs: theirs, unparsedEventID: newest.id)
+    }
+
+    return StatusResolution(
+        status: transition.into,
+        statusChangedAt: newest.timestamp,
+        completedAt: transition.into == .done ? newest.timestamp : nil,
+        unparsedEventID: nil)
+}
+```
+
+and its fallback:
+
+```swift
+/// The fallback: later `statusChangedAt` wins on the cached field.
+private static func cachedStatus(
+    mine: ExportedTask?, theirs: ExportedTask?, unparsedEventID: UUID?
+) throws -> StatusResolution {
+    let winner: ExportedTask
+    switch (mine, theirs) {
+    case (.some(let mine), .none):
+        winner = mine
+    case (.none, .some(let theirs)):
+        winner = theirs
+    case (.some(let mine), .some(let theirs)):
+        if theirs.statusChangedAt > mine.statusChangedAt {
+            winner = theirs
+        } else if mine.statusChangedAt > theirs.statusChangedAt {
+            winner = mine
+        } else {
+            guard mine.status == theirs.status, mine.completedAt == theirs.completedAt else {
+                throw ImportError.inconsistentRecord(
+                    detail:
+                        "Task \"\(mine.title)\" changed to two different statuses at the same "
+                        + "instant, and the log does not say which.")
+            }
+            winner = mine
+        }
+    case (.none, .none):
+        throw ImportError.malformed(detail: "A task id appeared with no record behind it.")
+    }
+
+    return StatusResolution(
+        status: winner.status, statusChangedAt: winner.statusChangedAt,
+        completedAt: winner.completedAt, unparsedEventID: unparsedEventID)
+}
+```
+
+The clock, in its own type so a test can pin it against the two services it models:
+
+```swift
+/// - Parameter reports: every report in the merged store. Filtering happens
+///   here rather than at the call site so the rule and its input cannot be
+///   paired up wrongly.
+static func value(forProjectID projectID: UUID, in reports: [ExportedReport]) -> Date? {
+    reports
+        .filter { $0.projectID == projectID }
+        .map { $0.isUndone ? $0.windowStart : $0.windowEnd }
+        .max()
+}
+```
+
+- [ ] **Step 8: Closure validation**
+
+```swift
+/// Every child's parent exists **in the merged store** — which is to say, in
+/// the file or already on this Mac.
+///
+/// Checking the union rather than the file alone is what keeps §10.2's
+/// hand-editability promise: trimming one project out of an export still
+/// imports cleanly on a machine that already has that project, and only a
+/// file that would actually leave a broken store is refused. A genuine Steno
+/// export always has closure, since it is whole-store and nothing is ever
+/// deleted, so a file that lacks it is truncated or hand-trimmed.
+///
+/// The alternative was importing orphans: rows that appear under no sidebar
+/// project and in no timeline, invisible in the preview counts, with nothing
+/// that would ever surface them.
+private static func validateClosure(of store: MergedStore) throws {
+    let projectIDs = Set(store.projects.map { $0.id })
+    let taskIDs = Set(store.tasks.map { $0.id })
+
+    for task in store.tasks where !projectIDs.contains(task.projectID) {
+        throw ImportError.danglingReference(
+            detail: "The task \"\(task.title)\" belongs to a project that is missing.")
+    }
+    for event in store.events where !taskIDs.contains(event.taskID) {
+        throw ImportError.danglingReference(
+            detail: "A timeline entry belongs to a task that is missing.")
+    }
+    for ref in store.sourceRefs where !taskIDs.contains(ref.taskID) {
+        throw ImportError.danglingReference(
+            detail: "The reference to \(ref.identifier) belongs to a task that is missing.")
+    }
+    for report in store.reports where !projectIDs.contains(report.projectID) {
+        throw ImportError.danglingReference(
+            detail: "A stand-up report belongs to a project that is missing.")
+    }
+}
+```
+
+- [ ] **Step 9: Verify**
+
+Run: `make format && make build && make test && make lint`
+
+Two violations to expect and fix rather than suppress: `multiple_closures_with_trailing_closure` on the three `union(…) { … }` calls — pass `resolve:` explicitly — and `file_length` if you did not split in Step 1.
+
+- [ ] **Step 10: Commit**
+
+```bash
+git add -A && git commit -m "feat: merge two stores by UUID, as a pure function over records (M2.5-02)"
+```
+
+---
+
+### Task 5: Make the merge rules actually run in a test
+
+**Files:**
+- Test: `StenoTests/Portability/StoreMergeRuleTests.swift` (new)
+
+**Why this is its own task, and not folded into Task 4.** Task 4's property tests pass, and mutation testing shows two of the rules they appear to cover are never executed. In that fixture the redacted event exists on one side only, so the union carries it across verbatim and the resolution closure never runs. **Inverting the sticky-redaction rule breaks nothing.**
+
+A record present on one side exercises the union and none of §10.1.
+
+- [ ] **Step 1: Prove the gap before closing it**
+
+Change `isRedacted: mine.isRedacted || theirs.isRedacted` to `isRedacted: theirs.isRedacted` and run `make test`.
+Expected: **everything still passes.** Restore, then write the tests below. Do this first — it is the difference between believing the gap and knowing it.
+
+- [ ] **Step 2: Write the rule tests, same id on both sides**
+
+```swift
+func aRedactionIsSticky() throws {
+    // One event id, one body, two different flags — the shape that makes the
+    // rule run. Anything else and the union simply carries the row across.
+    let body = "a typo I took back"
+    let clean = MergeFixture.event(5, at: MergeFixture.at(40.2), body: body, redacted: false)
+    let redacted = MergeFixture.event(5, at: MergeFixture.at(40.2), body: body, redacted: true)
+
+    let withClean = try MergeFixture.store(
+        projects: [baseProject()], tasks: [baseTask()], events: [clean])
+    let withRedacted = try MergeFixture.store(
+        projects: [baseProject()], tasks: [baseTask()], events: [redacted])
+
+    let forward = try StoreMerge.merge(local: withClean, incoming: withRedacted).store
+    let backward = try StoreMerge.merge(local: withRedacted, incoming: withClean).store
+
+    #expect(forward == backward)
+    #expect(try #require(forward.events.first).isRedacted)
+    // Stated separately because this is the consequence that matters: §10.1
+    // warns that a lost redaction puts the text back into a stand-up summary.
+    #expect(try #require(backward.events.first).isRedacted)
+}
+```
+
+and the one the acceptance criteria name explicitly — a store whose cached `status` disagrees with its own newest `statusChanged` event:
+
+```swift
+func statusIsDerivedNotCopied() throws {
+    // The acceptance criterion names this case: a store whose cached `status`
+    // disagrees with its own newest `statusChanged` event. The cache says todo;
+    // the log says the task reached done.
+    let stale = baseTask(status: .todo, statusChangedAt: 20.7)
+    let store = try MergeFixture.store(
+        projects: [baseProject()],
+        tasks: [stale],
+        events: [
+            MergeFixture.transition(3, from: .todo, into: .inProgress, at: MergeFixture.at(30.9)),
+            MergeFixture.transition(4, from: .inProgress, into: .done, at: MergeFixture.at(80.3)),
+        ])
+
+    let merged = try StoreMerge.merge(local: store, incoming: store).store
+    let task = try #require(merged.tasks.first)
+
+    #expect(task.status == .done)
+    #expect(task.statusChangedAt == MergeFixture.at(80.3).wireRounded)
+    #expect(task.completedAt == MergeFixture.at(80.3).wireRounded)
+}
+```
+
+Add the same-shape tests for `isUndone`, the deciding event living only in the incoming file, a redacted `statusChanged` event still counting, `done → todo → done` completing at the latest transition, an unreadable body falling back and being reported, and the no-transition fallback. All are in the repository file.
+
+Also the source-ref cache: later `lastFetchedAt` wins and carries its summary, `nil` loses to any value, and — **asserted deliberately rather than left as a surprise** — a cache-free export does *not* converge. §10.6's commutativity holds for exports taken with the same `includesCachedExternalData` setting; with the default `false` the file carries neither cached field, so "nil loses" preserves whichever machine is the target. That is not a defect in the rule, and a test saying so is what stops a later reader filing it as one.
+
+The `wireRounded` helper is **non-throwing on purpose**:
+
+```swift
+/// This instant as the file carries it, for assertions against a merge
+/// output — which has been through `wireNormalized` and is therefore rounded.
+///
+/// **Non-throwing deliberately.** It is read inside `#expect`, whose
+/// autoclosure is not throwing, and a `get throws` here fails to compile
+/// with "property access can throw, but it is not marked with 'try' and it
+/// is executed in a non-throwing autoclosure" — pointing at the macro
+/// expansion rather than at this line. Falling back to `self` on a decode
+/// failure is safe: `self` is full precision, so an assertion comparing it
+/// against a merged value goes red rather than vacuously green.
+var wireRounded: Date {
+    let json = Data("[\"\(ExportDocument.wireString(self))\"]".utf8)
+    let decoded = try? ExportDocument.decoder().decode([Date].self, from: json)
+    return decoded?.first ?? self
+}
+```
+
+- [ ] **Step 3: Run, then falsify each rule**
+
+Run: `make test` — expected green. Then re-run the Step 1 mutation: expected `O-8: a redaction on either side survives` fails. Also invert `isUndone`, revert `LastStandupClock` to `.map { $0.windowEnd }`, and replace the status derivation with the cached field. Each must turn a named test red.
+
+- [ ] **Step 4: Commit**
+
+```bash
+git add -A && git commit -m "test: exercise each merge rule with the same id on both sides (M2.5-02)"
+```
+
+---
+
+### Task 6: Read a file, and say what importing it would change
+
+**Files:**
+- Create: `StenoKit/Portability/ImportReader.swift`, `ImportPlan.swift`
+
+**Interfaces:**
+- Consumes: `StoreMerge.merge` and `MergeResult` (Task 4), `ImportError` (Task 4).
+- Produces: `ImportReader.read(_:) throws -> ExportDocument`; `public struct ImportPlan` with per-type `Counts`, `statusChanged`, `unparsedStatusBodies`, `isEmpty`, and `init(local:result:)`. M2.5-03 renders this; M2.5-04 prints it.
+
+- [ ] **Step 1: Write the reader**
+
+```swift
+/// - Throws: `ImportError.malformed` or `.unsupportedSchemaVersion`. Nothing
+///   here touches a `ModelContext`, which is the strongest form of §10.4's
+///   "a malformed file leaves the store untouched" — not a rollback, but an
+///   absence of any write.
+static func read(_ data: Data) throws -> ExportDocument {
+    // **The version is checked before the full decode, deliberately.** A
+    // file written by a newer Steno may carry keys and enum cases this build
+    // cannot represent, and decoding it first would refuse it with a
+    // field-level complaint — "unknown key `integrations`" — where §10.2 asks
+    // for a clear message about the version.
+    let probe: VersionProbe
+    do {
+        probe = try JSONDecoder().decode(VersionProbe.self, from: data)
+    } catch {
+        // Truncated files land here: a file cut in half is not "an unknown
+        // version", and saying so would send the user looking for an update
+        // that does not exist.
+        throw ImportError.malformed(detail: detail(of: error))
+    }
+
+    guard probe.schemaVersion == ExportDocument.currentSchemaVersion else {
+        throw ImportError.unsupportedSchemaVersion(
+            found: probe.schemaVersion, supported: ExportDocument.currentSchemaVersion)
+    }
+
+    do {
+        return try ExportDocument.decoder().decode(ExportDocument.self, from: data)
+    } catch {
+        throw ImportError.malformed(detail: detail(of: error))
+    }
+}
+```
+
+The version gate runs **before** the full decode. A file from a newer Steno may carry keys this build cannot represent, and decoding first refuses it with "unknown key `integrations`" where §10.2 asks for a clear word about the version.
+
+- [ ] **Step 2: Write the plan type**
+
+```swift
+/// Nothing to do. **The second import of the same file is this**, which is
+/// §10.6's idempotency criterion stated as one property, and M2.5-03's cue
+/// to say "nothing to import" rather than show an empty preview.
+public var isEmpty: Bool {
+    projects.isNoOp && tasks.isNoOp && events.isNoOp && sourceRefs.isNoOp && reports.isNoOp
+}
+```
+
+and the diff, where `==` on the record structs is only meaningful because both sides are already at wire precision:
+
+```swift
+/// The diff of `local` against the merge's output.
+///
+/// Both sides are already at wire precision, which is why "has this record
+/// changed?" can be a plain `==` on the record structs. Comparing
+/// full-precision `Date`s here would report every row as updated on every
+/// import, and D-101 is the reason.
+init(local: MergedStore, result: MergeResult) {
+    let merged = result.store
+    let localStatus = Dictionary(
+        uniqueKeysWithValues: local.tasks.map { ($0.id, $0.status) })
+
+    self.init(
+        merged: merged,
+        projects: Self.counts(local: local.projects, merged: merged.projects),
+        tasks: Self.counts(local: local.tasks, merged: merged.tasks),
+        events: Self.counts(local: local.events, merged: merged.events),
+        sourceRefs: Self.counts(local: local.sourceRefs, merged: merged.sourceRefs),
+        reports: Self.counts(local: local.reports, merged: merged.reports),
+        statusChanged: merged.tasks
+            .filter { task in localStatus[task.id].map { $0 != task.status } ?? false }
+            .map(\.id),
+        unparsedStatusBodies: result.unparsedStatusBodies)
+}
+```
+
+```swift
+private static func counts<Element: ExportRecord>(
+    local: [Element], merged: [Element]
+) -> Counts {
+    let localByID = Dictionary(uniqueKeysWithValues: local.map { ($0.id, $0) })
+    var inserted = 0
+    var updated = 0
+    var unchanged = 0
+
+    for record in merged {
+        guard let mine = localByID[record.id] else {
+            inserted += 1
+            continue
+        }
+        if mine == record { unchanged += 1 } else { updated += 1 }
+    }
+    return Counts(inserted: inserted, updated: updated, unchanged: unchanged)
+}
+```
+
+`ExportRecord` exists so the diff is written once rather than five times, and it is declared in this file rather than beside the DTOs — §10.2's records mirror their §3 field tables top to bottom, and a protocol conformance there would be the first thing in that file that is not a field.
+
+- [ ] **Step 3: Verify**
+
+Run: `make format && make build && make lint`. No behaviour to test yet — Task 7 wires it to a store.
+
+Expect one SwiftLint failure if you name a variable `where_`: `identifier_name` rejects the underscore.
+
+- [ ] **Step 4: Commit** (folded into Task 7's commit is fine — these two types have no caller until then)
+
+---
+
+### Task 7: Apply a plan, in one transaction
+
+**Files:**
+- Modify: `StenoKit/Models/Project.swift`, `StenoKit/Models/TaskItem.swift` (add `applyImported`)
+- Create: `StenoKit/Portability/ImportService.swift`
+- Test: `StenoTests/Portability/ImportRoundTripTests.swift` (new)
+
+**Interfaces:**
+- Produces: `@MainActor public struct ImportService` with `init(context:save:)`, `plan(_ data: Data) throws -> ImportPlan`, `apply(_ plan: ImportPlan) throws`. **This is the whole surface M2.5-03 and M2.5-04 consume.**
+
+- [ ] **Step 1: Write the failing round-trip tests**
+
+**The fixture must use clock-shaped timestamps.** `ExportFixture.maximal()` and `realistic()` use whole-second offsets, and whole seconds survive the wire format exactly — a round trip built on those cannot see a missing `wireNormalized`, which is the defect this whole task is arranged around.
+
+```swift
+private func clockShapedStore() throws -> ExportFixture {
+    let fixture = try ExportFixture()
+    // `lastStandupAt` matches the report's `windowEnd` below, because that is
+    // what `StandupService.commit` writes. Leaving it nil builds a store the
+    // real services cannot produce — a project with a report and no clock — and
+    // D-099's derivation then *repairs* it on import, so a round-trip assertion
+    // fails on a difference the fixture invented.
+    let project = try fixture.project(
+        "Payments", jiraKeys: ["PAY"], lastStandupAt: ExportFixture.at(60.246_81),
+        modifiedAt: ExportFixture.at(10.481_726_3))
+    let task = try fixture.task(
+        "Fix the retry handler", in: project, status: .inProgress,
+        createdAt: ExportFixture.at(20.301_59), statusAt: ExportFixture.at(30.999_4))
+    try fixture.event(
+        "task created", on: task, at: ExportFixture.at(20.301_59), kind: .created)
+    try fixture.event(
+        StatusTransition(from: .todo, into: .inProgress).eventBody, on: task,
+        at: ExportFixture.at(30.999_4), kind: .statusChanged)
+    try fixture.event(
+        "repro'd the race", on: task, at: ExportFixture.at(40.717_28))
+    try fixture.event(
+        "a typo I took back", on: task, at: ExportFixture.at(45.123_45), redacted: true)
+    try fixture.ref(
+        "PAY-421", on: task, url: "https://acme.atlassian.net/browse/PAY-421",
+        cachedSummary: "In review, 2 comments", lastFetchedAt: ExportFixture.at(50.876_54))
+    try fixture.report(
+        for: project, generatedAt: ExportFixture.at(60.246_81),
+        windowStart: ExportFixture.at(0), windowEnd: ExportFixture.at(60.246_81))
+    return fixture
+}
+```
+
+Then the three tests. This one is the one that needs normalization, and the other two are not:
+
+```swift
+func reImportingItsOwnExportChangesNothing() throws {
+    // **This is the test that needs `wireNormalized`, and the two above are
+    // not.** Their target store was populated entirely from a file, so its
+    // dates are already what the file says and re-expressing them is a no-op.
+    // Here the store's timestamps came from the app's own clock and have never
+    // been through the wire, so the local snapshot is at full precision while
+    // the file it is being compared against is rounded. Without normalization
+    // the two disagree by a fraction of a millisecond on every record they
+    // share — which is not a quiet difference: the merge refuses the file as an
+    // inconsistent record, because an event's timestamp is immutable and the
+    // two copies no longer match.
+    //
+    // It is also the most ordinary thing a user can do: export, then import the
+    // file you just wrote.
+    let fixture = try clockShapedStore()
+    let data = try fixture.encoder(includingCachedData: true).encode()
+    let before = try snapshot(of: fixture)
+
+    let service = ImportService(context: fixture.context)
+    let plan = try service.plan(data)
+
+    #expect(plan.isEmpty)
+    #expect(plan.events.unchanged == 4)
+
+    try service.apply(plan)
+    #expect(try snapshot(of: fixture) == before)
+}
+```
+
+- [ ] **Step 2: Add `applyImported` to the two models**
+
+In `Project.swift` — **in that file**, because `private(set)` is file-scoped and an extension elsewhere could not write these:
+
+```swift
+/// Overwrite every field from an imported record, `modifiedAt` included.
+///
+/// **Deliberately bypasses the stamping mutators.** `rename(to:at:)` and its
+/// siblings exist to record *when an edit happened*; an import is restoring
+/// a value the merge already resolved, and stamping it would overwrite the
+/// very timestamp §10.1 used to decide the record's fate — making the next
+/// merge disagree with this one.
+///
+/// In this file because `private(set)` is file-scoped: an extension
+/// elsewhere could not write these, which is the property that keeps the
+/// setters private in the first place.
+///
+/// `id` is absent because it is the identity, not a field. Every other
+/// stored property is written here, and `ImportFieldCoverageTests` asserts
+/// that over `Mirror` rather than trusting this comment — D-095 records what
+/// happens to a rule that depends on someone remembering a field.
+func applyImported(_ record: ExportedProject) {
+    name = record.name
+    colorHex = record.colorHex
+    jiraProjectKeys = record.jiraProjectKeys
+    isArchived = record.isArchived
+    sortOrder = record.sortOrder
+    lastStandupAt = record.lastStandupAt
+    reportCadence = record.reportCadence
+    staleThresholdDays = record.staleThresholdDays
+    modifiedAt = record.modifiedAt
+}
+```
+
+and in `TaskItem.swift`:
+
+```swift
+/// Overwrite every field from an imported record — see
+/// `Project.applyImported` for why this bypasses the stamping mutators.
+///
+/// `setStatus` is bypassed for a second reason of its own: it guards
+/// `new != status` and derives `completedAt` from the transition it is
+/// making. The merge has already derived all three fields together from the
+/// newest `statusChanged` event in the log (§10.1), and routing them back
+/// through the guard would drop a resolution that only *looks* like a no-op —
+/// same status, different `statusChangedAt`.
+///
+/// `createdAt` is written even though it is immutable: for an inserted task
+/// it arrives through `init`, and for an existing one the merge has already
+/// refused the file if the two sides disagreed. Writing it keeps "every
+/// stored property is written here" true without an exception to explain.
+func applyImported(_ record: ExportedTask) {
+    title = record.title
+    projectID = record.projectID
+    status = record.status
+    createdAt = record.createdAt
+    statusChangedAt = record.statusChangedAt
+    completedAt = record.completedAt
+    isArchived = record.isArchived
+    modifiedAt = record.modifiedAt
+}
+```
+
+- [ ] **Step 3: Write `plan`**
+
+```swift
+/// Decode, validate, merge, diff. **Reads the store; writes nothing.**
+///
+/// A caller that lets time pass between this and `apply` should call it
+/// again first. Steno is single-user and single-window, so the gap is
+/// theoretical — and a locking scheme to close it would be more machinery
+/// than the risk earns.
+public func plan(_ data: Data) throws -> ImportPlan {
+    let document = try ImportReader.read(data)
+    let local = try localStore()
+    let result = try StoreMerge.merge(local: local, incoming: MergedStore(document))
+    return ImportPlan(local: local, result: result)
+}
+```
+
+```swift
+/// The local store as a file would express it.
+///
+/// **`includesCachedExternalData: true` is not optional here**, and the
+/// parameter defaults to `false`, so nothing but this comment and a test
+/// will ever ask. A cache-free snapshot presents every local `cachedSummary`
+/// and `lastFetchedAt` as `nil`, and §10.1's "nil loses to any value" would
+/// then hand every ref's cache to the incoming file — one word, and the
+/// user's offline summaries are gone.
+///
+/// `exportedBy` is passed rather than defaulted for D-010's reason: the test
+/// bundle is unhosted, so `Bundle.main` there is the xctest runner. The
+/// value is discarded; passing it is cheaper than explaining that.
+private func localStore() throws -> MergedStore {
+    let snapshot = try ExportEncoder(
+        context: context,
+        includesCachedExternalData: true,
+        exportedBy: "steno/import (macOS)"
+    ).snapshot()
+    return try MergedStore(snapshot).wireNormalized()
+}
+```
+
+- [ ] **Step 4: Write `apply`**
+
+```swift
+/// Apply exactly what `plan` described, in one transaction.
+///
+/// Every validation already ran on values, before this is reached, so the
+/// only failure left in flight is the save itself — which rolls back.
+public func apply(_ plan: ImportPlan) throws {
+    let store = plan.merged
+    // Parents first. SwiftData does not require it; a debugger stepping
+    // through this does.
+    try applyProjects(store.projects)
+    try applyTasks(store.tasks)
+    try applyEvents(store.events)
+    try applyRefs(store.sourceRefs)
+    try applyReports(store.reports)
+
+    do {
+        try save(context)
+    } catch {
+        context.rollback()
+        throw ImportError.saveFailed(detail: error.localizedDescription)
+    }
+
+    // After the save, never before: an observer that reloads must not read a
+    // context whose write has not landed (D-019).
+    NotificationCenter.default.post(name: .stenoDidWrite, object: nil)
+    Log.app.info("import applied: \(plan.tasks.inserted, privacy: .public) new tasks")
+}
+```
+
+Events — insert, or flip the one flag, and nothing else:
+
+```swift
+/// §3.3: an event is inserted or its one flag is flipped. There is no third
+/// case, and the model exposes no mutator that would allow one.
+private func applyEvents(_ records: [ExportedEvent]) throws {
+    let rows = try existing(Event.self, id: { $0.id })
+    for record in records {
+        if let row = rows[record.id] {
+            if record.isRedacted && !row.isRedacted { row.redact() }
+            continue
+        }
+        let event = Event(
+            id: record.id, taskID: record.taskID, timestamp: record.timestamp,
+            kind: record.kind, body: record.body, payload: record.payload)
+        context.insert(event)
+        // Held, not looked up again: `rows` was fetched before this insert,
+        // so `rows[record.id]` is nil here and a redacted event would have
+        // landed un-redacted — putting text the user took back into the next
+        // stand-up. Caught by `ImportApplyTests`.
+        if record.isRedacted { event.redact() }
+    }
+}
+```
+
+> **The held `event` reference is the fix for a real defect, not style.** The first version looked the row up again as `rows[record.id]?.redact()`. `rows` was fetched *before* the insert, so it is nil there and a redacted event landed un-redacted — putting text the user took back into the next stand-up.
+
+Refs — and the relationship assignment that is silent if forgotten:
+
+```swift
+private func applyRefs(_ records: [ExportedSourceRef]) throws {
+    let rows = try existing(SourceRef.self, id: { $0.id })
+    let tasks = try existing(TaskItem.self, id: { $0.id })
+    for record in records {
+        if let row = rows[record.id] {
+            // Unconditional when the merge produced a cache: the previous
+            // form compared `row.lastFetchedAt` — a full-precision `Date` —
+            // against the merged, wire-rounded one, so it was never equal
+            // and the "skip" branch was dead. Writing the resolved value is
+            // what the other four record types do.
+            if let fetchedAt = record.lastFetchedAt {
+                row.recordFetch(summary: record.cachedSummary, at: fetchedAt)
+            }
+            continue
+        }
+        let ref = SourceRef(
+            id: record.id, taskID: record.taskID, kind: record.kind,
+            identifier: record.identifier, url: record.url)
+        context.insert(ref)
+        // **Load-bearing, and silent if forgotten.** `taskID` is the
+        // authoritative link (§3.4, D-016), but `TaskItem.sourceRefs` is the
+        // inverse relationship the detail pane reads — a ref inserted
+        // without this has correct data and is invisible in the UI.
+        ref.task = tasks[record.taskID]
+        if let fetchedAt = record.lastFetchedAt {
+            ref.recordFetch(summary: record.cachedSummary, at: fetchedAt)
+        }
+    }
+}
+```
+
+`applyProjects`, `applyTasks` and `applyReports` follow the same shape and are in the repository file.
+
+- [ ] **Step 5: Verify, then falsify three ways**
+
+Run: `make format && make build && make test && make lint`
+
+Then, each restored afterwards:
+
+| Mutation | Expected failure |
+|---|---|
+| `return MergedStore(snapshot)` — drop `wireNormalized()` | `re-importing a store's own export changes nothing` |
+| `includesCachedExternalData: false` | `§10.6: importing the same file twice is a no-op the second time` |
+| `_ = tasks` instead of `ref.task = tasks[record.taskID]` | `§10.6: export → import into an empty store → the same object graph` |
+
+> **`ImportService.swift` is untracked until you commit it, and `git checkout --` cannot restore an untracked file.** Doing this before committing silently left two mutations stacked in the file. Commit first, or restore by hand and verify with `grep`.
+
+- [ ] **Step 6: Commit**
+
+```bash
+git add -A && git commit -m "feat: read, plan and apply an import in one transaction (M2.5-02)"
+```
+
+---
+
+### Task 8: Pin the rejections, the clock invariant, and field coverage
+
+**Files:**
+- Test: `StenoTests/Portability/ImportRejectionTests.swift`, `LastStandupClockTests.swift`, `ImportFieldCoverageTests.swift` (all new)
+
+- [ ] **Step 1: Rejection tests**
+
+§10.6 asks for clean rejection with the store unchanged. **"Unchanged" needs a second context and a later successful save:**
+
+```swift
+private func isEmpty(_ container: ModelContainer) throws -> Bool {
+    // A second context, deliberately: a fetch through the one that did the work
+    // hands back the objects it is still holding.
+    let fresh = ModelContext(container)
+    return try fresh.fetch(FetchDescriptor<Project>()).isEmpty
+        && fresh.fetch(FetchDescriptor<TaskItem>()).isEmpty
+        && fresh.fetch(FetchDescriptor<Event>()).isEmpty
+}
+```
+
+```swift
+func aFailedSaveRollsBack() throws {
+    let data = try populatedExport()
+    let target = try ExportFixture()
+    let service = ImportService(context: target.context, save: { _ in throw SaveFailure() })
+
+    let plan = try service.plan(data)
+    #expect(plan.isEmpty == false)
+    #expect(throws: ImportError.self) { try service.apply(plan) }
+
+    // The later successful save is what makes the assertion below falsifiable.
+    try target.context.save()
+    #expect(try isEmpty(target.container))
+}
+```
+
+Cover as well: non-JSON bytes, a truncated file (asserted as `.malformed`, **not** `.unsupportedSchemaVersion` — "update Steno" is the wrong advice for a file cut in half by a failed copy), an unknown `schemaVersion`, an orphaned record, and one id with two different histories.
+
+And the complementary case, which is what keeps §10.2's hand-editability promise honest:
+
+```swift
+func aTrimmedFileImportsWhereTheParentAlreadyExists() throws {
+    // Closure is checked against the file **and the store together**, which is
+    // what keeps §10.2's hand-editability promise: trimming a project out of an
+    // export must still import on a Mac that already has that project. Checking
+    // the file alone would refuse this, and refusing it would make the format's
+    // readability a lie.
+    let source = try ExportFixture()
+    let project = try source.project("Payments", modifiedAt: ExportFixture.at(10))
+    let task = try source.task("Fix the retry handler", in: project)
+    try source.event("repro'd the race", on: task, at: ExportFixture.at(20))
+    let whole = try source.encoder().encode()
+
+    let document = try ExportDocument.decoder().decode(ExportDocument.self, from: whole)
+    let withoutProjects = ExportDocument(
+        schemaVersion: document.schemaVersion, exportedAt: document.exportedAt,
+        exportedBy: document.exportedBy,
+        includesCachedExternalData: document.includesCachedExternalData,
+        projects: [], tasks: document.tasks, events: document.events,
+        sourceRefs: document.sourceRefs, reports: document.reports)
+    let trimmed = try ExportDocument.encoder().encode(withoutProjects)
+
+    // The same store that produced it already holds the project.
+    let plan = try ImportService(context: source.context).plan(trimmed)
+    #expect(plan.isEmpty)
+}
+```
+
+- [ ] **Step 2: The clock invariant, against the real services**
+
+```swift
+/// What D-099 recomputes from the reports alone.
+///
+/// The snapshot is deliberately **not** wire-normalized: these dates came
+/// from the services and never went through a file, so comparing them to
+/// `live` at full precision is the strict form of the assertion.
+func derived() throws -> Date? {
+    let snapshot = try fixture.encoder(includingCachedData: true).snapshot()
+    return LastStandupClock.value(forProjectID: project.id, in: snapshot.reports)
+}
+```
+
+Then six tests — no reports, one Copy, two Copies, undo of the only report, undo of the newer of two, and Copy/undo/Copy — each ending in `#expect(try clock.derived() == clock.live)`. The fourth is the row that decides the rule's shape:
+
+```swift
+func afterUndoingTheOnlyReport() throws {
+    let clock = try ClockFixture()
+    let report = try clock.commit(at: 100)
+    try clock.undo(report)
+
+    // This is the row that decides the shape of the rule. A "newest report that
+    // is not undone" derivation yields nil here, and nil makes the next Prepare
+    // compute a *sliding* window — the loss D-067 and M2-04's step 5 avoid.
+    // Reading `windowStart` for an undone report reproduces what undo restores.
+    #expect(clock.live != nil)
+    #expect(try clock.derived() == clock.live)
+}
+```
+
+- [ ] **Step 3: Field coverage, by re-deriving the DTO**
+
+```swift
+func applyImportedWritesEveryProjectField() throws {
+    let fixture = try ExportFixture()
+    let identifier = UUID()
+    let project = try fixture.project(
+        "before", colorHex: "#000000", jiraKeys: ["BEFORE"], sortOrder: 1, cadence: .daily,
+        staleThresholdDays: 1, lastStandupAt: ExportFixture.at(1), archived: true,
+        modifiedAt: ExportFixture.at(1), id: identifier)
+
+    let record = ExportedProject(
+        id: identifier, name: "after", colorHex: "#FFFFFF", jiraProjectKeys: ["AFTER"],
+        isArchived: false, sortOrder: 2, lastStandupAt: ExportFixture.at(2),
+        reportCadence: .periodic, staleThresholdDays: 2, modifiedAt: ExportFixture.at(2))
+
+    project.applyImported(record)
+
+    #expect(ExportedProject(project) == record)
+}
+```
+
+Re-deriving rather than listing the expected fields: a listed set needs the same maintenance as the method it guards, and gets forgotten in the same commit. With D-095's existing assertion in the other direction, a field added to a model is now carried by the export **and** restored by the import, or a test goes red.
+
+- [ ] **Step 4: Verify, then falsify**
+
+| Mutation | Expected failure |
+|---|---|
+| Delete `sortOrder = record.sortOrder` from `Project.applyImported` | `applyImported writes every field of a project` |
+| `LastStandupClock` → `.map { $0.windowEnd }` | three tests, including `after undoing the only report…` |
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add -A && git commit -m "test: pin the import's rejections, its clock invariant, and its field coverage"
+```
+
+---
+
+### Task 9: Record the decisions and amend the spec
+
+**Files:**
+- Modify: `docs/DECISIONS.md`, `docs/REQUIREMENTS.md`, `docs/tasks/README.md`
+
+- [ ] **Step 1: Seven decision entries**
+
+D-098 (sticky flags, **closes O-8**), D-099 (`lastStandupAt` derived, amends §10.1), D-100 (status parsed from the body; `displayName` is persisted), D-101 (the wire format rounds, amends §10.2 **and D-091**), D-102 (orphans refused, closure over file ∪ store), D-103 (duplicate refs kept, **extends O-10**), D-104 (the merge is pure; the local snapshot is normalized).
+
+Each carries its measurements, not its intentions. D-101's numbers — 496/1000 before, 0/4000 after, 1984/4000 under the falsifying mutation — are the entry.
+
+- [ ] **Step 2: Amend REQUIREMENTS.md to v1.17**
+
+Bump `**Status:**` and `**Date:**`, add the changelog line, replace §10.1's `lastStandupAt` table row and the paragraph that calls O-8 open, and replace §10.2's truncation sentence. Six edits; each one is a place the document currently says something untrue.
+
+- [ ] **Step 3: Tick the task rows**
+
+`docs/tasks/README.md`: **M2.5-01** merged as PR #28 without its tick, and M2.5-02. CLAUDE.md's workflow step exists precisely because nothing else prompts this.
+
+- [ ] **Step 4: Final verification and the PR**
+
+```bash
+make format && make build && make test && make lint
+git status --short          # must be clean
+```
+
+Open the PR. The body must say, in §9.5's terms: that §10.2 and §10.1 were amended and why; that O-8 is closed and O-10 extended; and that the export's byte output changes for roughly half of all timestamps while remaining readable by, and able to read, every file already written.
+
+**Then stop. Do not merge.**
+
+---
+
+## Verification summary
+
+| Gate | Command | Expected |
+|---|---|---|
+| Build | `make build` | `Build Succeeded` — and note it does **not** build tests |
+| Tests | `make test` | `Test Execute Succeeded`,  passing |
+| Lint | `make lint` | `Found 0 violations, 0 serious` |
+| Format | `make format && git status --short` | clean |
+
+## The mutations this task was verified with
+
+Ten, each restored afterwards. A test suite that has not been falsified is a suite of unknown value, and three of these found gaps rather than confirming coverage.
+
+| # | Mutation | Caught by |
+|---|---|---|
+| 1 | `halfMillisecond = 0.0` | fixed-point test, at exactly 1984/4000 |
+| 2 | `Status(displayName:)` made case-insensitive | the negative parse test |
+| 3 | status copied from the cached field | two property tests |
+| 4 | `isRedacted` takes the incoming value | **nothing, until Task 5 existed** |
+| 5 | `isUndone` takes the incoming value | the sticky-report test |
+| 6 | `LastStandupClock` ignores the undone case | three tests |
+| 7 | local snapshot left at full precision | **nothing, until the self-import test existed** |
+| 8 | `includesCachedExternalData: false` | the second-import test |
+| 9 | `applyImported` drops a field | the coverage test |
+| 10 | source-ref relationship not wired | the round-trip test |
+
+Rows 4 and 7 are the reason this plan was written from a built tree rather than from the design. Neither gap is visible by reading.

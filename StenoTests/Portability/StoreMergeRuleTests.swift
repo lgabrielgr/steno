@@ -206,3 +206,78 @@ extension Date {
         return decoded?.first ?? self
     }
 }
+
+// MARK: - §10.1: the cached pair, and where commutativity legitimately stops
+
+@Test("§10.1: later lastFetchedAt wins and the summary travels with it")
+func theLaterFetchWinsAndCarriesItsSummary() throws {
+    let older = MergeFixture.ref(
+        7, lastFetchedAt: MergeFixture.at(50.1), cachedSummary: "In review")
+    let newer = MergeFixture.ref(
+        7, lastFetchedAt: MergeFixture.at(90.4), cachedSummary: "Merged, 4 comments")
+
+    let mine = try MergeFixture.store(
+        projects: [baseProject()], tasks: [baseTask()], refs: [older])
+    let theirs = try MergeFixture.store(
+        projects: [baseProject()], tasks: [baseTask()], refs: [newer])
+
+    for merged in [
+        try StoreMerge.merge(local: mine, incoming: theirs).store,
+        try StoreMerge.merge(local: theirs, incoming: mine).store,
+    ] {
+        let ref = try #require(merged.sourceRefs.first)
+        // The pair moves together, exactly as `SourceRef.recordFetch` moves it.
+        // Resolving the summary independently of its timestamp would let a store
+        // claim a summary was fetched at a moment it was not.
+        #expect(ref.lastFetchedAt == MergeFixture.at(90.4).wireRounded)
+        #expect(ref.cachedSummary == "Merged, 4 comments")
+    }
+}
+
+@Test("§10.1: nil loses to any value, so a cache-free file never clears a cache")
+func nilLosesToAnyValue() throws {
+    // This is the shape of an ordinary export: §10.2 excludes cached external
+    // data by default, so the incoming ref carries neither field.
+    let cached = MergeFixture.ref(
+        7, lastFetchedAt: MergeFixture.at(50.1), cachedSummary: "In review")
+    let bare = MergeFixture.ref(7)
+
+    let mine = try MergeFixture.store(
+        projects: [baseProject()], tasks: [baseTask()], refs: [cached])
+    let theirs = try MergeFixture.store(
+        projects: [baseProject()], tasks: [baseTask()], refs: [bare])
+
+    let merged = try StoreMerge.merge(local: mine, incoming: theirs).store
+    #expect(try #require(merged.sourceRefs.first).cachedSummary == "In review")
+}
+
+@Test("a cache-free export is not a complete description, and does not converge")
+func aCacheFreeExportDoesNotConverge() throws {
+    // **Asserted deliberately, so nobody later reads this as a merge bug.**
+    // §10.6's commutativity property holds for exports taken with the same
+    // `includesCachedExternalData` setting. With the default `false` the file
+    // carries neither cached field at all, so "nil loses to any value"
+    // preserves whichever machine happens to be the target — and A→B and B→A
+    // differ in exactly those two fields. That is not a defect in the rule:
+    // §10.2 declares cached data excluded and re-fetchable, so a cache-free
+    // file is by definition not a complete description of its store.
+    let mineCached = MergeFixture.ref(
+        7, lastFetchedAt: MergeFixture.at(50.1), cachedSummary: "In review")
+    let theirsCached = MergeFixture.ref(
+        7, lastFetchedAt: MergeFixture.at(90.4), cachedSummary: "Merged, 4 comments")
+
+    let mine = try MergeFixture.store(
+        projects: [baseProject()], tasks: [baseTask()], refs: [mineCached])
+    let theirs = try MergeFixture.store(
+        projects: [baseProject()], tasks: [baseTask()], refs: [theirsCached])
+    // What each would actually send with the default option: the ref, no cache.
+    let mineOnTheWire = try MergeFixture.store(
+        projects: [baseProject()], tasks: [baseTask()], refs: [MergeFixture.ref(7)])
+
+    let forward = try StoreMerge.merge(local: theirs, incoming: mineOnTheWire).store
+    let backward = try StoreMerge.merge(local: mine, incoming: mineOnTheWire).store
+
+    #expect(forward.sourceRefs.first?.cachedSummary == "Merged, 4 comments")
+    #expect(backward.sourceRefs.first?.cachedSummary == "In review")
+    #expect(forward != backward)
+}
