@@ -2477,6 +2477,15 @@ One implementation matters more now than it did: rounding makes the `.999` bound
 `…20.9995` carries into the next whole second, and that is precisely where the two implementations
 D-092 found had disagreed. Falsified by deleting the half-millisecond, which turns the fixed-point
 test red at exactly 1984 of 4000 — the figure quoted in its comment.
+**This is the last moment the change is free, and that is load-bearing.** Raised in review of PR
+#29: changing the quantization while keeping `schemaVersion: 1` would break a merge against a file
+written by the old encoder — a local event at `.4817263` normalizes to `.482` here while the old
+file carries `.481`, and the immutable-field check refuses the whole file as an inconsistent
+record. It cannot happen today because **no v1 export file can exist**: `ExportEncoder`'s only
+callers are `ImportService` and the test fixture, and nothing writes bytes to disk until M2.5-03's
+save panel and M2.5-04's CLI. **Once M2.5-03 ships, the timestamp semantics of `schemaVersion: 1`
+are frozen** — a later change needs a version bump with the v1 normalization retained for v1 files,
+which means carrying a second quantizer permanently, the hazard D-092 records.
 **Alternatives:** iterating the local snapshot's round trip to a fixed point (never more than two
 passes, and it leaves export → import → export producing different bytes, so §10.2's diffability
 keeps the defect and the workaround lives two layers from the cause); treating timestamps within
