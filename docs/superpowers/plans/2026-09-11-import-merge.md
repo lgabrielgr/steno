@@ -22,7 +22,7 @@
 
 ## A note on the code below
 
-Every block in this plan was extracted from a tree that compiled, passed  tests, and linted clean at `--strict`. **That is not the same as being correct.** Four defects shipped in blocks of a previous Steno plan that had all been type-checked; two more in this task's own code were found only by building it. If a step looks wrong, it may be — say so and fix it rather than transcribing. Reporting a defect in this plan is the expected behaviour, not a deviation.
+Every block in this plan was extracted from a tree that compiled, passed 481 tests, and linted clean at `--strict`. **That is not the same as being correct.** Four defects shipped in blocks of a previous Steno plan that had all been type-checked; two more in this task's own code were found only by building it. If a step looks wrong, it may be — say so and fix it rather than transcribing. Reporting a defect in this plan is the expected behaviour, not a deviation.
 
 ---
 
@@ -98,45 +98,6 @@ In `ExportDocument.swift`:
 /// Half a millisecond, added before formatting so that truncation becomes
 /// round-to-nearest. Not a tunable — `wireString` is the only caller.
 private static let halfMillisecond: TimeInterval = 0.0005
-
-/// **The single implementation of what the file says an instant is.**
-///
-/// Every emitted timestamp and every sort key goes through here, and that
-/// is not tidiness: D-092 records what happened the last time truncation
-/// had two implementations — they disagreed in the third decimal place at
-/// `.999`, and only a test written to compare them found it. Rounding makes
-/// that boundary live again, since `…20.9995` now carries to `…21.000`.
-///
-/// **It rounds, and the half-millisecond is what makes it round.** The
-/// obvious reading — that truncation is harmless because the error is under
-/// a millisecond — misses the property M2.5-02 actually needs, which is
-/// that the format be a *fixed point*. It was not: parsing `…20.481Z` gives
-/// a `Double` of `.4809999…`, which truncates back out as `…20.480Z`. So a
-/// value moved every time it crossed a file. Measured over every
-/// millisecond value at four epochs from 2020 to 2033: **496 of 1000
-/// unstable** under truncation, walking backwards up to 2 ms over at most
-/// two hops before sticking; **0 of 4000** unstable once rounded, and 0 of
-/// 50000 for clock-shaped dates. Two things rested on that fixed point —
-/// §10.6's "importing the same file twice changes nothing", and §10.2's
-/// promise that two exports of an unchanged store are byte-identical, which
-/// is what makes M2.5-05's auto-export a history rather than churn.
-///
-/// A round-trip is therefore accurate to within 0.5 ms in either direction,
-/// and **exact** only when the fractional second is an **eighth** — `0`,
-/// `.125`, `.25`, `.375`, `.5`, `.625`, `.75`, `.875` — the only values both
-/// exactly representable in binary and exactly expressible in three
-/// decimals. Not every dyadic value: `.0625` is dyadic and still emits
-/// `.062`, because the added half-millisecond lands just below `.063` at
-/// this magnitude. Behaviour at an exact half-millisecond input is
-/// deterministic but not predictable by arithmetic, which is why the
-/// stability figures above were measured rather than derived.
-///
-/// M2.5-02's "the object graph is identical" means identical at this
-/// precision; an `==` on a clock date there fails in a way that looks like
-/// a merge bug. See D-091 and D-101.
-static func wireString(_ date: Date) -> String {
-    date.addingTimeInterval(halfMillisecond).formatted(fractionalSeconds)
-}
 
 /// **The single implementation of what the file says an instant is.**
 ///
@@ -1506,7 +1467,7 @@ Open the PR. The body must say, in §9.5's terms: that §10.2 and §10.1 were am
 | Gate | Command | Expected |
 |---|---|---|
 | Build | `make build` | `Build Succeeded` — and note it does **not** build tests |
-| Tests | `make test` | `Test Execute Succeeded`,  passing |
+| Tests | `make test` | `Test Execute Succeeded`, 481 passing |
 | Lint | `make lint` | `Found 0 violations, 0 serious` |
 | Format | `make format && git status --short` | clean |
 
