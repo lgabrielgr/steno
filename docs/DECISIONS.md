@@ -2566,6 +2566,35 @@ the flag).
 
 ---
 
+### D-105 — §10.6's commutativity is stated over everything the file actually carries
+
+**2026-09-11** · M2.5-02 · **Status:** accepted · amends REQUIREMENTS.md §10.6 (v1.18)
+
+Merging in either direction converges on the same record set and the same value for every field
+**except** `SourceRef.lastFetchedAt` and `.cachedSummary`, which converge only for exports taken
+with `includesCachedExternalData` set.
+
+**Why:** read literally, §10.6 was false in the default configuration, and that is worth stating
+plainly rather than defending. §10.2 excludes the two cached fields from an export unless the
+opt-in is set, so an ordinary file carries no information about them at all. §10.1's "`nil` loses
+to any value" is the right rule for that — a cache-free file must never clear a cache the other
+machine built — but it necessarily preserves whichever machine is the import *target*, so A→B and
+B→A differ in exactly those two fields.
+
+Nothing in the merge is wrong. The requirement was asserting convergence over data the file does
+not contain, and the honest fix is to say what the property is stated over.
+
+**It was recorded in a test comment first, and that was the actual mistake.** `StoreMergeRuleTests`
+asserted the asymmetry deliberately, with a comment explaining why it was correct — which makes it
+discoverable by someone reading that file and invisible to everyone reading §10.6. A property the
+spec claims and the code does not have belongs in the spec's own words. Raised in review of PR #29.
+**Alternatives:** making cache state deterministic in the merge (there is nothing to be
+deterministic *about* — the file carries neither field); exporting cached data by default
+(contradicts §10.2, which excludes it for being bulky and re-fetchable, and would grow every
+export for data that re-fetches in a second).
+
+---
+
 ## Open — decided by the task that owns them
 
 Each of these is a real choice the spec leaves open. The owning task decides it, records it in

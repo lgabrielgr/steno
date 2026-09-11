@@ -61,10 +61,11 @@ func anEighthOfASecondIsExact() throws {
     // not survive — `.5001`, `.5002`, a clock-shaped date — because that is the
     // behaviour they exist to pin; they assert order or tolerance, never
     // equality. "Dyadic" would be too broad for the exact set: `.0625` is
-    // dyadic and still emits `.062`, because the half-millisecond rounding adds
-    // lands just below `.063` at this magnitude — measured, not derived. The eighths — 0, .125, .25, .375, .5, .625, .75, .875 —
-    // are the only values both exactly representable as a `Double` and exactly
-    // expressible in three decimals.
+    // dyadic and still emits `.062`, because adding the half-millisecond lands
+    // just below `.063` at this magnitude — measured, not derived. The eighths
+    // — 0, .125, .25, .375, .5, .625, .75, .875 — are the only values both
+    // exactly representable as a `Double` and exactly expressible in three
+    // decimals.
     #expect(decoded.events.first?.timestamp == ExportFixture.at(0.25))
 }
 

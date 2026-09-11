@@ -253,9 +253,12 @@ func nilLosesToAnyValue() throws {
 
 @Test("a cache-free export is not a complete description, and does not converge")
 func aCacheFreeExportDoesNotConverge() throws {
-    // **Asserted deliberately, so nobody later reads this as a merge bug.**
-    // §10.6's commutativity property holds for exports taken with the same
-    // `includesCachedExternalData` setting. With the default `false` the file
+    // **Asserted deliberately, so nobody later reads this as a merge bug** —
+    // and §10.6 now says so in its own words (D-105, REQUIREMENTS v1.18).
+    // Recording it only here was the actual mistake: it made the exception
+    // discoverable by someone reading this file and invisible to everyone
+    // reading the requirement. Commutativity holds for exports taken with the
+    // same `includesCachedExternalData` setting. With the default `false` the file
     // carries neither cached field at all, so "nil loses to any value"
     // preserves whichever machine happens to be the target — and A→B and B→A
     // differ in exactly those two fields. That is not a defect in the rule:
