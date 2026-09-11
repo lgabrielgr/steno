@@ -13,6 +13,14 @@ func theFilenameCarriesTheDate() throws {
     #expect(
         ExportFilename.forDate(ExportFixture.origin, timeZone: utc)
             == "steno-export-2023-11-14.json")
+
+    // 2023-01-05 12:00:00 UTC — single-digit month *and* day, which is the
+    // only case that can actually fail for padding. The date above has two
+    // digits in both components, so an implementation emitting `2023-1-5`
+    // would pass it, and this test's name would be a claim nothing checked.
+    #expect(
+        ExportFilename.forDate(Date(timeIntervalSince1970: 1_672_920_000), timeZone: utc)
+            == "steno-export-2023-01-05.json")
 }
 
 @Test("the date is the user's local day, not UTC's")

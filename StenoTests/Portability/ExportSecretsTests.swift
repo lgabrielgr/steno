@@ -65,21 +65,47 @@ func theExportContainsNoCredentials() throws {
 @MainActor
 @Test("§10.3: the export carries no UserDefaults-backed setting — O-9")
 func settingsAreNotExported() throws {
-    let suite = try #require(UserDefaults(suiteName: "steno.export.o9.tests"))
-    defer { UserDefaults.standard.removeSuite(named: "steno.export.o9.tests") }
+    let suiteName = "steno.export.o9.tests"
+    let suite = try #require(UserDefaults(suiteName: suiteName))
+    defer { UserDefaults.standard.removeSuite(named: suiteName) }
     let settings = AppSettings(defaults: suite)
+
+    // **Sentinels, not arbitrary values.** Asserting only that the two literal
+    // key names are absent proves very little: an export that serialized the
+    // same settings under different keys, or in another representation, would
+    // pass. These two values are distinctive enough that their presence
+    // anywhere in the file is unambiguous.
+    let sentinelProjectID = try #require(
+        UUID(uuidString: "DEADBEEF-0000-4000-8000-00000000FEED"))
+    settings.defaultProjectID = sentinelProjectID
     settings.hotkeyChord = HotkeyChord.default
-    settings.defaultProjectID = UUID()
+    let encodedChord = try ExportJSON.text(of: try JSONEncoder().encode(HotkeyChord.default))
 
     let fixture = try ExportFixture()
     try fixture.realistic()
-    let text = try ExportJSON.text(of: try fixture.encoder().encode())
+    let data = try fixture.encoder().encode()
+    let text = try ExportJSON.text(of: data)
 
     // O-9, decided no: a defaultProjectID can name a project the target machine
     // does not have, and a chord free on one Mac may collide on another. §10's
     // export carries domain data only.
+    #expect(!text.contains(sentinelProjectID.uuidString))
+    #expect(!text.contains(encodedChord))
     #expect(!text.contains("hotkeyChord"))
     #expect(!text.contains("defaultProjectID"))
     #expect(!text.contains(AppSettings.hotkeyChordKey))
     #expect(!text.contains(AppSettings.defaultProjectIDKey))
+
+    // The structural half, which is what forecloses "exported under some other
+    // name": the envelope has exactly nine keys, so a settings array has
+    // nowhere to appear. Mutation-tested by adding a tenth.
+    #expect(try ExportJSON.topLevelKeys(in: data).count == 9)
+
+    // **What this test cannot prove, stated rather than implied.** The
+    // sentinels are written to a scratch suite, because §9.4 forbids a headless
+    // test from writing the developer's real preferences — so an encoder that
+    // read `UserDefaults.standard` directly would never see them and would pass
+    // here. What actually forecloses that is the type: `ExportEncoder.init`
+    // takes no `AppSettings` and the file imports no `UserDefaults`, which the
+    // compiler enforces and no test can. This asserts the observable half.
 }

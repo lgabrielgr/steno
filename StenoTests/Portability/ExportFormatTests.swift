@@ -96,16 +96,36 @@ func aMalformedTimestampIsRejected() {
     }
 }
 
-@Test("the user agent falls back rather than trapping on a bundle with no version")
-func theUserAgentFallsBack() {
-    // `Bundle(for:)` here is the test bundle, which has no
-    // CFBundleShortVersionString. Reading `Bundle.main` inline instead of
-    // taking a parameter would put the xctest runner's version into every
-    // envelope a test asserts on — and the assertion would pass anyway.
-    let agent = ExportDocument.userAgent(bundle: Bundle(for: BundleMarker.self))
+@Test("the user agent carries the bundle's version, or says unknown")
+func theUserAgentReportsTheVersion() throws {
+    // Both branches are exercised against real bundles, and the versioned one
+    // is fabricated for the purpose. Asserting only a prefix and a suffix —
+    // which is what this test did first — passes for an implementation that
+    // never reads the bundle at all, so it proved neither half of the
+    // behaviour it is named for.
+    let root = URL(fileURLWithPath: NSTemporaryDirectory())
+        .appendingPathComponent("steno-useragent-\(UUID().uuidString).bundle")
+    try FileManager.default.createDirectory(
+        at: root.appendingPathComponent("Contents"), withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: root) }
+    try PropertyListSerialization
+        .data(
+            fromPropertyList: [
+                "CFBundleShortVersionString": "4.2.1",
+                "CFBundleIdentifier": "com.example.steno.probe",
+            ], format: .xml, options: 0
+        )
+        .write(to: root.appendingPathComponent("Contents/Info.plist"))
 
-    #expect(agent.hasPrefix("steno/"))
-    #expect(agent.hasSuffix(" (macOS)"))
+    #expect(
+        ExportDocument.userAgent(bundle: try #require(Bundle(url: root)))
+            == "steno/4.2.1 (macOS)")
+
+    // The unhosted test bundle carries no CFBundleShortVersionString (D-010),
+    // so it is the real fallback case rather than a simulated one.
+    #expect(
+        ExportDocument.userAgent(bundle: Bundle(for: BundleMarker.self))
+            == "steno/unknown (macOS)")
 }
 
 /// A type whose only job is to name the test bundle for `Bundle(for:)`.
