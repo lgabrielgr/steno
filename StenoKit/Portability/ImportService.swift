@@ -74,7 +74,7 @@ extension ImportService {
         guard !plan.isEmpty else { return }
 
         // The plan describes a diff against a store that may since have moved.
-        guard try localStore().hashValue == plan.sourceFingerprint else {
+        guard try localStore() == plan.source else {
             throw ImportError.storeChanged
         }
 

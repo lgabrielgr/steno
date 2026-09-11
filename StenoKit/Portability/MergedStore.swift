@@ -5,7 +5,7 @@ import Foundation
 /// Not `ExportDocument`: `exportedAt`, `exportedBy` and
 /// `includesCachedExternalData` are facts about a *file*, and merging two of
 /// them yields nonsense. This is the shape a merge operates on.
-public struct MergedStore: Hashable, Sendable {
+public struct MergedStore: Equatable, Sendable {
     public let projects: [ExportedProject]
     public let tasks: [ExportedTask]
     public let events: [ExportedEvent]

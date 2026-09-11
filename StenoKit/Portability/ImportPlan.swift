@@ -36,7 +36,7 @@ public struct ImportPlan: Equatable, Sendable {
     public let merged: MergedStore
     public let writes: Writes
 
-    /// A fingerprint of the local store this plan was computed against.
+    /// The local store this plan was computed against.
     ///
     /// `apply` refuses a plan whose store has moved underneath it. The preview
     /// is the user's only chance to inspect before committing (§10.4), and a
@@ -44,10 +44,15 @@ public struct ImportPlan: Equatable, Sendable {
     /// than what happens — it would also overwrite the newer rows with the
     /// merge's older resolution of them.
     ///
-    /// **In-process only.** Swift's hashing is seeded per process, so this value
-    /// is meaningless across a relaunch. That is all it needs to be: a plan does
-    /// not outlive the window that made it. Never persist it.
-    public let sourceFingerprint: Int
+    /// **The whole snapshot, not a hash of it.** This was an `Int` fingerprint
+    /// until review of PR #29 pointed out that `Hashable` promises only that
+    /// equal values hash equally — two different snapshots may collide, and the
+    /// consequence of a collision here is a stale plan applied over newer data.
+    /// A 64-bit collision is vanishingly unlikely and that is not a good enough
+    /// reason to reason probabilistically about whether the user's edits
+    /// survive. The plan already carries `merged`, so this roughly doubles a
+    /// value that lives only as long as the preview is open.
+    public let source: MergedStore
 
     public let projects: Counts
     public let tasks: Counts
@@ -94,7 +99,7 @@ extension ImportPlan {
             writes: Writes(
                 projects: projects.writes, tasks: tasks.writes, events: events.writes,
                 sourceRefs: refs.writes, reports: reports.writes),
-            sourceFingerprint: local.hashValue,
+            source: local,
             projects: projects.counts,
             tasks: tasks.counts,
             events: events.counts,
@@ -144,7 +149,7 @@ extension ImportPlan {
 /// Declared here rather than on the records themselves: §10.2's DTOs mirror
 /// their §3 field tables top to bottom, and a protocol conformance in that file
 /// would be the first thing in it that is not a field.
-protocol ExportRecord: Hashable {
+protocol ExportRecord: Equatable {
     var id: UUID { get }
 }
 

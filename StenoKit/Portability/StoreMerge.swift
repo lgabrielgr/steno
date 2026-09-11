@@ -142,7 +142,18 @@ extension StoreMerge {
     private static func mergeRefs(
         _ local: [ExportedSourceRef], _ incoming: [ExportedSourceRef]
     ) throws -> [ExportedSourceRef] {
-        try union(
+        // **Validated for every ref on both sides, before the union.** This ran
+        // only inside the collision resolver until review of PR #29, so a
+        // malformed ref present on just one side passed straight through — and
+        // the comment below claimed this layer guarded callers that do not come
+        // via `ImportReader`, which it did not. `merge` could then return a
+        // record carrying `cachedSummary` with no `lastFetchedAt`, which
+        // `ImportService.applyRefs` cannot apply: it records a fetch only when it
+        // has a date, so the summary was dropped and the plan described something
+        // that did not happen.
+        for ref in local + incoming { try validateCachePair(of: ref) }
+
+        return try union(
             local, incoming, id: { $0.id }, kind: "source reference",
             resolve: { mine, theirs in
                 guard mine.taskID == theirs.taskID, mine.kind == theirs.kind,
@@ -176,19 +187,6 @@ extension StoreMerge {
         case (.some(let mineAt), .some(let theirsAt)) where mineAt > theirsAt:
             return (mine.lastFetchedAt, mine.cachedSummary)
         case (nil, nil), (.some, .some):
-            // A summary with no fetch time is not a state `recordFetch` can
-            // produce, and `ImportService` cannot apply one — it records a fetch
-            // only when it has a date to record it at, so the plan would promise
-            // a summary that apply silently drops. `ImportReader` refuses such a
-            // file first; this is the guard for callers that do not come through
-            // the reader, since `merge` takes values and does not know where they
-            // came from.
-            for ref in [mine, theirs] where ref.cachedSummary != nil && ref.lastFetchedAt == nil {
-                throw ImportError.malformed(
-                    detail:
-                        "The reference to \(ref.identifier) has a cached summary but no fetch "
-                        + "time; §10.2 writes those two together or not at all.")
-            }
             // A tie on the governing clock. The summaries must therefore agree,
             // and validating that is what makes "local wins" commutative rather
             // than merely convenient.
@@ -238,6 +236,24 @@ extension StoreMerge {
         for report in store.reports where !projectIDs.contains(report.projectID) {
             throw ImportError.danglingReference(
                 detail: "A stand-up report belongs to a project that is missing.")
+        }
+    }
+}
+
+extension StoreMerge {
+    /// §10.2 writes `lastFetchedAt` and `cachedSummary` together or omits both,
+    /// and `SourceRef.recordFetch` cannot produce any other state.
+    ///
+    /// `ImportReader` refuses such a file first. This is the guard for callers
+    /// that do not come through the reader — `merge` takes values and does not
+    /// know where they came from — and it runs over **every** ref on both sides,
+    /// not only refs that collide on an id.
+    static func validateCachePair(of ref: ExportedSourceRef) throws {
+        guard ref.cachedSummary == nil || ref.lastFetchedAt != nil else {
+            throw ImportError.malformed(
+                detail:
+                    "The reference to \(ref.identifier) has a cached summary but no fetch time; "
+                    + "§10.2 writes those two together or not at all.")
         }
     }
 }

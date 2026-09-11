@@ -16,7 +16,7 @@ import Foundation
 /// Optionals rely on synthesized `encodeIfPresent`, so an absent value omits
 /// its key rather than writing `null`. That is also how §10.2's
 /// `includesCachedExternalData` toggle works; see `ExportedSourceRef`.
-public struct ExportedProject: Codable, Hashable, Sendable {
+public struct ExportedProject: Codable, Equatable, Sendable {
     public let id: UUID
     public let name: String
     public let colorHex: String
@@ -32,7 +32,7 @@ public struct ExportedProject: Codable, Hashable, Sendable {
 /// §3.2. Carries no `sourceRefs`: §3.4 makes `SourceRef.taskID` the
 /// authoritative link and gives refs their own top-level array, and a file
 /// holding both could disagree with itself — leaving M2.5-02 to pick a winner.
-public struct ExportedTask: Codable, Hashable, Sendable {
+public struct ExportedTask: Codable, Equatable, Sendable {
     public let id: UUID
     public let title: String
     public let projectID: UUID
@@ -65,7 +65,7 @@ public struct ExportedTask: Codable, Hashable, Sendable {
 /// the original bytes — key order and whitespace are not preserved — so the
 /// field that survives the trip least well would be the one meant to be
 /// readable. §10.2 records the trade rather than pretending it away (D-097).
-public struct ExportedEvent: Codable, Hashable, Sendable {
+public struct ExportedEvent: Codable, Equatable, Sendable {
     public let id: UUID
     public let taskID: UUID
     public let timestamp: Date
@@ -77,7 +77,7 @@ public struct ExportedEvent: Codable, Hashable, Sendable {
 
 /// §3.4. The `task` relationship is never serialized — it is the same fact as
 /// `taskID`, expressed as a cycle.
-public struct ExportedSourceRef: Codable, Hashable, Sendable {
+public struct ExportedSourceRef: Codable, Equatable, Sendable {
     public let id: UUID
     public let taskID: UUID
     public let kind: SourceRefKind
@@ -94,7 +94,7 @@ public struct ExportedSourceRef: Codable, Hashable, Sendable {
 }
 
 /// §3.5, `isUndone` included, for `ExportedEvent.isRedacted`'s reason.
-public struct ExportedReport: Codable, Hashable, Sendable {
+public struct ExportedReport: Codable, Equatable, Sendable {
     public let id: UUID
     public let projectID: UUID
     public let generatedAt: Date

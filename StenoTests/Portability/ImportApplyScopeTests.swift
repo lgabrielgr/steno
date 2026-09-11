@@ -201,6 +201,18 @@ func theMergeAlsoRefusesAHalfCachePair() throws {
 
     #expect(throws: ImportError.self) { try StoreMerge.merge(local: clean, incoming: halfPair) }
     #expect(throws: ImportError.self) { try StoreMerge.merge(local: halfPair, incoming: clean) }
+
+    // **And when it exists on one side only.** The validation used to live inside
+    // the collision resolver, which never runs for a ref the other side does not
+    // have — so this case walked straight through while the comment above the
+    // guard claimed otherwise. Raised in review of #29.
+    let unmatched = try MergeFixture.store(
+        projects: [project], tasks: [task],
+        refs: [MergeFixture.ref(9, cachedSummary: "a summary with no fetch time")])
+    let noRefs = try MergeFixture.store(projects: [project], tasks: [task])
+
+    #expect(throws: ImportError.self) { try StoreMerge.merge(local: noRefs, incoming: unmatched) }
+    #expect(throws: ImportError.self) { try StoreMerge.merge(local: unmatched, incoming: noRefs) }
 }
 
 @Test("a duplicate id in any record type is refused, not silently collapsed")
