@@ -183,3 +183,22 @@ extension String {
         return decoded?.first ?? .distantPast
     }
 }
+
+@Test("the merge refuses a half cache pair, not only the reader")
+func theMergeAlsoRefusesAHalfCachePair() throws {
+    // `ImportReader` rejects such a file, but `StoreMerge.merge` takes values
+    // and does not know where they came from. Without this the plan would carry
+    // a summary that `applyRefs` silently drops, because it records a fetch only
+    // when it has a date to record it at — the plan promising something apply
+    // does not do.
+    let project = MergeFixture.project(1)
+    let task = MergeFixture.task(2)
+    let clean = try MergeFixture.store(
+        projects: [project], tasks: [task], refs: [MergeFixture.ref(7)])
+    let halfPair = try MergeFixture.store(
+        projects: [project], tasks: [task],
+        refs: [MergeFixture.ref(7, cachedSummary: "a summary with no fetch time")])
+
+    #expect(throws: ImportError.self) { try StoreMerge.merge(local: clean, incoming: halfPair) }
+    #expect(throws: ImportError.self) { try StoreMerge.merge(local: halfPair, incoming: clean) }
+}

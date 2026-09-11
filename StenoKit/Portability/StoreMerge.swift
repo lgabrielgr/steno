@@ -169,6 +169,19 @@ extension StoreMerge {
         case (.some(let mineAt), .some(let theirsAt)) where mineAt > theirsAt:
             return (mine.lastFetchedAt, mine.cachedSummary)
         case (nil, nil), (.some, .some):
+            // A summary with no fetch time is not a state `recordFetch` can
+            // produce, and `ImportService` cannot apply one — it records a fetch
+            // only when it has a date to record it at, so the plan would promise
+            // a summary that apply silently drops. `ImportReader` refuses such a
+            // file first; this is the guard for callers that do not come through
+            // the reader, since `merge` takes values and does not know where they
+            // came from.
+            for ref in [mine, theirs] where ref.cachedSummary != nil && ref.lastFetchedAt == nil {
+                throw ImportError.malformed(
+                    detail:
+                        "The reference to \(ref.identifier) has a cached summary but no fetch "
+                        + "time; §10.2 writes those two together or not at all.")
+            }
             // A tie on the governing clock. The summaries must therefore agree,
             // and validating that is what makes "local wins" commutative rather
             // than merely convenient.
