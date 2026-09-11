@@ -1,0 +1,644 @@
+# M2.5-02 — Import & Merge by UUID: design
+
+**Task:** [`docs/tasks/M2.5-02-import-merge.md`](../../tasks/M2.5-02-import-merge.md)
+**Requirements:** §10.1 (merge rules), §10.2 (format), §10.4 (single transaction), §10.6 (test
+requirements), §3 (field tables), §3.3 (append-only)
+**Branch:** `feat/import-merge`
+**Date:** 2026-09-11
+
+The second half of the only mechanism by which Steno will ever move between machines (§10, D1).
+M2.5-01 produced bytes; this task reads them back and decides, for every record that exists on
+both sides, which version survives.
+
+The task file calls this the hardest task in M2.5 and it is right, but not for the reason it
+gives. The merge rules themselves are four table rows. What is hard is that three of those rows
+compare timestamps, and **the wire format they compare is not a fixed point** — a fact measured
+during this design and recorded in §2, which invalidates the idempotency criterion before any
+merge code is written.
+
+This PR produces a merge and applies it. It opens no panel, parses no argv, and cannot replace a
+store. Preview UI and Replace mode are M2.5-03; the CLI is M2.5-04.
+
+---
+
+## 1. What arrives already decided, so this task does not relitigate it
+
+| Constraint | Source | Consequence here |
+|---|---|---|
+| `ExportDocument` is `Codable` in both directions, and deliberately | M2.5-01, `ExportDocument.swift` | Import decodes these exact types. There is one declaration of the wire format; this task adds no second one |
+| Every exported array carries a total order ending in the record id | D-092 | The merge emits arrays in that same order, which is what makes `==` a fair commutativity assertion. The comparators move to a shared, non-isolated home — §10 |
+| `TaskItem.status` is a cache; the newest `statusChanged` event is the truth | §10.1, ARCHITECTURE §1 | Derived, never copied — §6.1 |
+| `Event` exposes no mutator but `redact()`; `StandupReport` none but `markUndone()` | §3.3, M0-03 | The applier physically cannot mutate an event any other way, which is how §3.3's "no exceptions" survives contact with an import path — §9 |
+| `SourceRef.taskID` is the authoritative link; `task` is the relationship | §3.4, D-016 | The merge keys on `taskID`; the applier must still wire `task` on insert, or the ref is invisible in the UI — §9 |
+| `AppSettings` is not exported | D-093 | Nothing in the file can install a dangling default-project id, so import has no settings validation path |
+| Auto-export defaults ON and writes daily | §10.5, M2.5-05 | Export → import → export byte-stability is a product requirement, not an aesthetic one. §2 is therefore in scope here |
+| Redaction and undo are the two mutable flags, with no rule | §10.1, **O-8** | Closed by this task — §5.3 |
+
+---
+
+## 2. The wire format is not a fixed point, and that has to be fixed first
+
+### What was measured
+
+`ExportDocument.encoder()` formats dates through `Date.ISO8601FormatStyle(includingFractionalSeconds: true)`.
+D-091 records that this **truncates rather than rounds**, and that a `Date → string → Date`
+round-trip is therefore exact only for eighths of a second. That is true, and it is not the whole
+story. The property this task needs is the other direction — `string → Date → string` — and it
+does not hold:
+
+```
+parse("2023-11-14T22:13:20.481Z") → 1700000000.4809999…  → formats as "…20.480Z"
+```
+
+Measured over every millisecond value in a second, at four epochs spanning 2020–2033:
+
+| Property | Result |
+|---|---|
+| `string → Date → string` unstable | **496 / 1000** at every epoch tested |
+| clock-shaped `Date → string → Date → string` unstable | **9919 / 20000** |
+| hops before a timestamp stops moving | 504 values: 0 · 392 values: 1 · 104 values: 2 |
+| worst total drift | **2.000 ms**, always downward |
+
+So the drift is bounded — a timestamp walks backwards at most 2 ms across at most two
+export/import hops and then sticks. It is not an unbounded decay. But bounded is not zero, and
+two consequences follow that this task cannot design around:
+
+1. **The second import is not a no-op.** Import file `F` into an empty store; the store now holds
+   the parsed dates. Snapshot that store to compare against `F` on the second import and roughly
+   half the timestamps come back one millisecond lower than `F` says. The merge sees differences,
+   writes them, and reports a non-empty plan. That is the idempotency criterion, failing.
+2. **Export → import → export is not byte-stable**, which is precisely what §10.2's diffability
+   promise and M2.5-05's auto-export history depend on. D-090 went to some trouble to make two
+   exports of an unchanged store byte-identical; a round trip through a file undoes it.
+
+### The fix
+
+Round to nearest rather than truncating, by adding half a millisecond before formatting:
+
+```swift
+/// The single implementation of "what the file says this instant is".
+///
+/// **Rounds to the nearest millisecond**; the half-millisecond is what makes
+/// that happen, since the formatter itself truncates. Measured, not assumed —
+/// see §2 of this design and D-101.
+static func wireString(_ date: Date) -> String {
+    date.addingTimeInterval(0.0005).formatted(fractionalSeconds)
+}
+```
+
+Measured with the same harness:
+
+| Property | truncate (current) | round (proposed) |
+|---|---|---|
+| `string → Date → string` unstable | 496 / 1000 | **0 / 4000** across four epochs |
+| clock-shaped `Date → string → Date → string` unstable | 9919 / 20000 | **0 / 50000** |
+| worst round-trip error | 1 ms, always downward | **0.5002 ms**, either direction |
+| eighths exact | yes | yes — all eight verified |
+| `…20.99999` emits | `…20.999` | `…21.000` |
+
+`.5001` still emits `.500`, so M2.5-01's ordering test keeps the premise it was written on: two
+dates distinguishable in memory and identical on the wire — measured, because the premise is the
+only reason that test can fail. `.0625` still emits `.062`, so D-091's example survives unchanged:
+the added half-millisecond lands just below `.063` at this magnitude, which is a reminder that the
+behaviour at an exact half-millisecond input is deterministic but not predictable by arithmetic.
+Stability is the property that was measured directly; this one was checked rather than reasoned
+about, after the reasoned version turned out to be wrong.
+
+**`schemaVersion` stays 1.** The grammar is unchanged and every file already written still parses
+— the decoder is not touched. Only the last emitted digit moves, for about half of timestamps.
+
+**Both call sites must go through `wireString`.** `encoder()`'s date strategy and D-092's sort key
+currently each call `formatted(fractionalSeconds)` independently. D-092 records what happened the
+last time truncation had two implementations: they disagreed at `.999` and the disagreement was
+found only by a test written to compare them. There is one implementation after this change, and
+the rounding makes the `.999` boundary live again — `…20.9995` now carries to `…21.000` — so a
+second implementation would be found the same way, later.
+
+### Why not work around it in the merge
+
+The alternative was to iterate the local snapshot's round-trip to a fixed point (never more than
+two passes, measured above). That makes import idempotent without touching M2.5-01, and leaves
+export → import → export producing different bytes — so §10.2's diffability and M2.5-05's backup
+history keep the defect, and the workaround lives two layers away from the cause. A tolerance-based
+comparison — "within 1 ms is equal" — was also rejected: equality stops being transitive, and
+"later `modifiedAt` wins" becomes ambiguous exactly where two machines disagree, which is the only
+case that matters.
+
+---
+
+## 3. Architecture
+
+Six new files in `StenoKit/Portability/`, alongside M2.5-01's four, plus `ExportOrdering.swift`
+extracted from `ExportEncoder` (§5.1):
+
+| File | Responsibility | Isolation |
+|---|---|---|
+| `ImportReader.swift` | bytes → `ExportDocument`; the `schemaVersion` gate | `nonisolated` |
+| `StoreMerge.swift` | `MergedStore` and the pure merge — every §10.1 rule | `nonisolated` |
+| `LastStandupClock.swift` | the `lastStandupAt` derivation, shared with the test that pins it against the real services | `nonisolated` |
+| `ImportPlan.swift` | the merged store plus §10.4's counts | `nonisolated` |
+| `ImportError.swift` | the error taxonomy and its user-facing messages | `nonisolated` |
+| `ImportService.swift` | the `@MainActor` facade: `plan(_:)` and `apply(_:)` | `@MainActor` |
+
+Dependency direction is one-way: `ImportService` → `ImportPlan` → `StoreMerge` → `ExportRecords`.
+Nothing in `Portability/` learns about a view, and **nothing below `ImportService` learns about
+SwiftData.** That is what lets §10.6's three algebraic properties be asserted over values rather
+than over two live stores.
+
+### The public surface M2.5-03 and M2.5-04 consume
+
+```swift
+@MainActor
+public struct ImportService {
+    public init(
+        context: ModelContext,
+        save: @escaping (ModelContext) throws -> Void = { try $0.save() })
+
+    /// Decode, validate, merge, diff. Reads the store; writes nothing.
+    public func plan(_ data: Data) throws -> ImportPlan
+
+    /// Apply exactly what `plan` described, in one transaction.
+    public func apply(_ plan: ImportPlan) throws
+}
+```
+
+Two calls, and cancel is simply not making the second one. **`ImportPlan` carries the merged store
+it was computed from**, so `apply` writes what the preview displayed rather than recomputing it —
+which is how M2.5-03's "the preview's counts match what the import actually does" holds by
+construction instead of by two code paths agreeing. A caller that lets time pass between the two
+should call `plan` again first; single-user, single-window usage makes that theoretical, and the
+note belongs in the doc comment rather than in a locking scheme.
+
+---
+
+## 4. `ImportReader`: bytes to a document
+
+```swift
+public enum ImportReader {
+    public static func read(_ data: Data) throws -> ExportDocument
+}
+```
+
+Three steps, in this order, because the order is what produces a useful message:
+
+1. Decode the envelope's `schemaVersion` alone, through a minimal `struct VersionProbe: Decodable`.
+   Failure here is `ImportError.malformed` — this is where truncated files land, and a file cut in
+   half is not "an unknown version".
+2. `schemaVersion == ExportDocument.currentSchemaVersion`, else
+   `ImportError.unsupportedSchemaVersion(found:supported:)`. **Checked before the full decode**, so
+   a version-2 file with fields this build cannot represent is refused by version rather than by a
+   confusing field-level decode error. §10.2 asks for a clear message, and "unknown key
+   `integrations`" is not one.
+3. Decode the whole `ExportDocument` through `ExportDocument.decoder()`. Failures — a bad enum
+   case, an unparseable timestamp, a missing key — are `ImportError.malformed(detail:)` carrying
+   the `DecodingError`'s path so the user can find the line.
+
+Nothing here touches a `ModelContext`. A malformed file is rejected before the store is opened for
+writing at all, which is the strongest form of §10.4's "a malformed file leaves the store
+untouched": not a rollback, an absence of any write.
+
+---
+
+## 5. `StoreMerge`: the pure merge
+
+### 5.1 `MergedStore` and canonical order
+
+```swift
+public struct MergedStore: Equatable, Sendable {
+    public let projects: [ExportedProject]
+    public let tasks: [ExportedTask]
+    public let events: [ExportedEvent]
+    public let sourceRefs: [ExportedSourceRef]
+    public let reports: [ExportedReport]
+}
+
+extension MergedStore {
+    public init(_ document: ExportDocument)
+}
+
+public enum StoreMerge {
+    /// Throws only the two value-level validations of §7 — closure and
+    /// consistency. Every §10.1 rule itself is total.
+    public static func merge(local: MergedStore, incoming: MergedStore) throws -> MergedStore
+}
+```
+
+The five arrays, not `ExportDocument`: `exportedAt`, `exportedBy` and
+`includesCachedExternalData` are facts about a *file*, and merging two of them yields nonsense.
+
+**Output arrays are emitted in D-092's canonical order.** That is what makes `merge(A,B) ==
+merge(B,A)` a fair assertion rather than an array-order coincidence. D-092's comparators currently
+live in `extension ExportEncoder`, which is `@MainActor`, so they are main-actor-isolated and
+unusable from a `nonisolated` merge. They move to a shared `ExportOrdering` enum that both
+`ExportEncoder` and `StoreMerge` call — one implementation of the order, for the reason D-092
+already records about having one implementation of truncation.
+
+### 5.2 The local snapshot, and the two ways to get it wrong
+
+```swift
+extension MergedStore {
+    /// The local store, expressed exactly as a file would express it.
+    static func local(context: ModelContext) throws -> MergedStore {
+        let bytes = try ExportEncoder(
+            context: context,
+            includesCachedExternalData: true,
+            exportedBy: "steno/import (macOS)"
+        ).encode()
+        return MergedStore(try ExportDocument.decoder().decode(ExportDocument.self, from: bytes))
+    }
+}
+```
+
+**`includesCachedExternalData: true` is mandatory, and it is a one-word data-loss bug if it is
+not.** A cache-free local snapshot presents every local `cachedSummary` and `lastFetchedAt` as
+`nil`, and §10.1's "`nil` loses to any value" would then hand every ref's cache to the incoming
+file. The doc comment says so and a test asserts it, because the default on that parameter is
+`false` and the compiler will never ask.
+
+**The round trip through the encoder's own bytes is the normalization.** Both sides of the merge
+must be at wire precision or §2's asymmetry reappears in a subtler form: the local `Date` is
+full-precision and the incoming one was rounded, so the local one wins every comparison it should
+have tied. Normalizing per field — mapping each `Date` through `wireString` and back — is cheaper
+and exactly equivalent now that `wireString` is a single function. It is rejected anyway: there
+are twenty-odd date fields across five record types, a missed one is silent, and D-095 records
+what happens to allowlists that depend on someone remembering a field. Encoding the whole document
+cannot miss one by construction. The cost is a pretty-printed intermediate of the whole store,
+once per import, on a path that is not §1.1's.
+
+**`exportedBy` is passed explicitly** rather than defaulted, for D-010's reason: the test bundle is
+unhosted, so `Bundle.main` there is the xctest runner. The value is discarded, and passing it is
+one character cheaper than explaining why it does not matter.
+
+### 5.3 The rules
+
+Keyed by `id` within each type. Union in both directions; **no record is ever removed.**
+
+| Record | Rule |
+|---|---|
+| `Event` | Insert if absent. Present on both sides: the only permitted write is `isRedacted = local or incoming`. §3.3 admits no other mutation and the model exposes none |
+| `StandupReport` | Insert if absent. Present on both sides: `isUndone = local or incoming` |
+| `SourceRef` | Insert if absent — **including when an existing ref shares its §3.4 dedup key**. Present on both sides: later `lastFetchedAt` wins and carries `cachedSummary` with it; `nil` loses to any value; the two move as a pair, exactly as `recordFetch` moves them |
+| `TaskItem` | `status`, `statusChangedAt` and `completedAt` derive together — §6.1. `createdAt` is immutable and validated, not merged. Every remaining field: later `modifiedAt` wins, **as a whole record** |
+| `Project` | `lastStandupAt` derives — §6.2. Every remaining field: later `modifiedAt` wins, as a whole record |
+
+**Both booleans are sticky-true, closing O-8.** Neither model carries `modifiedAt` and neither flag
+can go back to false anywhere in the product: `Event.redact()` and `StandupReport.markUndone()`
+only ever assign `true`, and nothing un-assigns. A grow-only boolean is commutative, idempotent and
+order-free without any clock, and it fails in the safe direction — a redaction made on either
+machine survives the trip, so text the user redacted can never reappear in a stand-up on the other.
+The cost is that a future un-redact would not propagate, so §11 pins the premise with a test over
+the models rather than a comment: a day someone adds `unredact()`, a test fails.
+
+**"Later `modifiedAt` wins" applies to the whole record, not field by field.** §10.1 names only
+`TaskItem.title` and `Project.name`, but there is exactly one `modifiedAt` per record and every
+mutator that touches a governed field stamps it — `rename`, `move`, `setArchived`, `setSortOrder`,
+`setCadence`, `setColorHex`, `setJiraProjectKeys`, `setStaleThresholdDays`. Resolving those fields
+independently would need clocks the models do not have. `setStatus` deliberately does *not* stamp
+`modifiedAt`, which is what makes the status group separable in the first place.
+
+**Ties on the governing clock resolve to local, and the premise is validated rather than assumed.**
+If `modifiedAt` ties at wire precision but a governed field differs, the two records are a
+divergent lineage under one id and the file is refused as `inconsistentRecord` — §7. So the "local
+wins" branch is reachable only when the two records are already equal, which is what makes it
+commutative. The same holds for `SourceRef` when `lastFetchedAt` ties.
+
+**Duplicate refs are kept, per §3.4's other identity.** Two machines that each extract `PAY-421`
+onto a task both already have produce two rows with different ids and the same
+`(taskID, kind, identifier)`. Collapsing them would be commutative too, but it would make import
+the only non-Replace path in the product that deletes a row, and "import never deletes, except
+duplicate refs" is the kind of documented exception that becomes the next task's bug. Keeping both
+satisfies every §10.6 property — `merge(A,B)` and `merge(B,A)` both yield `{X, Y}` — at the price
+of a duplicate chip in the task detail pane until something reconciles it. **O-10 already owns
+§3.4 ref reconciliation in M5** and is extended to name this case, rather than opening a competing
+rule here.
+
+### 5.4 Where commutativity genuinely does not hold, and why that is correct
+
+§10.6's commutativity property is stated over exports taken with **the same
+`includesCachedExternalData` setting**. With the default `false`, the file does not carry
+`cachedSummary` or `lastFetchedAt` at all, so "nil loses to any value" preserves whichever machine
+happens to be the target — and A→B and B→A legitimately differ in those two fields. That is not a
+merge defect: §10.2 declares cached external data excluded and re-fetchable, so a cache-free file
+is by definition not a complete description of its store. The design doc states it; the property
+tests assert commutativity over cache-carrying fixtures and assert the cache-free asymmetry
+explicitly, so nobody later reads the gap as a bug.
+
+---
+
+## 6. The two derivations
+
+### 6.1 `status`, `statusChangedAt` and `completedAt`
+
+All three come from one place — the newest `statusChanged` event in the **union** of both event
+sets for that task — so they cannot disagree with each other:
+
+1. Collect union events where `kind == .statusChanged` and `taskID` matches.
+2. Take the newest by `(wireString(timestamp), id.uuidString)` — D-092's total order, reused, so a
+   tie cannot reorder.
+3. Parse its body through `StatusTransition.init?(eventBody:)` and take `.into`.
+4. `statusChangedAt` = that event's timestamp. `completedAt` = that timestamp when the derived
+   status is `.done`, otherwise `nil`.
+
+Step 4 reproduces `TaskItem.setStatus` exactly, including a task that went done → todo → done,
+where `completedAt` must be the *latest* completion and not the first.
+
+**Redacted `statusChanged` events still count.** §3.3 makes `isRedacted` a visibility flag —
+"hidden from summaries; row retained" — and a status cache is not a summary. Excluding them would
+let a redaction silently revert a task's status, which is a mutation of the log by the back door.
+Nothing in the product redacts a `statusChanged` event today; the rule is stated so that the day
+something does, the behaviour is the one that was chosen rather than the one that fell out.
+
+**Parsing the body is the only option the data model offers.** `StatusService` writes
+`StatusTransition.eventBody` — `"IN-PROGRESS → BLOCKED"`, built from `Status.displayName` — with
+`payload` nil. There is no structured form in the log and no way to add one retroactively to events
+already written. So:
+
+- `StatusTransition` gains `init?(eventBody:)`, living beside `eventBody` so one type owns both
+  directions of the same string, with a test that every `Status` survives `body → Status → body`.
+- `Status.displayName` **moves out of `StenoKit/Features/MainWindow/Status+Display.swift`** into
+  `StenoKit/Status/`, leaving `menuOrder` behind in a file renamed to match. It stopped being UI
+  text the moment a merge reads it back: a rename in a view-adjacent file would otherwise break
+  every import on every machine, silently, and the only symptom would be a status that reverts.
+  Its doc comment now says it is a persisted format.
+
+**Two fallbacks, neither of them an error:**
+
+- No `statusChanged` event anywhere in the union — the task never transitioned, or its events
+  predate the rule. Later `statusChangedAt` wins between the two records, which is the field's own
+  clock, and is symmetric.
+- The newest body does not parse — a hand-edited file, or a `Status` case a newer Steno wrote. Same
+  fallback, and the event id is recorded in `ImportPlan.unparsedStatusBodies` so M2.5-03 can show
+  it. §10.2 chose JSON partly so a person could edit the file; refusing the import over one
+  mistyped arrow would be a poor trade, and swallowing it silently would be worse.
+
+### 6.2 `lastStandupAt`
+
+```
+lastStandupAt(project) = max over that project's reports in the union of
+                             (report.isUndone ? report.windowStart : report.windowEnd)
+                         nil when the project has no reports
+```
+
+**This replaces §10.1's "take the later timestamp", which M2-04 made unsafe.** §10.1 was written
+before undo existed. `StandupService.commit` sets `lastStandupAt = window.end`;
+`StandupUndoService.undo` moves it *backwards* to `report.windowStart` and stamps nothing. Take the
+later timestamp and an undo is defeated by any older export from the other machine: the report
+merges back marked undone (sticky), its `standupReported` events stay redacted (sticky), and the
+clock keeps the pre-undo value — so the window the user reclaimed is never reported again. That is
+the same class of failure §10.1's rule exists to prevent, pointing the other way.
+
+The derivation reproduces the live value on every path, traced:
+
+| Sequence | Live value | Derived |
+|---|---|---|
+| commit R1 (10→20) | 20 | max(20) = 20 |
+| commit R1, commit R2 (20→30) | 30 | max(20, 30) = 30 |
+| commit R1, undo R1 | 10 | max(10) = 10 |
+| commit R1, commit R2, undo R2 | 20 | max(20, 20) = 20 |
+| commit R1, undo R1, commit R2 (10→35) | 35 | max(10, 35) = 35 |
+| no reports | nil | nil |
+
+Note the third row: the derivation yields the frozen `windowStart` rather than the `nil` a naive
+"newest non-undone report" rule would give — which is the sliding-window loss D-067 and M2-04's
+step 5 went out of their way to avoid.
+
+It is also more faithful to §10.1's own stated principle than §10.1's table row is: *"any mutable
+field that can be recomputed from the log, should be."* A `StandupReport` is part of the log.
+
+**Applied to every project in the union**, including projects the incoming file does not mention.
+For those the report set is unchanged, so by the invariant the derivation is a no-op; if it is not,
+the local store was already inconsistent and this repairs it. Applying it selectively would mean a
+case analysis to prove commutativity; applying it uniformly needs none.
+
+**The invariant is tested, not asserted.** `LastStandupClock` exists as its own type precisely so a
+test can drive `StandupService.commit` and `StandupUndoService.undo` through all six sequences
+above against a real store and assert the derivation equals the live `project.lastStandupAt`. That
+is what stops the derivation drifting from the two services it models — a comment claiming they
+agree would be exactly the defect class this project keeps finding.
+
+---
+
+## 7. Validation, and the error taxonomy
+
+Every check runs on values, before a `ModelContext` is mutated. `ImportService.plan` either returns
+a plan or throws; `apply` is reached only with a validated plan, so the only failure left in flight
+is the save itself.
+
+| Order | Check | Error |
+|---|---|---|
+| 1 | Bytes decode as JSON, envelope readable | `.malformed(detail:)` — truncated files land here |
+| 2 | `schemaVersion` recognised | `.unsupportedSchemaVersion(found:supported:)` |
+| 3 | Full document decodes: dates, enums, required keys | `.malformed(detail:)` with the decoding path |
+| 4 | Referential closure over **file ∪ local store**: every `TaskItem.projectID`, `Event.taskID`, `SourceRef.taskID` and `StandupReport.projectID` resolves | `.danglingReference(detail:)` |
+| 5 | A record on both sides agrees on its immutable fields at wire precision, and on its governed fields when the governing clock ties | `.inconsistentRecord(detail:)` |
+| 6 | The save | `.saveFailed(underlying:)` |
+
+**Closure is checked against the union, not against the file alone** — that is what keeps §10.2's
+hand-editability promise. A genuine Steno export always has closure, since it is whole-store and
+nothing is ever deleted, so a file that lacks it is truncated or hand-trimmed. Trimming one project
+out of an export still imports cleanly on a machine that already has that project, and only a file
+that would actually leave a broken store is refused. The alternative — importing orphans — puts
+rows in the store that appear under no sidebar project and in no timeline: present, unreachable,
+and invisible in the preview counts.
+
+**The immutable fields, enumerated, so check 5 is not left to interpretation.** A field is
+immutable here when the model exposes no mutator that writes it: `Event.taskID`, `.timestamp`,
+`.kind`, `.body`, `.payload`; `StandupReport.projectID`, `.generatedAt`, `.windowStart`,
+`.windowEnd`, `.markdownBody`, `.wasAIGenerated`, `.modelUsed`; `SourceRef.taskID`, `.kind`,
+`.identifier`, `.url`; and `TaskItem.createdAt`. Every remaining field of every record is either
+governed by a clock (§5.3) or derived (§6), so the three categories partition the field tables
+exactly — which is the property the `Mirror` test in §11 checks, since a field added later belongs
+to none of them until someone says which.
+
+`ImportError` carries a user-facing `message: String`, so M2.5-03 renders it and M2.5-04 writes it
+to stderr without either surface inventing its own wording for the same failure.
+
+---
+
+## 8. `ImportPlan`
+
+```swift
+public struct ImportPlan: Equatable, Sendable {
+    public struct Counts: Equatable, Sendable {
+        public let inserted: Int
+        public let updated: Int
+        public let unchanged: Int
+    }
+
+    public let merged: MergedStore
+    public let projects: Counts
+    public let tasks: Counts
+    public let events: Counts
+    public let sourceRefs: Counts
+    public let reports: Counts
+
+    /// Tasks whose derived status differs from the local cache — §10.4's
+    /// "~ 4 tasks updated (status changed on the other machine)".
+    public let statusChanged: [UUID]
+
+    /// Event ids whose `statusChanged` body would not parse — §6.1's second fallback.
+    public let unparsedStatusBodies: [UUID]
+
+    /// Nothing to do — every count has `inserted == 0 && updated == 0`.
+    /// The second import of the same file is this.
+    public var isEmpty: Bool
+}
+```
+
+Computed as the diff of `local` against `merged`, both already at wire precision — which is why
+"has this record changed?" can be a plain `==` on the record structs. Comparing raw `Date`s here
+would report every row as updated on every import, and §2 is the reason.
+
+`isEmpty` is the idempotency criterion in one property, and M2.5-03's cue to say "nothing to
+import" rather than show an empty preview.
+
+---
+
+## 9. Applying: one transaction
+
+Inside `ImportService.apply(_:)`, in this order — parents first, so a debugger stepping through it
+reads in dependency order even though SwiftData does not require it:
+
+1. **Projects.** New: construct and `applyImported`. Existing: `applyImported` when the merged
+   record differs.
+2. **Tasks.** New: `TaskItem(id:title:projectID:createdAt:)` then `applyImported`. Existing:
+   `applyImported` when the merged record differs.
+3. **Events.** New: insert. Existing: `redact()`, and only when the merged record says redacted and
+   the row is not. There is no other write, because `Event` exposes no other mutator.
+4. **Source refs.** New: insert **and set `ref.task`**. Existing: `recordFetch(summary:at:)` when
+   the merged pair wins.
+5. **Reports.** New: insert. Existing: `markUndone()` when the merged record says undone.
+6. One `save`. On failure, `context.rollback()` and rethrow as `.saveFailed`.
+7. `NotificationCenter.default.post(name: .stenoDidWrite, object: nil)` — **after** the save, never
+   before, per D-019.
+
+**Step 4's relationship assignment is load-bearing and easy to miss.** `SourceRef.taskID` is the
+authoritative link (§3.4, D-016), but `TaskItem.sourceRefs` is the inverse relationship the detail
+pane reads. A ref inserted without `ref.task = task` has correct data and is invisible in the UI —
+a bug with no failing assertion unless one is written for it, so §11 writes one.
+
+`applyImported(_:)` is new, **internal**, and lives on `Project` and `TaskItem` in the model files.
+It assigns every stored field from the record, `modifiedAt` included, deliberately bypassing the
+stamping mutators — an import is restoring a value, not making an edit, and `rename(to:at:)` would
+overwrite the very timestamp the merge just resolved. `Event` and `StandupReport` get no such
+method: their only permitted mutations are the two flags, and adding a general setter to an
+append-only model is how §3.3's "no exceptions" becomes an exception.
+
+---
+
+## 10. Changes to existing code
+
+| Change | File | Why |
+|---|---|---|
+| `wireString(_:)`, rounding | `ExportDocument.swift` | §2 |
+| Date strategy and sort key both call `wireString` | `ExportDocument.swift`, `ExportEncoder.swift` | One implementation — D-092's lesson |
+| Comparators move to `ExportOrdering` | new `ExportOrdering.swift`, `ExportEncoder.swift` | `StoreMerge` is `nonisolated`; `extension ExportEncoder` is not |
+| `init?(eventBody:)` | `StatusTransition.swift` | §6.1 |
+| `displayName` moves; `menuOrder` file renamed | `StenoKit/Status/`, `StenoKit/Features/MainWindow/` | §6.1 — it is a persisted format now |
+| `applyImported(_:)` | `Project.swift`, `TaskItem.swift` | §9 |
+| Truncation claims corrected | `ExportDocument.swift`, `ExportEncoder.swift`, `ExportFixture.swift`, `ExportDateTests.swift` | §2 makes them false |
+
+No file under `Steno/` changes. There is no UI in this task.
+
+---
+
+## 11. Testing
+
+New `StenoTests/Portability/` files: `ImportFixture.swift`, `StoreMergePropertyTests.swift`,
+`StoreMergeRuleTests.swift`, `ImportReaderTests.swift`, `ImportApplyTests.swift`,
+`ImportRoundTripTests.swift`, `LastStandupClockTests.swift`, `WireInstantTests.swift`.
+
+### §10.6's properties, as value assertions
+
+The pure merge is what makes these readable. None of them needs a store.
+
+| Property | Assertion |
+|---|---|
+| Idempotent | `merge(merge(A,B), B) == merge(A,B)`, and at store level a second `plan(F)` returns `isEmpty` |
+| Commutative | `merge(A,B) == merge(B,A)`, over fixtures whose dates deliberately do **not** land on an eighth, since §2 is the case this exists to catch |
+| Non-destructive | every local id present in the merged result — **and** every incoming id, checked in both directions, because a one-directional coverage check cannot see a dropped record |
+| Older after newer | merging an older export into a newer store yields the newer store |
+| Round trip | fixture store → export → import into an empty store → snapshot equals the original **at wire precision** |
+
+### The rules, individually
+
+- `status` derived from a store whose cached field **disagrees** with its newest `statusChanged`
+  event — the acceptance criterion names this one explicitly.
+- Status derived across the union: the deciding event lives only in the incoming file.
+- Redacted `statusChanged` events still count.
+- Both fallbacks: no `statusChanged` event; an unparseable body, which must also appear in
+  `unparsedStatusBodies`.
+- `StatusTransition`: every `Status` survives `body → Status → body`, and the four `displayName`
+  spellings are pinned literally.
+- Sticky flags in both directions — local-redacted ∪ incoming-clean, and the reverse.
+- **Set-only flags**: a test asserting `Event` and `StandupReport` expose no mutator that assigns
+  `false`, so O-8's premise fails loudly the day someone adds one.
+- `lastStandupAt`: all six sequences of §6.2, driven through the **real** `StandupService` and
+  `StandupUndoService`, asserting the derivation equals the live value.
+- `SourceRef`: later `lastFetchedAt` wins; `nil` loses; the pair moves together; a duplicate dedup
+  key yields two rows; the cache-free asymmetry of §5.4 asserted deliberately.
+- `includesCachedExternalData: true` on the local snapshot — mutate it to `false` and a local cache
+  must be lost, or the test is not testing anything.
+
+### Rejection, and the store afterwards
+
+Truncated bytes, non-JSON bytes, an unknown `schemaVersion`, a dangling reference, an inconsistent
+record. Each asserts the message names the cause, and each asserts the store is unchanged **by
+re-fetching from a second `ModelContext` after a later successful save** — an injected throwing
+save makes "the store is empty" unfalsifiable, and a same-context fetch returns the objects already
+held rather than what landed.
+
+### Structural gates
+
+- **`Mirror` completeness**: every stored property of every `@Model` is written by the import path.
+  D-095's third assertion exists because the first two were blind to a field added to a model and
+  forgotten in its DTO; `applyImported` has that same blind spot, in the same direction.
+- **Inserted refs are reachable**: after importing a ref onto an existing task, the task's
+  `sourceRefs` contains it — the §9 step-4 bug, which is otherwise silent.
+- **Wire stability**: `string → Date → string` is a fixed point across every millisecond value at
+  several epochs — §2's measurement, kept as a test so the regression cannot return quietly. A
+  second test asserts the encoder's date strategy and D-092's sort key emit the *same* string for
+  the same `Date`, which is the disagreement D-092 found the last time there were two
+  implementations.
+
+### Mutation testing
+
+The properties in this task are the kind that pass vacuously. Before the PR, each of these is
+verified to fail when its rule is inverted: sticky-true flipped to incoming-wins, the status
+derivation replaced by copying the field, `lastStandupAt` replaced by later-wins, `wireString`
+reverted to truncation, closure validation removed, `includesCachedExternalData` flipped to
+`false`. A harness run is contaminated if it reuses a tree — untracked files survive
+`git checkout`, and `xcbeautify` prints no `✘` for a failed build.
+
+---
+
+## 12. Decisions and spec amendments this PR carries
+
+| Entry | Subject |
+|---|---|
+| **D-098** | `Event.isRedacted` and `StandupReport.isUndone` merge sticky-true — **closes O-8** |
+| **D-099** | `Project.lastStandupAt` is derived from the report set, not compared — **amends §10.1** |
+| **D-100** | `TaskItem.status` is parsed from the `statusChanged` body; `Status.displayName` is a persisted format |
+| **D-101** | The wire format rounds to the nearest millisecond — **amends §10.2 and D-091**, with §2's measurements |
+| **D-102** | Orphaned records are refused, with closure checked against file ∪ store |
+| **D-103** | Duplicate refs by §3.4 key are kept, not collapsed — **extends O-10** |
+| **D-104** | The merge is a pure function over documents; the local snapshot round-trips through the exporter's own bytes |
+
+REQUIREMENTS.md moves to **v1.17** with a changelog line covering the two amendments: §10.1's
+`lastStandupAt` row, and §10.2's truncation sentence. §10.1's paragraph pointing at O-8 as open is
+rewritten to point at D-098.
+
+`docs/tasks/README.md` gains ticks for **M2.5-01** — merged as PR #28 without one — and for
+M2.5-02.
+
+---
+
+## 13. Out of scope
+
+| Deferred | To |
+|---|---|
+| Import preview UI, File menu items, Replace mode, typed confirmation, backup-before-replace | M2.5-03 |
+| `steno import` / `steno export`, `make import` / `make export` | M2.5-04 |
+| Auto-export scheduling and retention | M2.5-05 |
+| Reconciling duplicate `SourceRef` rows | M5, under the extended O-10 |
+| Integration configuration in the export | M4-04 / M5-02, under D-094 |
