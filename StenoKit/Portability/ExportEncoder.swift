@@ -36,7 +36,8 @@ public struct ExportEncoder {
         self.exportedBy = exportedBy
     }
 
-    /// The store as a typed document, ordered per `precedes`.
+    /// The store as a typed document, ordered per `precedes` and
+    /// `sortedByWireInstant`.
     ///
     /// Separate from `encode()` because the tests need different things from
     /// each: ordering, field selection and value mapping are properties of a
@@ -51,15 +52,18 @@ public struct ExportEncoder {
     public func snapshot() throws -> ExportDocument {
         let projects = try context.fetch(FetchDescriptor<Project>())
             .map(ExportedProject.init).sorted(by: Self.precedes)
-        let tasks = try context.fetch(FetchDescriptor<TaskItem>())
-            .map(ExportedTask.init).sorted(by: Self.precedes)
-        let events = try context.fetch(FetchDescriptor<Event>())
-            .map(ExportedEvent.init).sorted(by: Self.precedes)
+        let tasks = Self.sortedByWireInstant(
+            try context.fetch(FetchDescriptor<TaskItem>()).map(ExportedTask.init),
+            instant: { $0.createdAt }, id: { $0.id })
+        let events = Self.sortedByWireInstant(
+            try context.fetch(FetchDescriptor<Event>()).map(ExportedEvent.init),
+            instant: { $0.timestamp }, id: { $0.id })
         let refs = try context.fetch(FetchDescriptor<SourceRef>())
             .map { ExportedSourceRef($0, includingCachedData: includesCachedExternalData) }
             .sorted(by: Self.precedes)
-        let reports = try context.fetch(FetchDescriptor<StandupReport>())
-            .map(ExportedReport.init).sorted(by: Self.precedes)
+        let reports = Self.sortedByWireInstant(
+            try context.fetch(FetchDescriptor<StandupReport>()).map(ExportedReport.init),
+            instant: { $0.generatedAt }, id: { $0.id })
 
         return ExportDocument(
             schemaVersion: ExportDocument.currentSchemaVersion,
@@ -104,15 +108,39 @@ extension ExportEncoder {
             < (rhs.sortOrder, rhs.name, rhs.id.uuidString)
     }
 
-    /// Oldest task first, so new tasks land at the end of the array.
-    static func precedes(_ lhs: ExportedTask, _ rhs: ExportedTask) -> Bool {
-        (lhs.createdAt, lhs.id.uuidString) < (rhs.createdAt, rhs.id.uuidString)
-    }
-
-    /// Oldest event first. This is the large array, and appending at the end is
-    /// what makes a day-over-day diff readable.
-    static func precedes(_ lhs: ExportedEvent, _ rhs: ExportedEvent) -> Bool {
-        (lhs.timestamp, lhs.id.uuidString) < (rhs.timestamp, rhs.id.uuidString)
+    /// Order `items` by the timestamp **as the file carries it**, then by id.
+    ///
+    /// **The sort key is the emitted string, not the in-memory `Date`.** Two
+    /// events a fraction of a millisecond apart are distinguishable in memory
+    /// and identical on the wire, so ordering on the `Date` puts them in a
+    /// sequence the file cannot express: any store built from that file ties on
+    /// them, falls through to the id, and can reverse the pair relative to the
+    /// export it came from. Keying on the emitted value makes the array's order
+    /// derivable from the file's own contents — which is what M2.5-05's backup
+    /// history and M2.5-02's convergence actually need.
+    ///
+    /// Formatting rather than quantizing arithmetically, and that is the second
+    /// attempt: a `(seconds * 1000).rounded(.down)` key disagreed with the
+    /// formatter at `.999` — a second implementation of truncation, drifting
+    /// from the first in the third decimal place. There is now only one.
+    /// Fixed-width UTC ISO-8601 sorts lexicographically as it does
+    /// chronologically, and the key is computed once per record rather than
+    /// once per comparison.
+    static func sortedByWireInstant<Element>(
+        _ items: [Element],
+        instant: (Element) -> Date,
+        id: (Element) -> UUID
+    ) -> [Element] {
+        items
+            .map {
+                (
+                    key: instant($0).formatted(ExportDocument.fractionalSeconds),
+                    tieBreak: id($0).uuidString,
+                    value: $0
+                )
+            }
+            .sorted { ($0.key, $0.tieBreak) < ($1.key, $1.tieBreak) }
+            .map(\.value)
     }
 
     /// §3.4's dedup key, which groups a task's refs together.
@@ -121,8 +149,4 @@ extension ExportEncoder {
             < (rhs.taskID.uuidString, rhs.kind.rawValue, rhs.identifier, rhs.id.uuidString)
     }
 
-    /// Oldest report first, for `ExportedEvent`'s reason.
-    static func precedes(_ lhs: ExportedReport, _ rhs: ExportedReport) -> Bool {
-        (lhs.generatedAt, lhs.id.uuidString) < (rhs.generatedAt, rhs.id.uuidString)
-    }
 }

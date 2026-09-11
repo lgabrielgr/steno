@@ -96,6 +96,38 @@ func refsExportByDedupKey() throws {
 }
 
 @MainActor
+@Test("the export order survives a round trip, even below the wire precision")
+func subMillisecondOrderSurvivesTheRoundTrip() throws {
+    // Ids chosen so that falling through to the tie-break *reverses* the pair:
+    // the earlier event carries the higher id. Without that, a comparator bug
+    // and a correct comparator would produce the same array and this test
+    // could not tell them apart.
+    let high = try #require(UUID(uuidString: "FFFFFFFF-0000-0000-0000-0000000000FF"))
+    let low = try #require(UUID(uuidString: "00000000-0000-0000-0000-0000000000AA"))
+
+    let fixture = try ExportFixture()
+    let task = try fixture.task("ship it", in: try fixture.project("Payments"))
+    // A tenth of a millisecond apart: distinguishable in memory, identical on
+    // the wire, because encoding truncates to three fractional digits.
+    try fixture.event("earlier", on: task, at: ExportFixture.at(0.5001), id: high)
+    try fixture.event("later", on: task, at: ExportFixture.at(0.5002), id: low)
+
+    let exported = try fixture.encoder().snapshot().events.map(\.body)
+    let decoded = try ExportDocument.decoder()
+        .decode(ExportDocument.self, from: try fixture.encoder().encode())
+    let reExported = ExportEncoder.sortedByWireInstant(
+        decoded.events, instant: { $0.timestamp }, id: { $0.id }
+    ).map(\.body)
+
+    // Any store built from this file — M2.5-02's import, then M2.5-05's next
+    // auto-export — sorts the decoded values, which no longer carry the
+    // sub-millisecond difference. If the comparator ordered on the in-memory
+    // instant, these two arrays would disagree and an unchanged store would
+    // export differently after a round trip.
+    #expect(exported == reExported)
+}
+
+@MainActor
 @Test("two events sharing a timestamp order by id, whichever went in first")
 func tiedTimestampsAreBrokenByID() throws {
     // The tie-break is what makes the output byte-stable. Without it

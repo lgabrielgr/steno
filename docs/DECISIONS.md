@@ -2189,8 +2189,23 @@ ordering within a second).
 
 **2026-09-11** · M2.5-01 · **Status:** accepted
 
-Projects sort by `(sortOrder, name, id)`, tasks by `(createdAt, id)`, events by
-`(timestamp, id)`, reports by `(generatedAt, id)`, and refs by §3.4's dedup key then `id`.
+Projects sort by `(sortOrder, name, id)` and refs by §3.4's dedup key then `id`. Tasks, events
+and reports sort by their timestamp **as the file carries it** — the emitted ISO-8601 string —
+then by `id`.
+
+**The date-sorted arrays key on the emitted string, not the in-memory `Date`, and that was a bug
+found in review.** Two events a fraction of a millisecond apart are distinguishable in memory and
+identical on the wire, so ordering on the `Date` produces a sequence the file cannot express: any
+store built from that file ties on them, falls through to the id, and can reverse the pair
+relative to the export it came from. An unchanged store would then export differently after a
+round trip, which is exactly what M2.5-05's backup history and M2.5-02's convergence rely on not
+happening. Keying on the emitted value makes the array order derivable from the file's own
+contents.
+
+The first attempt quantized arithmetically, `(seconds * 1000).rounded(.down)`, and disagreed with
+the formatter at `.999` — a second implementation of truncation drifting from the first in the
+third decimal place, caught by the test written to compare them. There is now one
+implementation: the formatter.
 
 **Projects carry three components, not two, and the middle one is the point.** `sortOrder` is
 not unique, and `MainWindowModel.fetchProjects` breaks that tie on `name` — so sorting on
@@ -2251,13 +2266,16 @@ nobody can predict, and every reserved key is one M2.5-02 must decide how to mer
 
 ---
 
-### D-095 — §10.3's guarantee needs two assertions; the JSON allowlist alone misses it
+### D-095 — §10.3's guarantee needs four layered guards; the JSON allowlist alone misses most of them
 
 **2026-09-11** · M2.5-01 · **Status:** accepted
 
-The export's field completeness is asserted twice: once over the emitted JSON keys, and once over
-each record type's declared stored properties via `Mirror`. Both read one shared literal
-declaration of the allowed keys.
+The export's field completeness is asserted four times, each guard blind to what the next
+catches: over the emitted JSON keys; over each record type's declared stored properties via
+`Mirror`; over each `@Model`'s stored properties, against the same set plus a named exclusion
+list; and over `Schema(StenoStore.models())`, so a whole model with no DTO fails rather than
+being silently absent from every export. The first three read one shared literal declaration of
+the allowed keys.
 
 **Why:** §10.3 asks for the scan because "construction-based guarantees erode silently when
 someone later adds a field" — and a key allowlist read from the JSON **does not catch that case**.
