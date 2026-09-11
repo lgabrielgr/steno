@@ -67,7 +67,11 @@ func theExportContainsNoCredentials() throws {
 func settingsAreNotExported() throws {
     let suiteName = "steno.export.o9.tests"
     let suite = try #require(UserDefaults(suiteName: suiteName))
-    defer { UserDefaults.standard.removeSuite(named: suiteName) }
+    // `removeSuite(named:)` only drops a suite from `UserDefaults.standard`'s
+    // search list, and this one was never added to it — so it would leave the
+    // sentinels on disk under a fixed suite name, for every later run and every
+    // other test to find. The persistent domain is what actually clears.
+    defer { suite.removePersistentDomain(forName: suiteName) }
     let settings = AppSettings(defaults: suite)
 
     // **Sentinels, not arbitrary values.** Asserting only that the two literal
@@ -78,8 +82,17 @@ func settingsAreNotExported() throws {
     let sentinelProjectID = try #require(
         UUID(uuidString: "DEADBEEF-0000-4000-8000-00000000FEED"))
     settings.defaultProjectID = sentinelProjectID
-    settings.hotkeyChord = HotkeyChord.default
-    let encodedChord = try ExportJSON.text(of: try JSONEncoder().encode(HotkeyChord.default))
+
+    // The chord needs a sentinel of its own, and it has to be a *value* rather
+    // than an encoding. Comparing against `JSONEncoder().encode(chord)` — which
+    // is what this did first — can never match: that encoder is compact and the
+    // export is `.prettyPrinted`, so the literal string is absent whether or not
+    // the chord was serialized, and the assertion could not fail. A `HotkeyChord`
+    // is two integers with no distinctive string form, so the sentinel is the
+    // integers themselves, chosen large enough not to collide with a real key
+    // code, a `sortOrder`, or a run of hex inside a UUID.
+    let sentinelChord = HotkeyChord(keyCode: 54_321, modifiers: 987_654_321)
+    settings.hotkeyChord = sentinelChord
 
     let fixture = try ExportFixture()
     try fixture.realistic()
@@ -90,7 +103,8 @@ func settingsAreNotExported() throws {
     // does not have, and a chord free on one Mac may collide on another. §10's
     // export carries domain data only.
     #expect(!text.contains(sentinelProjectID.uuidString))
-    #expect(!text.contains(encodedChord))
+    #expect(!text.contains("54321"))
+    #expect(!text.contains("987654321"))
     #expect(!text.contains("hotkeyChord"))
     #expect(!text.contains("defaultProjectID"))
     #expect(!text.contains(AppSettings.hotkeyChordKey))
