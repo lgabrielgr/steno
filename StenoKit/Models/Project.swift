@@ -92,3 +92,33 @@ public final class Project {
         modifiedAt = date
     }
 }
+
+extension Project {
+    /// Overwrite every field from an imported record, `modifiedAt` included.
+    ///
+    /// **Deliberately bypasses the stamping mutators.** `rename(to:at:)` and its
+    /// siblings exist to record *when an edit happened*; an import is restoring
+    /// a value the merge already resolved, and stamping it would overwrite the
+    /// very timestamp §10.1 used to decide the record's fate — making the next
+    /// merge disagree with this one.
+    ///
+    /// In this file because `private(set)` is file-scoped: an extension
+    /// elsewhere could not write these, which is the property that keeps the
+    /// setters private in the first place.
+    ///
+    /// `id` is absent because it is the identity, not a field. Every other
+    /// stored property is written here, and `ImportFieldCoverageTests` asserts
+    /// that over `Mirror` rather than trusting this comment — D-095 records what
+    /// happens to a rule that depends on someone remembering a field.
+    func applyImported(_ record: ExportedProject) {
+        name = record.name
+        colorHex = record.colorHex
+        jiraProjectKeys = record.jiraProjectKeys
+        isArchived = record.isArchived
+        sortOrder = record.sortOrder
+        lastStandupAt = record.lastStandupAt
+        reportCadence = record.reportCadence
+        staleThresholdDays = record.staleThresholdDays
+        modifiedAt = record.modifiedAt
+    }
+}

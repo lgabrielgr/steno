@@ -87,3 +87,30 @@ public final class TaskItem {
         completedAt = (new == .done) ? date : nil
     }
 }
+
+extension TaskItem {
+    /// Overwrite every field from an imported record — see
+    /// `Project.applyImported` for why this bypasses the stamping mutators.
+    ///
+    /// `setStatus` is bypassed for a second reason of its own: it guards
+    /// `new != status` and derives `completedAt` from the transition it is
+    /// making. The merge has already derived all three fields together from the
+    /// newest `statusChanged` event in the log (§10.1), and routing them back
+    /// through the guard would drop a resolution that only *looks* like a no-op —
+    /// same status, different `statusChangedAt`.
+    ///
+    /// `createdAt` is written even though it is immutable: for an inserted task
+    /// it arrives through `init`, and for an existing one the merge has already
+    /// refused the file if the two sides disagreed. Writing it keeps "every
+    /// stored property is written here" true without an exception to explain.
+    func applyImported(_ record: ExportedTask) {
+        title = record.title
+        projectID = record.projectID
+        status = record.status
+        createdAt = record.createdAt
+        statusChangedAt = record.statusChangedAt
+        completedAt = record.completedAt
+        isArchived = record.isArchived
+        modifiedAt = record.modifiedAt
+    }
+}
