@@ -8,8 +8,10 @@ import Foundation
 /// format is a compatibility contract M2.5-02 reads and that outlives any one
 /// schema, so it gets its own declaration.
 ///
-/// **Property order is key order in every one of these** — see `ExportDocument`.
-/// Each mirrors its §3 table top to bottom.
+/// **Each mirrors its §3 table top to bottom**, so the declaration reads as the
+/// spec does. Declaration order is not the emitted key order, though —
+/// `ExportDocument.encoder()` sets `.sortedKeys` and the file is alphabetical,
+/// for the determinism reason recorded there.
 ///
 /// Optionals rely on synthesized `encodeIfPresent`, so an absent value omits
 /// its key rather than writing `null`. That is also how §10.2's

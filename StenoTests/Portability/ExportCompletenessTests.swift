@@ -1,25 +1,34 @@
 import Foundation
+import SwiftData
 import Testing
 
 @testable import StenoKit
 
-/// §10.3's erosion guard and the two things it cannot see on its own.
+/// §10.3's erosion guard, in four layers, because each one is blind to what
+/// the next catches.
 ///
-/// Three tests, failing for three different reasons.
+/// `everyShippedModelIsGuarded` reads `StenoStore.models()`. A **sixth model**
+/// added to the schema with no DTO would be exported by nothing, and every
+/// assertion below would still pass — they name five types.
+///
+/// `everyModelFieldIsAccountedFor` reads the `@Model` types. A field added to
+/// `Project` and forgotten in `ExportedProject` changes nothing downstream: the
+/// record has not grown, the JSON has not changed, and the export silently
+/// drops user data. Added in review, which is where that gap was found.
 ///
 /// `exportedKeysAreExactlyTheAllowedSet` reads the emitted JSON. It catches a
 /// field that reaches the file and should not.
 ///
-/// `declaredPropertiesAreExactlyTheAllowedSet` reads the *types*, and it is not
-/// redundant — it was added because the JSON test demonstrably missed the case
-/// §10.3 is about. Adding `let apiToken: String?` to a record encodes nothing
-/// while it is `nil`: `encodeIfPresent` omits the key, the JSON is byte-for-byte
+/// `declaredPropertiesAreExactlyTheAllowedSet` reads the *record types*, and it
+/// is not redundant — the JSON test demonstrably missed the case §10.3 is
+/// about. Adding `let apiToken: String?` to a record encodes nothing while it
+/// is `nil`: `encodeIfPresent` omits the key, the JSON is byte-for-byte
 /// unchanged, and a field with no fixture value is never anything *but* `nil`.
 /// Mutation-tested — the JSON assertion alone let exactly that through.
 ///
-/// `everyFieldRoundTripsToTheRightPlace` reads the values. Neither key test can
-/// see `createdAt` written into `statusChangedAt`: both keys are present and
-/// both hold plausible dates.
+/// `everyFieldRoundTripsToTheRightPlace` reads the values. No key test can see
+/// `createdAt` written into `statusChangedAt`: both keys are present and both
+/// hold plausible dates.
 
 /// The keys each record is allowed to carry. One declaration, asserted from
 /// both directions.
@@ -137,6 +146,15 @@ func aRealPayloadRoundTripsByteExactly() throws {
     let fixture = try ExportFixture()
     try fixture.realistic()
 
+    // The source bytes, captured **before** the round trip and keyed by event.
+    // Asserting only that the decoded payload parses would pass for an encoder
+    // that replaced it with a *different* valid `StandupReportedPayload`, which
+    // is not what this test's name promises. Assigning a `nil` payload removes
+    // the key, so this map holds only events that really carry one.
+    let source = try fixture.context.fetch(FetchDescriptor<Event>())
+        .filter { $0.kind == .standupReported }
+        .reduce(into: [UUID: Data]()) { $0[$1.id] = $1.payload }
+
     let data = try fixture.encoder().encode()
     let decoded = try ExportDocument.decoder().decode(ExportDocument.self, from: data)
 
@@ -146,10 +164,25 @@ func aRealPayloadRoundTripsByteExactly() throws {
     // openly — but the bytes must survive, because §10 has no second copy.
     let reported = decoded.events.filter { $0.kind == .standupReported }
     #expect(!reported.isEmpty)
+    // Without this the loop below would pass vacuously on a store whose
+    // payloads were all dropped: `nil == nil` for every event.
+    #expect(reported.count == source.count)
     for event in reported {
-        let payload = try #require(event.payload)
-        #expect(StandupReportedPayload.decoded(from: payload) != nil)
+        #expect(event.payload == (try #require(source[event.id])))
     }
+}
+
+@Test("§10.3: every shipped model is covered by an export guard")
+func everyShippedModelIsGuarded() {
+    // Derived from the shipped schema rather than transcribed, for the reason
+    // `SchemaConformanceTests` gives: the guards below name five types, so a
+    // **sixth model** added to `StenoStore.models()` with no DTO would be
+    // exported by nothing and noticed by nothing — the field-level erosion
+    // guard one level up, where a whole record type goes missing.
+    #expect(
+        Set(Schema(StenoStore.models()).entities.map(\.name)) == [
+            "Project", "TaskItem", "Event", "SourceRef", "StandupReport",
+        ])
 }
 
 @MainActor

@@ -65,7 +65,8 @@ func aClockDateRoundTripsWithinAMillisecond() throws {
     let fixture = try ExportFixture()
     let task = try fixture.task("ship it", in: try fixture.project("Payments"))
     // Sub-millisecond precision, as `Date.now` produces. The encoded string
-    // rounds to three fractional digits, so this is the case `==` would fail.
+    // **truncates** to three fractional digits — it does not round — so this is
+    // the case `==` would fail, and it fails in one direction only.
     let imprecise = Date(timeIntervalSince1970: 1_700_000_000.4817263)
     try fixture.event("from the clock", on: task, at: imprecise)
 

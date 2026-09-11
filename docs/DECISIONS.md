@@ -2189,8 +2189,14 @@ ordering within a second).
 
 **2026-09-11** · M2.5-01 · **Status:** accepted
 
-Projects sort by `(sortOrder, id)`, tasks by `(createdAt, id)`, events by `(timestamp, id)`,
-reports by `(generatedAt, id)`, and refs by §3.4's dedup key then `id`. Sorting happens in memory
+Projects sort by `(sortOrder, name, id)`, tasks by `(createdAt, id)`, events by
+`(timestamp, id)`, reports by `(generatedAt, id)`, and refs by §3.4's dedup key then `id`.
+
+**Projects carry three components, not two, and the middle one is the point.** `sortOrder` is
+not unique, and `MainWindowModel.fetchProjects` breaks that tie on `name` — so sorting on
+`(sortOrder, id)` would export two equally-ordered projects in a sequence the user has never
+seen, under a comment claiming the file reads in sidebar order. Corrected in review of M2.5-01's
+PR; `name` is not unique either, which is why `id` stays as a third component. Sorting happens in memory
 rather than through `FetchDescriptor.sortBy`, so the comparators sit together and `SourceRefKind`
 is not a special case — an enum inside a `#Predicate` does not compile in either spelling
 (`EventQueries.swift`, D-085).
