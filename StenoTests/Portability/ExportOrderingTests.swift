@@ -1,0 +1,107 @@
+import Foundation
+import Testing
+
+@testable import StenoKit
+
+/// Every array's order, asserted against an insertion order that disagrees with
+/// it. Encoding twice and comparing the results would prove nothing.
+
+@MainActor
+@Test("projects export in sortOrder, whatever order they were inserted in")
+func projectsExportInSortOrder() throws {
+    let fixture = try ExportFixture()
+    try fixture.project("Third", sortOrder: 2)
+    try fixture.project("First", sortOrder: 0)
+    try fixture.project("Second", sortOrder: 1)
+
+    let names = try fixture.encoder().snapshot().projects.map(\.name)
+
+    #expect(names == ["First", "Second", "Third"])
+}
+
+@MainActor
+@Test("tasks export oldest first, whatever order they were inserted in")
+func tasksExportOldestFirst() throws {
+    let fixture = try ExportFixture()
+    let project = try fixture.project("Payments")
+    try fixture.task("third", in: project, createdAt: ExportFixture.at(300))
+    try fixture.task("first", in: project, createdAt: ExportFixture.at(100))
+    try fixture.task("second", in: project, createdAt: ExportFixture.at(200))
+
+    let titles = try fixture.encoder().snapshot().tasks.map(\.title)
+
+    #expect(titles == ["first", "second", "third"])
+}
+
+@MainActor
+@Test("events export oldest first, so a day's appends land at the end")
+func eventsExportOldestFirst() throws {
+    let fixture = try ExportFixture()
+    let project = try fixture.project("Payments")
+    let task = try fixture.task("ship it", in: project)
+    try fixture.event("third", on: task, at: ExportFixture.at(300))
+    try fixture.event("first", on: task, at: ExportFixture.at(100))
+    try fixture.event("second", on: task, at: ExportFixture.at(200))
+
+    let bodies = try fixture.encoder().snapshot().events.map(\.body)
+
+    #expect(bodies == ["first", "second", "third"])
+}
+
+@MainActor
+@Test("reports export oldest first")
+func reportsExportOldestFirst() throws {
+    let fixture = try ExportFixture()
+    let project = try fixture.project("Payments")
+    try fixture.report(for: project, generatedAt: ExportFixture.at(300), body: "third")
+    try fixture.report(for: project, generatedAt: ExportFixture.at(100), body: "first")
+    try fixture.report(for: project, generatedAt: ExportFixture.at(200), body: "second")
+
+    let bodies = try fixture.encoder().snapshot().reports.map(\.markdownBody)
+
+    #expect(bodies == ["first", "second", "third"])
+}
+
+@MainActor
+@Test("refs export by §3.4's dedup key, so a task's refs group together")
+func refsExportByDedupKey() throws {
+    let fixture = try ExportFixture()
+    let project = try fixture.project("Payments")
+    let task = try fixture.task("ship it", in: project)
+    try fixture.ref("PAY-9", on: task, kind: .jiraIssue)
+    try fixture.ref("https://example.com", on: task, kind: .url)
+    try fixture.ref("PAY-1", on: task, kind: .jiraIssue)
+
+    let identifiers = try fixture.encoder().snapshot().sourceRefs.map(\.identifier)
+
+    // One task, so the taskID component ties and the order is (kind, identifier):
+    // jiraIssue before url, and PAY-1 before PAY-9 within the kind.
+    #expect(identifiers == ["PAY-1", "PAY-9", "https://example.com"])
+}
+
+@MainActor
+@Test("two events sharing a timestamp order by id, whichever went in first")
+func tiedTimestampsAreBrokenByID() throws {
+    // The tie-break is what makes the output byte-stable. Without it
+    // `sorted(by:)` — which is not documented as stable — leaves two
+    // same-instant rows in an unspecified order, two exports of an unchanged
+    // store differ, and M2.5-05's backup history becomes churn.
+    let low = try #require(UUID(uuidString: "00000000-0000-0000-0000-0000000000AA"))
+    let high = try #require(UUID(uuidString: "FFFFFFFF-0000-0000-0000-0000000000FF"))
+    let tie = ExportFixture.at(500)
+
+    let forwards = try ExportFixture()
+    let forwardsTask = try forwards.task(
+        "ship it", in: try forwards.project("Payments"))
+    try forwards.event("low", on: forwardsTask, at: tie, id: low)
+    try forwards.event("high", on: forwardsTask, at: tie, id: high)
+
+    let backwards = try ExportFixture()
+    let backwardsTask = try backwards.task(
+        "ship it", in: try backwards.project("Payments"))
+    try backwards.event("high", on: backwardsTask, at: tie, id: high)
+    try backwards.event("low", on: backwardsTask, at: tie, id: low)
+
+    #expect(try forwards.encoder().snapshot().events.map(\.id) == [low, high])
+    #expect(try backwards.encoder().snapshot().events.map(\.id) == [low, high])
+}
