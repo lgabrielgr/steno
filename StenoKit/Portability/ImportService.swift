@@ -66,16 +66,33 @@ extension ImportService {
     /// Every validation already ran on values, before this is reached, so the
     /// only failure left in flight is the save itself — which rolls back.
     public func apply(_ plan: ImportPlan) throws {
-        let store = plan.merged
-        // Parents first. SwiftData does not require it; a debugger stepping
-        // through this does.
-        try applyProjects(store.projects)
-        try applyTasks(store.tasks)
-        try applyEvents(store.events)
-        try applyRefs(store.sourceRefs)
-        try applyReports(store.reports)
+        // **An empty plan writes nothing and posts nothing.** It used to reapply
+        // every merged row, save, and post `.stenoDidWrite` — so the second
+        // import of a file made every observer reload, and would in M2.5-05 have
+        // dirtied the store enough to trigger an auto-export, all while the
+        // preview said there was nothing to do.
+        guard !plan.isEmpty else { return }
 
+        // The plan describes a diff against a store that may since have moved.
+        guard try localStore().hashValue == plan.sourceFingerprint else {
+            throw ImportError.storeChanged
+        }
+
+        let store = plan.merged
         do {
+            // **The whole sequence is inside the rollback, not just the save.**
+            // Each `apply*` fetches before it writes, and a fetch that throws
+            // after an earlier one has inserted rows would otherwise leave the
+            // context partly mutated with no rollback — a later save by any
+            // other service would then commit half an import.
+            //
+            // Parents first. SwiftData does not require it; a debugger stepping
+            // through this does.
+            try applyProjects(store.projects, writing: plan.writes.projects)
+            try applyTasks(store.tasks, writing: plan.writes.tasks)
+            try applyEvents(store.events, writing: plan.writes.events)
+            try applyRefs(store.sourceRefs, writing: plan.writes.sourceRefs)
+            try applyReports(store.reports, writing: plan.writes.reports)
             try save(context)
         } catch {
             context.rollback()
@@ -95,9 +112,11 @@ extension ImportService {
             uniqueKeysWithValues: try context.fetch(FetchDescriptor<Model>()).map { (id($0), $0) })
     }
 
-    private func applyProjects(_ records: [ExportedProject]) throws {
+    private func applyProjects(
+        _ records: [ExportedProject], writing ids: Set<UUID>
+    ) throws {
         let rows = try existing(Project.self, id: { $0.id })
-        for record in records {
+        for record in records where ids.contains(record.id) {
             if let row = rows[record.id] {
                 row.applyImported(record)
                 continue
@@ -110,9 +129,11 @@ extension ImportService {
         }
     }
 
-    private func applyTasks(_ records: [ExportedTask]) throws {
+    private func applyTasks(
+        _ records: [ExportedTask], writing ids: Set<UUID>
+    ) throws {
         let rows = try existing(TaskItem.self, id: { $0.id })
-        for record in records {
+        for record in records where ids.contains(record.id) {
             if let row = rows[record.id] {
                 row.applyImported(record)
                 continue
@@ -127,9 +148,11 @@ extension ImportService {
 
     /// §3.3: an event is inserted or its one flag is flipped. There is no third
     /// case, and the model exposes no mutator that would allow one.
-    private func applyEvents(_ records: [ExportedEvent]) throws {
+    private func applyEvents(
+        _ records: [ExportedEvent], writing ids: Set<UUID>
+    ) throws {
         let rows = try existing(Event.self, id: { $0.id })
-        for record in records {
+        for record in records where ids.contains(record.id) {
             if let row = rows[record.id] {
                 if record.isRedacted && !row.isRedacted { row.redact() }
                 continue
@@ -146,10 +169,12 @@ extension ImportService {
         }
     }
 
-    private func applyRefs(_ records: [ExportedSourceRef]) throws {
+    private func applyRefs(
+        _ records: [ExportedSourceRef], writing ids: Set<UUID>
+    ) throws {
         let rows = try existing(SourceRef.self, id: { $0.id })
         let tasks = try existing(TaskItem.self, id: { $0.id })
-        for record in records {
+        for record in records where ids.contains(record.id) {
             if let row = rows[record.id] {
                 // Unconditional when the merge produced a cache: the previous
                 // form compared `row.lastFetchedAt` — a full-precision `Date` —
@@ -176,9 +201,11 @@ extension ImportService {
         }
     }
 
-    private func applyReports(_ records: [ExportedReport]) throws {
+    private func applyReports(
+        _ records: [ExportedReport], writing ids: Set<UUID>
+    ) throws {
         let rows = try existing(StandupReport.self, id: { $0.id })
-        for record in records {
+        for record in records where ids.contains(record.id) {
             if let row = rows[record.id] {
                 if record.isUndone && !row.isUndone { row.markUndone() }
                 continue

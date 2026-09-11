@@ -17,7 +17,38 @@ public struct ImportPlan: Equatable, Sendable {
         var isNoOp: Bool { inserted == 0 && updated == 0 }
     }
 
+    /// The ids `apply` will write, per type. **It touches nothing else.**
+    ///
+    /// Derived in the same pass as the counts, so "the preview's counts match
+    /// what the import actually does" is one computation rather than two that
+    /// agree. Before this existed, `apply` wrote every merged row — including
+    /// rows it had just counted as unchanged, which quantized their
+    /// full-precision local timestamps to wire precision for no reason, and did
+    /// it even when the plan was empty.
+    public struct Writes: Equatable, Sendable {
+        public let projects: Set<UUID>
+        public let tasks: Set<UUID>
+        public let events: Set<UUID>
+        public let sourceRefs: Set<UUID>
+        public let reports: Set<UUID>
+    }
+
     public let merged: MergedStore
+    public let writes: Writes
+
+    /// A fingerprint of the local store this plan was computed against.
+    ///
+    /// `apply` refuses a plan whose store has moved underneath it. The preview
+    /// is the user's only chance to inspect before committing (§10.4), and a
+    /// plan applied to a store that has since changed describes something other
+    /// than what happens — it would also overwrite the newer rows with the
+    /// merge's older resolution of them.
+    ///
+    /// **In-process only.** Swift's hashing is seeded per process, so this value
+    /// is meaningless across a relaunch. That is all it needs to be: a plan does
+    /// not outlive the window that made it. Never persist it.
+    public let sourceFingerprint: Int
+
     public let projects: Counts
     public let tasks: Counts
     public let events: Counts
@@ -50,37 +81,60 @@ extension ImportPlan {
     init(local: MergedStore, result: MergeResult) {
         let merged = result.store
         let localStatus = Dictionary(
-            uniqueKeysWithValues: local.tasks.map { ($0.id, $0.status) })
+            local.tasks.map { ($0.id, $0.status) }, uniquingKeysWith: { first, _ in first })
+
+        let projects = Self.diff(local: local.projects, merged: merged.projects)
+        let tasks = Self.diff(local: local.tasks, merged: merged.tasks)
+        let events = Self.diff(local: local.events, merged: merged.events)
+        let refs = Self.diff(local: local.sourceRefs, merged: merged.sourceRefs)
+        let reports = Self.diff(local: local.reports, merged: merged.reports)
 
         self.init(
             merged: merged,
-            projects: Self.counts(local: local.projects, merged: merged.projects),
-            tasks: Self.counts(local: local.tasks, merged: merged.tasks),
-            events: Self.counts(local: local.events, merged: merged.events),
-            sourceRefs: Self.counts(local: local.sourceRefs, merged: merged.sourceRefs),
-            reports: Self.counts(local: local.reports, merged: merged.reports),
+            writes: Writes(
+                projects: projects.writes, tasks: tasks.writes, events: events.writes,
+                sourceRefs: refs.writes, reports: reports.writes),
+            sourceFingerprint: local.hashValue,
+            projects: projects.counts,
+            tasks: tasks.counts,
+            events: events.counts,
+            sourceRefs: refs.counts,
+            reports: reports.counts,
             statusChanged: merged.tasks
                 .filter { task in localStatus[task.id].map { $0 != task.status } ?? false }
                 .map(\.id),
             unparsedStatusBodies: result.unparsedStatusBodies)
     }
 
-    private static func counts<Element: ExportRecord>(
+    /// Counts and write set from one walk, so they cannot disagree.
+    private static func diff<Element: ExportRecord>(
         local: [Element], merged: [Element]
-    ) -> Counts {
-        let localByID = Dictionary(uniqueKeysWithValues: local.map { ($0.id, $0) })
+    ) -> (counts: Counts, writes: Set<UUID>) {
+        // `uniquingKeysWith` rather than `uniqueKeysWithValues`: this side comes
+        // from our own snapshot so duplicates should be impossible, and trapping
+        // on "should be impossible" is how a malformed store takes the process
+        // down instead of producing an error.
+        let localByID = Dictionary(
+            local.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
         var inserted = 0
         var updated = 0
         var unchanged = 0
+        var writes: Set<UUID> = []
 
         for record in merged {
             guard let mine = localByID[record.id] else {
                 inserted += 1
+                writes.insert(record.id)
                 continue
             }
-            if mine == record { unchanged += 1 } else { updated += 1 }
+            if mine == record {
+                unchanged += 1
+            } else {
+                updated += 1
+                writes.insert(record.id)
+            }
         }
-        return Counts(inserted: inserted, updated: updated, unchanged: unchanged)
+        return (Counts(inserted: inserted, updated: updated, unchanged: unchanged), writes)
     }
 }
 
@@ -90,7 +144,7 @@ extension ImportPlan {
 /// Declared here rather than on the records themselves: §10.2's DTOs mirror
 /// their §3 field tables top to bottom, and a protocol conformance in that file
 /// would be the first thing in it that is not a field.
-protocol ExportRecord: Equatable {
+protocol ExportRecord: Hashable {
     var id: UUID { get }
 }
 

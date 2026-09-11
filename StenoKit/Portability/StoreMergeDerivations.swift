@@ -23,8 +23,8 @@ extension StoreMerge {
     static func mergeTasks(
         _ local: [ExportedTask], _ incoming: [ExportedTask], events: [ExportedEvent]
     ) throws -> ([ExportedTask], [UUID]) {
-        let mineByID = Dictionary(uniqueKeysWithValues: local.map { ($0.id, $0) })
-        let theirsByID = Dictionary(uniqueKeysWithValues: incoming.map { ($0.id, $0) })
+        let mineByID = try indexed(local, id: { $0.id }, kind: "task")
+        let theirsByID = try indexed(incoming, id: { $0.id }, kind: "task")
 
         var merged: [ExportedTask] = []
         var unparsed: [UUID] = []
@@ -163,8 +163,8 @@ extension StoreMerge {
     static func mergeProjects(
         _ local: [ExportedProject], _ incoming: [ExportedProject], reports: [ExportedReport]
     ) throws -> [ExportedProject] {
-        let mineByID = Dictionary(uniqueKeysWithValues: local.map { ($0.id, $0) })
-        let theirsByID = Dictionary(uniqueKeysWithValues: incoming.map { ($0.id, $0) })
+        let mineByID = try indexed(local, id: { $0.id }, kind: "project")
+        let theirsByID = try indexed(incoming, id: { $0.id }, kind: "project")
 
         return try Set(mineByID.keys).union(theirsByID.keys).map { id in
             let base = try resolveGovernedProject(mineByID[id], theirsByID[id])
@@ -217,5 +217,29 @@ extension StoreMerge {
             && mine.isArchived == theirs.isArchived && mine.sortOrder == theirs.sortOrder
             && mine.reportCadence == theirs.reportCadence
             && mine.staleThresholdDays == theirs.staleThresholdDays
+    }
+}
+
+extension StoreMerge {
+    /// Index by id, **throwing rather than trapping** on a duplicate.
+    ///
+    /// `Dictionary(uniqueKeysWithValues:)` traps, and both sides of a merge can
+    /// come from a file. A hand-edited export with two records under one id
+    /// would therefore terminate the process where §10.4 asks for a clean
+    /// rejection. `ImportReader` refuses such a file first; this is the guard
+    /// for every other caller, since `merge` takes values and does not know
+    /// where they came from.
+    static func indexed<Element>(
+        _ records: [Element], id: (Element) -> UUID, kind: String
+    ) throws -> [UUID: Element] {
+        var byID: [UUID: Element] = [:]
+        for record in records {
+            let key = id(record)
+            guard byID.updateValue(record, forKey: key) == nil else {
+                throw ImportError.malformed(
+                    detail: "Two \(kind) records share the id \(key).")
+            }
+        }
+        return byID
     }
 }

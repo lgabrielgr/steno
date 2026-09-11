@@ -29,6 +29,14 @@ public enum ImportError: Error, Equatable, Sendable {
     /// The single transaction failed. The store is unchanged.
     case saveFailed(detail: String)
 
+    /// The store changed between planning and applying, so the plan no longer
+    /// describes what would happen.
+    ///
+    /// §10.4 makes the preview the user's only chance to inspect before
+    /// committing. Applying a stale plan would both mis-describe the result and
+    /// overwrite the newer rows with the merge's older resolution of them.
+    case storeChanged
+
     public var message: String {
         switch self {
         case .malformed(let detail):
@@ -51,6 +59,12 @@ public enum ImportError: Error, Equatable, Sendable {
             """
         case .saveFailed(let detail):
             "The import could not be saved, so nothing was changed. \(detail)"
+        case .storeChanged:
+            """
+            Something changed on this Mac while the import was being previewed, \
+            so nothing was imported. Open the file again to see an up-to-date \
+            summary.
+            """
         }
     }
 }

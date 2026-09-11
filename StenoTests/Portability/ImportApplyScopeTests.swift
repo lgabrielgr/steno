@@ -1,0 +1,185 @@
+import Foundation
+import SwiftData
+import Testing
+
+@testable import StenoKit
+
+/// What `apply` is allowed to touch, and when it is allowed to touch anything.
+///
+/// Every test here covers a defect found in review of PR #29. They share a
+/// shape: the suite was green, and the behaviour was wrong in a way that no
+/// existing assertion could see — because the round-trip tests compare
+/// **wire-normalized** snapshots, and every one of these defects is invisible at
+/// that precision.
+
+/// A store whose timestamps came from the app's own clock, not from a file.
+@MainActor
+private func fullPrecisionStore() throws -> ExportFixture {
+    let fixture = try ExportFixture()
+    let project = try fixture.project(
+        "Payments", lastStandupAt: nil, modifiedAt: ExportFixture.at(10.481_726_3))
+    let task = try fixture.task(
+        "Fix the retry handler", in: project, createdAt: ExportFixture.at(20.301_59))
+    try fixture.event("repro'd the race", on: task, at: ExportFixture.at(40.717_28))
+    return fixture
+}
+
+@MainActor
+@Test("an empty plan writes nothing and posts nothing")
+func anEmptyPlanIsTrulyANoOp() throws {
+    let fixture = try fullPrecisionStore()
+    let data = try fixture.encoder(includingCachedData: true).encode()
+    let counter = WriteCounter()
+
+    let service = ImportService(context: fixture.context)
+    let plan = try service.plan(data)
+    #expect(plan.isEmpty)
+
+    try service.apply(plan)
+
+    // It used to reapply every merged row, save, and post — so importing a file
+    // that changes nothing made every observer reload, and would have dirtied
+    // the store enough for M2.5-05's auto-export to fire.
+    #expect(counter.posts == 0)
+}
+
+@MainActor
+@Test("an unchanged row keeps its full-precision timestamps")
+func anUnchangedRowIsNotQuantized() throws {
+    // A file that adds one new project, so the plan is **not** empty and the
+    // early return does not cover this. Every pre-existing row is counted as
+    // unchanged and must therefore not be written.
+    let fixture = try fullPrecisionStore()
+    let task = try #require(try fixture.context.fetch(FetchDescriptor<TaskItem>()).first)
+    let createdAt = task.createdAt
+
+    let incoming = try ExportFixture()
+    try incoming.project("Somewhere else", modifiedAt: ExportFixture.at(70.5))
+    let data = try incoming.encoder(includingCachedData: true).encode()
+
+    let service = ImportService(context: fixture.context)
+    let plan = try service.plan(data)
+    #expect(plan.projects.inserted == 1)
+    #expect(plan.tasks.unchanged == 1)
+    #expect(plan.writes.tasks.isEmpty)
+
+    try service.apply(plan)
+
+    // `apply` used to write every merged row, quantizing this to `.302`. The
+    // round-trip tests compare wire-normalized snapshots, so they cannot see it:
+    // both sides round to the same string either way.
+    #expect(task.createdAt == createdAt)
+    #expect(task.createdAt != ExportDocument.wireString(createdAt).asWireDate)
+}
+
+@MainActor
+@Test("a plan is refused once the store has moved under it")
+func aStalePlanIsRefused() throws {
+    let fixture = try fullPrecisionStore()
+    let incoming = try ExportFixture()
+    try incoming.project("Somewhere else", modifiedAt: ExportFixture.at(70.5))
+    let data = try incoming.encoder(includingCachedData: true).encode()
+
+    let service = ImportService(context: fixture.context)
+    let plan = try service.plan(data)
+
+    // The user captures something while the preview is open.
+    let project = try #require(try fixture.context.fetch(FetchDescriptor<Project>()).first)
+    try fixture.task("captured while previewing", in: project, createdAt: ExportFixture.at(80))
+
+    // Applying now would both mis-describe the result and resolve the newer rows
+    // against a merge that never saw them.
+    #expect(throws: ImportError.storeChanged) { try service.apply(plan) }
+
+    // Re-planning is the recovery, and it works.
+    let fresh = try service.plan(data)
+    try service.apply(fresh)
+    #expect(try fixture.context.fetch(FetchDescriptor<Project>()).count == 2)
+}
+
+@MainActor
+@Test("a file with two records under one id is refused, not fatal")
+func duplicateIdsAreRefusedRatherThanFatal() throws {
+    // `Dictionary(uniqueKeysWithValues:)` **traps** on a duplicate key, so this
+    // used to terminate the process where §10.4 asks for a clean rejection.
+    let fixture = try ExportFixture()
+    let project = try fixture.project("Payments", modifiedAt: ExportFixture.at(10))
+    try fixture.task("Fix the retry handler", in: project, createdAt: ExportFixture.at(20))
+    let data = try fixture.encoder().encode()
+
+    let document = try ExportDocument.decoder().decode(ExportDocument.self, from: data)
+    let doubled = ExportDocument(
+        schemaVersion: document.schemaVersion, exportedAt: document.exportedAt,
+        exportedBy: document.exportedBy,
+        includesCachedExternalData: document.includesCachedExternalData,
+        projects: document.projects, tasks: document.tasks + document.tasks,
+        events: document.events, sourceRefs: document.sourceRefs, reports: document.reports)
+    let duplicated = try ExportDocument.encoder().encode(doubled)
+
+    let target = try ExportFixture()
+    #expect(throws: ImportError.self) {
+        try ImportService(context: target.context).plan(duplicated)
+    }
+}
+
+@MainActor
+@Test("a cached summary with no fetch time is refused, not silently dropped")
+func aHalfCachePairIsRefused() throws {
+    // §10.2 writes the two together or omits both, and `SourceRef.recordFetch`
+    // cannot produce any other state. The applier only records a fetch when it
+    // has a date to record it at, so this used to be accepted and then dropped.
+    let fixture = try ExportFixture()
+    let project = try fixture.project("Payments", modifiedAt: ExportFixture.at(10))
+    let task = try fixture.task("Fix the retry handler", in: project)
+    try fixture.ref("PAY-421", on: task)
+    let document = try ExportDocument.decoder().decode(
+        ExportDocument.self, from: try fixture.encoder(includingCachedData: true).encode())
+
+    let ref = try #require(document.sourceRefs.first)
+    let halfPair = ExportedSourceRef(
+        id: ref.id, taskID: ref.taskID, kind: ref.kind, identifier: ref.identifier, url: ref.url,
+        lastFetchedAt: nil, cachedSummary: "a summary with no fetch time")
+    let broken = ExportDocument(
+        schemaVersion: document.schemaVersion, exportedAt: document.exportedAt,
+        exportedBy: document.exportedBy, includesCachedExternalData: true,
+        projects: document.projects, tasks: document.tasks, events: document.events,
+        sourceRefs: [halfPair], reports: document.reports)
+
+    let target = try ExportFixture()
+    #expect(throws: ImportError.self) {
+        try ImportService(context: target.context).plan(try ExportDocument.encoder().encode(broken))
+    }
+}
+
+@Test("§3.4: two refs sharing a dedup key both survive a merge")
+func duplicateDedupKeysBothSurvive() throws {
+    // D-103: union is by `id`, so two machines that each extracted `PAY-421`
+    // onto the same task keep both rows. Collapsing them would converge too, and
+    // would make import the only path outside Replace mode that deletes a row.
+    let project = MergeFixture.project(1)
+    let task = MergeFixture.task(2)
+    let mine = try MergeFixture.store(
+        projects: [project], tasks: [task],
+        refs: [MergeFixture.ref(7, identifier: "PAY-421")])
+    let theirs = try MergeFixture.store(
+        projects: [project], tasks: [task],
+        refs: [MergeFixture.ref(8, identifier: "PAY-421")])
+
+    let forward = try StoreMerge.merge(local: mine, incoming: theirs).store
+    let backward = try StoreMerge.merge(local: theirs, incoming: mine).store
+
+    #expect(forward == backward)
+    #expect(forward.sourceRefs.count == 2)
+    #expect(Set(forward.sourceRefs.map(\.identifier)) == ["PAY-421"])
+}
+
+extension String {
+    /// This wire string parsed back, for asserting that a value was **not**
+    /// quantized. Falls back to `.distantPast`, which no fixture uses, so a
+    /// decode failure fails the assertion rather than passing it.
+    var asWireDate: Date {
+        let json = Data("[\"\(self)\"]".utf8)
+        let decoded = try? ExportDocument.decoder().decode([Date].self, from: json)
+        return decoded?.first ?? .distantPast
+    }
+}

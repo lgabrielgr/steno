@@ -32,10 +32,49 @@ enum ImportReader {
                 found: probe.schemaVersion, supported: ExportDocument.currentSchemaVersion)
         }
 
+        let document: ExportDocument
         do {
-            return try ExportDocument.decoder().decode(ExportDocument.self, from: data)
+            document = try ExportDocument.decoder().decode(ExportDocument.self, from: data)
         } catch {
             throw ImportError.malformed(detail: detail(of: error))
+        }
+
+        try validateShape(of: document)
+        return document
+    }
+
+    /// Structural checks the `Codable` decode cannot make.
+    ///
+    /// **Both of these were process-terminating or silently lossy before.** The
+    /// merge indexes records by `id` and the applier pairs the two cached ref
+    /// fields; a hand-edited file that breaks either assumption reached code
+    /// that had no way to refuse it. §10.4 requires a clean rejection, and a
+    /// trap is not one.
+    private static func validateShape(of document: ExportDocument) throws {
+        try requireUniqueIDs(document.projects.map(\.id), in: "projects")
+        try requireUniqueIDs(document.tasks.map(\.id), in: "tasks")
+        try requireUniqueIDs(document.events.map(\.id), in: "events")
+        try requireUniqueIDs(document.sourceRefs.map(\.id), in: "sourceRefs")
+        try requireUniqueIDs(document.reports.map(\.id), in: "reports")
+
+        // §10.2 writes `lastFetchedAt` and `cachedSummary` together or omits
+        // both, and `SourceRef.recordFetch` cannot produce any other state. A
+        // summary with no timestamp was previously accepted and then dropped on
+        // the floor, because the applier only records a fetch when it has a date
+        // to record it at — data loss with no message.
+        for ref in document.sourceRefs where ref.cachedSummary != nil && ref.lastFetchedAt == nil {
+            throw ImportError.malformed(
+                detail:
+                    "The reference to \(ref.identifier) has a cached summary but no fetch time; "
+                    + "§10.2 writes those two together or not at all.")
+        }
+    }
+
+    private static func requireUniqueIDs(_ ids: [UUID], in array: String) throws {
+        var seen = Set<UUID>()
+        for id in ids where !seen.insert(id).inserted {
+            throw ImportError.malformed(
+                detail: "Two records in \(array) share the id \(id).")
         }
     }
 
