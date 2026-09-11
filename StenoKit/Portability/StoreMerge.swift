@@ -55,12 +55,19 @@ enum StoreMerge {
         _ local: [Element],
         _ incoming: [Element],
         id: (Element) -> UUID,
+        kind: String,
         resolve: (Element, Element) throws -> Element
-    ) rethrows -> [Element] {
-        var byID: [UUID: Element] = [:]
-        for element in local { byID[id(element)] = element }
-        for element in incoming {
-            let key = id(element)
+    ) throws -> [Element] {
+        // **Both sides go through `indexed`, which throws on a duplicate id.**
+        // This built the map with a plain subscript until review of PR #29: a
+        // duplicate in `local` silently overwrote the earlier row — losing a
+        // physical record before the immutable-field checks ever ran — and a
+        // duplicate in `incoming` was folded through `resolve` as though it were
+        // the other machine's copy of the same record. `mergeTasks` and
+        // `mergeProjects` already refused both; events, reports and refs did
+        // not, so three of the five types bypassed the guard.
+        var byID = try indexed(local, id: id, kind: kind)
+        for (key, element) in try indexed(incoming, id: id, kind: kind) {
             byID[key] = try byID[key].map { try resolve($0, element) } ?? element
         }
         return Array(byID.values)
@@ -74,7 +81,7 @@ extension StoreMerge {
         _ local: [ExportedEvent], _ incoming: [ExportedEvent]
     ) throws -> [ExportedEvent] {
         try union(
-            local, incoming, id: { $0.id },
+            local, incoming, id: { $0.id }, kind: "event",
             resolve: { mine, theirs in
                 // §3.3: an event's content is never rewritten, so one id must mean
                 // one event. A file that disagrees is a different lineage under a
@@ -99,7 +106,7 @@ extension StoreMerge {
         _ local: [ExportedReport], _ incoming: [ExportedReport]
     ) throws -> [ExportedReport] {
         try union(
-            local, incoming, id: { $0.id },
+            local, incoming, id: { $0.id }, kind: "stand-up report",
             resolve: { mine, theirs in
                 guard mine.projectID == theirs.projectID, mine.generatedAt == theirs.generatedAt,
                     mine.windowStart == theirs.windowStart, mine.windowEnd == theirs.windowEnd,
@@ -136,7 +143,7 @@ extension StoreMerge {
         _ local: [ExportedSourceRef], _ incoming: [ExportedSourceRef]
     ) throws -> [ExportedSourceRef] {
         try union(
-            local, incoming, id: { $0.id },
+            local, incoming, id: { $0.id }, kind: "source reference",
             resolve: { mine, theirs in
                 guard mine.taskID == theirs.taskID, mine.kind == theirs.kind,
                     mine.identifier == theirs.identifier, mine.url == theirs.url

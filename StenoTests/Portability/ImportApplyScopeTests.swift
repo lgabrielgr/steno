@@ -202,3 +202,32 @@ func theMergeAlsoRefusesAHalfCachePair() throws {
     #expect(throws: ImportError.self) { try StoreMerge.merge(local: clean, incoming: halfPair) }
     #expect(throws: ImportError.self) { try StoreMerge.merge(local: halfPair, incoming: clean) }
 }
+
+@Test("a duplicate id in any record type is refused, not silently collapsed")
+func duplicateIdsAreRefusedForEveryRecordType() throws {
+    // `mergeTasks` and `mergeProjects` refused duplicates from the start, but
+    // events, reports and refs went through `union`, which built its map with a
+    // plain subscript — so a duplicate in the local array silently overwrote the
+    // earlier row, losing a physical record before the immutable-field checks
+    // ran. Three of the five types bypassed the guard. Found in review of #29.
+    let project = MergeFixture.project(1)
+    let task = MergeFixture.task(2)
+    let clean = try MergeFixture.store(projects: [project], tasks: [task])
+
+    let doubledEvents = try MergeFixture.store(
+        projects: [project], tasks: [task],
+        events: [MergeFixture.event(3), MergeFixture.event(3, body: "a different body")])
+    let doubledReports = try MergeFixture.store(
+        projects: [project], tasks: [task],
+        reports: [MergeFixture.report(4), MergeFixture.report(4, body: "different")])
+    let doubledRefs = try MergeFixture.store(
+        projects: [project], tasks: [task],
+        refs: [MergeFixture.ref(5), MergeFixture.ref(5, identifier: "PAY-999")])
+
+    for side in [doubledEvents, doubledReports, doubledRefs] {
+        // Both directions: the defect was on the `local` side specifically, so
+        // only asserting the incoming side would have missed it entirely.
+        #expect(throws: ImportError.self) { try StoreMerge.merge(local: side, incoming: clean) }
+        #expect(throws: ImportError.self) { try StoreMerge.merge(local: clean, incoming: side) }
+    }
+}
