@@ -42,22 +42,60 @@ extension ExportDocument {
     /// become a tie no rule can break and their order in the log is
     /// unrecoverable. REQUIREMENTS.md v1.16 carries the fractional example.
     ///
-    /// **Formatting truncates at the millisecond; it does not round.** `Date`
-    /// is a `Double` of seconds, and at epoch 1.7e9 a decimal like `.481` is
-    /// not representable — it is stored as `.4809999…` and emitted as `.480`.
-    /// A round-trip is therefore accurate to within 1 ms and exact only when
-    /// the fractional second is an **eighth** — `0`, `.125`, `.25`, `.375`,
-    /// `.5`, `.625`, `.75`, `.875`. Not every dyadic value: `.0625` is dyadic
-    /// and still truncates to `.062`, because three decimals cannot hold it.
-    /// Measured, not assumed. M2.5-02's "the object graph is identical" means
-    /// identical at that precision, and an `==` on a clock date there would
-    /// fail in a way that looks like a merge bug.
+    /// **This style truncates at the millisecond.** `Date` is a `Double` of
+    /// seconds, and at epoch 1.7e9 a decimal like `.481` is not representable —
+    /// it is stored as `.4809999…`, which this style emits as `.480`. Nothing
+    /// formats through it directly for that reason; every emitted timestamp
+    /// goes through `wireString`, which corrects it to round-to-nearest.
     ///
     /// A `FormatStyle` rather than an `ISO8601DateFormatter`: the formatter is
     /// a non-`Sendable` class, so a shared instance is not expressible as a
     /// `static let` under Swift 6's concurrency checking, and a per-call
     /// instance is the allocation this path least wants.
     static let fractionalSeconds = Date.ISO8601FormatStyle(includingFractionalSeconds: true)
+
+    /// Half a millisecond, added before formatting so that truncation becomes
+    /// round-to-nearest. Not a tunable — `wireString` is the only caller.
+    private static let halfMillisecond: TimeInterval = 0.0005
+
+    /// **The single implementation of what the file says an instant is.**
+    ///
+    /// Every emitted timestamp and every sort key goes through here, and that
+    /// is not tidiness: D-092 records what happened the last time truncation
+    /// had two implementations — they disagreed in the third decimal place at
+    /// `.999`, and only a test written to compare them found it. Rounding makes
+    /// that boundary live again, since `…20.9995` now carries to `…21.000`.
+    ///
+    /// **It rounds, and the half-millisecond is what makes it round.** The
+    /// obvious reading — that truncation is harmless because the error is under
+    /// a millisecond — misses the property M2.5-02 actually needs, which is
+    /// that the format be a *fixed point*. It was not: parsing `…20.481Z` gives
+    /// a `Double` of `.4809999…`, which truncates back out as `…20.480Z`. So a
+    /// value moved every time it crossed a file. Measured over every
+    /// millisecond value at four epochs from 2020 to 2033: **496 of 1000
+    /// unstable** under truncation, walking backwards up to 2 ms over at most
+    /// two hops before sticking; **0 of 4000** unstable once rounded, and 0 of
+    /// 50000 for clock-shaped dates. Two things rested on that fixed point —
+    /// §10.6's "importing the same file twice changes nothing", and §10.2's
+    /// promise that two exports of an unchanged store are byte-identical, which
+    /// is what makes M2.5-05's auto-export a history rather than churn.
+    ///
+    /// A round-trip is therefore accurate to within 0.5 ms in either direction,
+    /// and **exact** only when the fractional second is an **eighth** — `0`,
+    /// `.125`, `.25`, `.375`, `.5`, `.625`, `.75`, `.875` — the only values both
+    /// exactly representable in binary and exactly expressible in three
+    /// decimals. Not every dyadic value: `.0625` is dyadic and still emits
+    /// `.062`, because the added half-millisecond lands just below `.063` at
+    /// this magnitude. Behaviour at an exact half-millisecond input is
+    /// deterministic but not predictable by arithmetic, which is why the
+    /// stability figures above were measured rather than derived.
+    ///
+    /// M2.5-02's "the object graph is identical" means identical at this
+    /// precision; an `==` on a clock date there fails in a way that looks like
+    /// a merge bug. See D-091 and D-101.
+    static func wireString(_ date: Date) -> String {
+        date.addingTimeInterval(halfMillisecond).formatted(fractionalSeconds)
+    }
 
     /// The same format without the fractional part, accepted on **decode only**.
     ///
@@ -77,7 +115,7 @@ extension ExportDocument {
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]
         encoder.dateEncodingStrategy = .custom { date, encoder in
             var container = encoder.singleValueContainer()
-            try container.encode(date.formatted(fractionalSeconds))
+            try container.encode(wireString(date))
         }
         return encoder
     }

@@ -119,10 +119,13 @@ extension ExportEncoder {
     /// derivable from the file's own contents — which is what M2.5-05's backup
     /// history and M2.5-02's convergence actually need.
     ///
-    /// Formatting rather than quantizing arithmetically, and that is the second
-    /// attempt: a `(seconds * 1000).rounded(.down)` key disagreed with the
-    /// formatter at `.999` — a second implementation of truncation, drifting
-    /// from the first in the third decimal place. There is now only one.
+    /// The key comes from `ExportDocument.wireString`, the same function the
+    /// encoder's date strategy uses, and that is the second attempt: a
+    /// `(seconds * 1000).rounded(.down)` key disagreed with the formatter at
+    /// `.999` — a second implementation of the same quantization, drifting from
+    /// the first in the third decimal place. There is now only one, which
+    /// matters more since that function rounds: `…20.9995` carries to
+    /// `…21.000`, so the boundary the two implementations disagreed on is live.
     /// Fixed-width UTC ISO-8601 sorts lexicographically as it does
     /// chronologically, and the key is computed once per record rather than
     /// once per comparison.
@@ -134,7 +137,7 @@ extension ExportEncoder {
         items
             .map {
                 (
-                    key: instant($0).formatted(ExportDocument.fractionalSeconds),
+                    key: ExportDocument.wireString(instant($0)),
                     tieBreak: id($0).uuidString,
                     value: $0
                 )
