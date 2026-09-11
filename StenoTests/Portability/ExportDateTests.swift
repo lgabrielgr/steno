@@ -54,8 +54,13 @@ func aDyadicFractionIsExact() throws {
     let data = try fixture.encoder().encode()
     let decoded = try ExportDocument.decoder().decode(ExportDocument.self, from: data)
 
-    // This is why every fixture date is whole or dyadic: it is the only class
-    // of value for which `ExportDocument ==` is a fair test.
+    // This is why every fixture date is whole or an **eighth** of a second.
+    // "Dyadic" is too broad: `.0625` is dyadic and still truncates to `.062`,
+    // because three fractional digits cannot hold it. The exact set that
+    // survives is the eighths — 0, .125, .25, .375, .5, .625, .75, .875 — which
+    // are the only values both exactly representable as a `Double` and exactly
+    // expressible in three decimals. They are the only ones for which
+    // `ExportDocument ==` is a fair test.
     #expect(decoded.events.first?.timestamp == ExportFixture.at(0.25))
 }
 

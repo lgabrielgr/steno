@@ -36,6 +36,23 @@ func projectsTiedOnSortOrderFallBackToName() throws {
 }
 
 @MainActor
+@Test("projects tied on sortOrder *and* name fall back to id")
+func projectsTiedOnNameFallBackToID() throws {
+    // `name` is not unique either, so the comparator needs a third component —
+    // and the test above cannot see it: with three distinct names, a regression
+    // to `(sortOrder, name)` passes while same-named projects keep whatever
+    // order the fetch happened to return.
+    let low = try #require(UUID(uuidString: "00000000-0000-0000-0000-0000000000AA"))
+    let high = try #require(UUID(uuidString: "FFFFFFFF-0000-0000-0000-0000000000FF"))
+
+    let fixture = try ExportFixture()
+    try fixture.project("Payments", sortOrder: 1, id: high)
+    try fixture.project("Payments", sortOrder: 1, id: low)
+
+    #expect(try fixture.encoder().snapshot().projects.map(\.id) == [low, high])
+}
+
+@MainActor
 @Test("tasks export oldest first, whatever order they were inserted in")
 func tasksExportOldestFirst() throws {
     let fixture = try ExportFixture()

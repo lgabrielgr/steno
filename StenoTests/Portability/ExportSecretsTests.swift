@@ -34,6 +34,20 @@ func theScannerFlagsAKnownCredential(pattern: CredentialPattern) {
     #expect(CredentialPatterns.matches(in: leaked) == [pattern.name])
 }
 
+@Test("the scanner's inventory is populated and covers the markers §10.3 names")
+func theScannerInventoryIsPopulated() {
+    // A parameterized test over an empty collection runs **zero** cases and
+    // reports success, so emptying `CredentialPatterns.all` would silently turn
+    // the positive control above into nothing at all — and the negative scan
+    // below it into a test that cannot fail. This assertion is the one that
+    // cannot disappear with the data it describes.
+    #expect(CredentialPatterns.all.count == 8)
+    #expect(
+        Set(CredentialPatterns.all.map(\.marker)) == [
+            "sk-ant-", "sk-proj-", "ATATT", "ghp_", "xoxb-", "xoxp-", "AKIA", "Bearer ",
+        ])
+}
+
 @Test("ordinary stand-up prose is not mistaken for a credential")
 func ordinaryProseIsNotFlagged() {
     let innocent = """
@@ -87,10 +101,15 @@ func settingsAreNotExported() throws {
     // than an encoding. Comparing against `JSONEncoder().encode(chord)` — which
     // is what this did first — can never match: that encoder is compact and the
     // export is `.prettyPrinted`, so the literal string is absent whether or not
-    // the chord was serialized, and the assertion could not fail. A `HotkeyChord`
-    // is two integers with no distinctive string form, so the sentinel is the
-    // integers themselves, chosen large enough not to collide with a real key
-    // code, a `sortOrder`, or a run of hex inside a UUID.
+    // the chord was serialized, and the assertion could not fail.
+    //
+    // A `HotkeyChord` is two integers with no distinctive string form, so the
+    // sentinel is the integers. **Matched as whole tokens, not as substrings**:
+    // every decimal digit is also a hex digit, so a bare `contains("54321")`
+    // could match inside a random UUID the fixture emitted and fail a correct
+    // export. A UUID's groups are 8-4-4-4-12 characters, none of which can be a
+    // dash-delimited `54321`, so a word-boundary match cannot collide with one
+    // while still matching a real leak like `"keyCode" : 54321`.
     let sentinelChord = HotkeyChord(keyCode: 54_321, modifiers: 987_654_321)
     settings.hotkeyChord = sentinelChord
 
@@ -103,8 +122,8 @@ func settingsAreNotExported() throws {
     // does not have, and a chord free on one Mac may collide on another. §10's
     // export carries domain data only.
     #expect(!text.contains(sentinelProjectID.uuidString))
-    #expect(!text.contains("54321"))
-    #expect(!text.contains("987654321"))
+    #expect(text.range(of: "\\b54321\\b", options: .regularExpression) == nil)
+    #expect(text.range(of: "\\b987654321\\b", options: .regularExpression) == nil)
     #expect(!text.contains("hotkeyChord"))
     #expect(!text.contains("defaultProjectID"))
     #expect(!text.contains(AppSettings.hotkeyChordKey))

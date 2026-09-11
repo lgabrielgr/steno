@@ -64,10 +64,10 @@ struct ExportFixture {
         _ name: String, colorHex: String = "#112233", jiraKeys: [String] = [],
         sortOrder: Int = 0, cadence: ReportCadence = .daily, staleThresholdDays: Int? = nil,
         lastStandupAt: Date? = nil, archived: Bool = false,
-        modifiedAt: Date = ExportFixture.origin
+        modifiedAt: Date = ExportFixture.origin, id: UUID = UUID()
     ) throws -> Project {
         let project = Project(
-            name: name, colorHex: colorHex, jiraProjectKeys: jiraKeys,
+            id: id, name: name, colorHex: colorHex, jiraProjectKeys: jiraKeys,
             sortOrder: sortOrder, reportCadence: cadence,
             staleThresholdDays: staleThresholdDays, modifiedAt: modifiedAt)
         context.insert(project)
