@@ -256,8 +256,8 @@ func theDocumentRoundTripsThroughJSON() throws {
     let decoded = try ExportDocument.decoder()
         .decode(ExportDocument.self, from: try encoder.encode())
 
-    // `==` works here only because every fixture date is millisecond-clean;
-    // see `ExportDateTests` for the clock-date case, which needs a tolerance.
+    // `==` works here only because `maximal()`'s dates are whole seconds; see
+    // `ExportDateTests` for the clock-date case, which needs a tolerance.
     #expect(decoded == (try encoder.snapshot()))
 }
 

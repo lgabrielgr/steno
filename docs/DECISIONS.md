@@ -2174,9 +2174,13 @@ their order in the append-only log is then unrecoverable.
 **The precision claim is narrower than "milliseconds" suggests, and was measured.** Formatting
 **truncates rather than rounds**, and at epoch 1.7e9 most decimals are not representable as a
 `Double`: `.481` is stored as `.4809999…` and emitted as `.480`; `.1` emits as `.099`. So a
-round-trip is *exact* only when the fractional second is dyadic (`0`, `.125`, `.25`, `.5`, …) and
-otherwise lands within 1 ms and **never later**. Every test fixture date is whole or dyadic for
-this reason, which is what lets `ExportDocument ==` be a fair assertion. **M2.5-02's "the object
+round-trip is *exact* only when the fractional second is an **eighth** — `0`, `.125`, `.25`,
+`.375`, `.5`, `.625`, `.75`, `.875`, the only values both exactly representable in binary and
+exactly expressible in three decimals — and otherwise lands within 1 ms and **never later**. Not
+every dyadic value qualifies: `.0625` is dyadic and still truncates to `.062`. Every fixture date
+**used in a direct `==` assertion** is whole or an eighth for this reason, which is what lets
+`ExportDocument ==` be a fair assertion; the ordering and tolerance tests deliberately use values
+that do not survive — `.5001`, a clock-shaped date — because that is the behaviour they pin. **M2.5-02's "the object
 graph is identical" criterion means identical at this precision** — an `==` on a `Date` that came
 from `Date.now` will fail there, and will look like a merge bug.
 **Alternatives:** epoch seconds as a JSON number (lossless and bit-exact, and unreadable at

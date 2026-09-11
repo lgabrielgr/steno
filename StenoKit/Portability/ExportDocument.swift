@@ -36,17 +36,19 @@ public struct ExportDocument: Codable, Equatable, Sendable {
 extension ExportDocument {
     /// ISO-8601 at millisecond precision — `2026-08-10T09:14:02.481Z`.
     ///
-    /// §10.2's example shows whole seconds, which truncates. That is not
-    /// cosmetic: §10.1 resolves three of its four merge rules by comparing
-    /// timestamps, so two notes typed in the same second become a tie no rule
-    /// can break and their order in the log is unrecoverable. REQUIREMENTS.md
-    /// v1.16 amends the example to match this.
+    /// §10.2's example showed whole seconds before this task amended it, which
+    /// truncates. That is not cosmetic: §10.1 resolves three of its four merge
+    /// rules by comparing timestamps, so two notes typed in the same second
+    /// become a tie no rule can break and their order in the log is
+    /// unrecoverable. REQUIREMENTS.md v1.16 carries the fractional example.
     ///
     /// **Formatting truncates at the millisecond; it does not round.** `Date`
     /// is a `Double` of seconds, and at epoch 1.7e9 a decimal like `.481` is
     /// not representable — it is stored as `.4809999…` and emitted as `.480`.
     /// A round-trip is therefore accurate to within 1 ms and exact only when
-    /// the fractional second is a dyadic value (`0`, `.125`, `.25`, `.5`, …).
+    /// the fractional second is an **eighth** — `0`, `.125`, `.25`, `.375`,
+    /// `.5`, `.625`, `.75`, `.875`. Not every dyadic value: `.0625` is dyadic
+    /// and still truncates to `.062`, because three decimals cannot hold it.
     /// Measured, not assumed. M2.5-02's "the object graph is identical" means
     /// identical at that precision, and an `==` on a clock date there would
     /// fail in a way that looks like a merge bug.

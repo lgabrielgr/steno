@@ -20,12 +20,12 @@ struct ExportFixture {
 
     /// 2023-11-14 22:13:20 UTC, matching `ReportFixture.origin`.
     ///
-    /// A whole second, and offsets stay whole (or dyadic — `.25`, `.5`) on
-    /// purpose. Encoding truncates at the millisecond, and most decimals are
-    /// not representable as a `Double` at this magnitude, so only those values
-    /// round-trip *exactly* and let `ExportDocument ==` be used directly. A
-    /// date off the clock does not — `ExportDateTests` asserts that case with
-    /// a tolerance.
+    /// A whole second. Offsets used in `==` assertions stay whole or land on an
+    /// eighth (`.25`, `.5`), because encoding truncates at the millisecond and
+    /// most decimals are not representable as a `Double` at this magnitude — so
+    /// only those round-trip *exactly* and let `ExportDocument ==` be used
+    /// directly. Tests that pin ordering or tolerance deliberately use values
+    /// that do **not** survive, such as `.5001` and clock-shaped dates.
     /// `nonisolated`, because `ExportFilenameTests` has no reason to hop to the
     /// main actor and these are two pure `Date` values. Without it the isolation
     /// error surfaces inside the `#expect` macro expansion rather than at the

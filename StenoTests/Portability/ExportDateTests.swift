@@ -15,7 +15,7 @@ func timestampsCarryMilliseconds() throws {
 
     let text = try ExportJSON.text(of: try fixture.encoder().encode())
 
-    // A dyadic fraction, so the emitted digits are exact. Encoding truncates
+    // An eighth of a second, so the emitted digits are exact. Encoding truncates
     // at the millisecond rather than rounding, and most decimals are not
     // representable as a `Double` at this magnitude: `.481` is stored as
     // `.4809999…` and emits as `.480`.
@@ -45,8 +45,8 @@ func aMillisecondApartSurvivesTheRoundTrip() throws {
 }
 
 @MainActor
-@Test("a dyadic fraction of a second survives exactly")
-func aDyadicFractionIsExact() throws {
+@Test("an eighth of a second survives exactly")
+func anEighthOfASecondIsExact() throws {
     let fixture = try ExportFixture()
     let task = try fixture.task("ship it", in: try fixture.project("Payments"))
     try fixture.event("on the quarter", on: task, at: ExportFixture.at(0.25))
@@ -54,13 +54,15 @@ func aDyadicFractionIsExact() throws {
     let data = try fixture.encoder().encode()
     let decoded = try ExportDocument.decoder().decode(ExportDocument.self, from: data)
 
-    // This is why every fixture date is whole or an **eighth** of a second.
-    // "Dyadic" is too broad: `.0625` is dyadic and still truncates to `.062`,
-    // because three fractional digits cannot hold it. The exact set that
-    // survives is the eighths — 0, .125, .25, .375, .5, .625, .75, .875 — which
+    // This is why every fixture date **used in a direct `==` assertion** is a
+    // whole second or an eighth. Other tests deliberately use values that do
+    // not survive — `.5001`, `.5002`, a clock-shaped date — because that is the
+    // behaviour they exist to pin; they assert order or tolerance, never
+    // equality. "Dyadic" would be too broad for the exact set: `.0625` is
+    // dyadic and still truncates to `.062`, because three fractional digits
+    // cannot hold it. The eighths — 0, .125, .25, .375, .5, .625, .75, .875 —
     // are the only values both exactly representable as a `Double` and exactly
-    // expressible in three decimals. They are the only ones for which
-    // `ExportDocument ==` is a fair test.
+    // expressible in three decimals.
     #expect(decoded.events.first?.timestamp == ExportFixture.at(0.25))
 }
 
