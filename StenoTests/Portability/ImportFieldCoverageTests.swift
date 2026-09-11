@@ -1,4 +1,5 @@
 import Foundation
+import SwiftData
 import Testing
 
 @testable import StenoKit
@@ -84,4 +85,81 @@ func applyImportedBypassesTheStatusGuard() throws {
 
     #expect(task.statusChangedAt == ExportFixture.at(9))
     #expect(task.completedAt == ExportFixture.at(9))
+}
+
+// MARK: - The three types with no `applyImported`
+
+/// `Event`, `SourceRef` and `StandupReport` are inserted through their
+/// initialisers and never rewritten, so there is no `applyImported` for the
+/// tests above to guard. Their equivalent is this: insert through the real
+/// service, re-derive the DTO from the row, and compare.
+///
+/// **Found by auditing the five record paths as a set.** Mutation testing showed
+/// `Event.payload`, `StandupReport.modelUsed` and `StandupReport.wasAIGenerated`
+/// could each be dropped on insert with the whole suite still green — the
+/// round-trip fixture left all three at their empty values, so a dropped write
+/// and a nil field were indistinguishable. That is D-095's lesson arriving on
+/// the import side: a field with no fixture value is never anything *but* nil.
+
+@MainActor
+private func importedStore(from source: ExportFixture) throws -> ExportFixture {
+    let data = try source.encoder(includingCachedData: true).encode()
+    let target = try ExportFixture()
+    let service = ImportService(context: target.context)
+    try service.apply(service.plan(data))
+    return target
+}
+
+@MainActor
+@Test("inserting an event preserves every field, payload included")
+func insertingAnEventPreservesEveryField() throws {
+    let source = try ExportFixture()
+    let project = try source.project("Payments", modifiedAt: ExportFixture.at(10))
+    let task = try source.task("Fix the retry handler", in: project)
+    try source.event(
+        "waiting on infra", on: task, at: ExportFixture.at(20), kind: .blockedReason,
+        payload: Data("{\"ticket\":\"PAY-421\"}".utf8), redacted: true)
+
+    let target = try importedStore(from: source)
+    let imported = try #require(try target.context.fetch(FetchDescriptor<Event>()).first)
+    let original = try #require(try source.context.fetch(FetchDescriptor<Event>()).first)
+
+    #expect(ExportedEvent(imported) == ExportedEvent(original))
+}
+
+@MainActor
+@Test("inserting a report preserves every field, including the AI provenance")
+func insertingAReportPreservesEveryField() throws {
+    let source = try ExportFixture()
+    let project = try source.project("Payments", modifiedAt: ExportFixture.at(10))
+    try source.report(
+        for: project, generatedAt: ExportFixture.at(30), windowStart: ExportFixture.at(10),
+        windowEnd: ExportFixture.at(30), body: "*Yesterday*\n- shipped it",
+        wasAIGenerated: true, modelUsed: "claude-opus-5", undone: true)
+
+    let target = try importedStore(from: source)
+    let imported = try #require(try target.context.fetch(FetchDescriptor<StandupReport>()).first)
+    let original = try #require(try source.context.fetch(FetchDescriptor<StandupReport>()).first)
+
+    #expect(ExportedReport(imported) == ExportedReport(original))
+}
+
+@MainActor
+@Test("inserting a source ref preserves every field, cache included")
+func insertingARefPreservesEveryField() throws {
+    let source = try ExportFixture()
+    let project = try source.project("Payments", modifiedAt: ExportFixture.at(10))
+    let task = try source.task("Fix the retry handler", in: project)
+    try source.ref(
+        "acme/api#421", on: task, kind: .githubPR,
+        url: "https://github.com/acme/api/pull/421", cachedSummary: "In review, 2 comments",
+        lastFetchedAt: ExportFixture.at(40))
+
+    let target = try importedStore(from: source)
+    let imported = try #require(try target.context.fetch(FetchDescriptor<SourceRef>()).first)
+    let original = try #require(try source.context.fetch(FetchDescriptor<SourceRef>()).first)
+
+    #expect(
+        ExportedSourceRef(imported, includingCachedData: true)
+            == ExportedSourceRef(original, includingCachedData: true))
 }

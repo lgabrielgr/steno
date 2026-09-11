@@ -231,3 +231,35 @@ func duplicateIdsAreRefusedForEveryRecordType() throws {
         #expect(throws: ImportError.self) { try StoreMerge.merge(local: clean, incoming: side) }
     }
 }
+
+@MainActor
+@Test("a locally duplicated store is refused cleanly, not fatally")
+func aDuplicateRowInTheStoreIsRefusedCleanly() throws {
+    // §6 forbids `@Attribute(.unique)`, so nothing makes our `id` field unique in
+    // the store itself, and a store holding two rows under one id is reachable
+    // in principle.
+    //
+    // **The merge refuses it before the applier sees it**, which is the right
+    // answer: the local store is malformed, and §10.4 asks for a clean rejection
+    // rather than a half-applied import. Asserted here because it was not
+    // obvious — this test was written expecting the import to succeed, and the
+    // refusal is the better behaviour.
+    //
+    // It also means `ImportService.existing`'s trapping dictionary build was
+    // unreachable through `plan`/`apply`. It was still worth fixing: "unreachable
+    // today" is what every trap in this file was, right up until the review that
+    // found two of them.
+    let fixture = try ExportFixture()
+    let shared = UUID()
+    try fixture.project("Payments", modifiedAt: ExportFixture.at(10), id: shared)
+    try fixture.project("Payments again", modifiedAt: ExportFixture.at(20), id: shared)
+
+    let source = try ExportFixture()
+    try source.project("Somewhere else", modifiedAt: ExportFixture.at(70))
+    let data = try source.encoder(includingCachedData: true).encode()
+
+    #expect(throws: ImportError.self) { try ImportService(context: fixture.context).plan(data) }
+
+    // And nothing was written by the attempt.
+    #expect(try fixture.context.fetch(FetchDescriptor<Project>()).count == 2)
+}

@@ -35,8 +35,14 @@ private func clockShapedStore() throws -> ExportFixture {
     try fixture.event(
         StatusTransition(from: .todo, into: .inProgress).eventBody, on: task,
         at: ExportFixture.at(30.999_4), kind: .statusChanged)
+    // **Every optional populated**, for `ExportFixture.maximal()`'s reason: a
+    // field left nil is a field a dropped write cannot be distinguished from.
+    // This fixture originally set no `payload`, no `modelUsed` and
+    // `wasAIGenerated: false`, and mutation testing showed all three could be
+    // dropped on insert with the suite still green.
     try fixture.event(
-        "repro'd the race", on: task, at: ExportFixture.at(40.717_28))
+        "repro'd the race", on: task, at: ExportFixture.at(40.717_28),
+        payload: Data("{\"ticket\":\"PAY-421\"}".utf8))
     try fixture.event(
         "a typo I took back", on: task, at: ExportFixture.at(45.123_45), redacted: true)
     try fixture.ref(
@@ -44,7 +50,8 @@ private func clockShapedStore() throws -> ExportFixture {
         cachedSummary: "In review, 2 comments", lastFetchedAt: ExportFixture.at(50.876_54))
     try fixture.report(
         for: project, generatedAt: ExportFixture.at(60.246_81),
-        windowStart: ExportFixture.at(0), windowEnd: ExportFixture.at(60.246_81))
+        windowStart: ExportFixture.at(0), windowEnd: ExportFixture.at(60.246_81),
+        wasAIGenerated: true, modelUsed: "claude-opus-5")
     return fixture
 }
 

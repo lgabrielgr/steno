@@ -108,8 +108,23 @@ extension ImportService {
     private func existing<Model: PersistentModel>(
         _ type: Model.Type, id: (Model) -> UUID
     ) throws -> [UUID: Model] {
+        // `uniquingKeysWith:` rather than `uniqueKeysWithValues:`, which **traps**
+        // on a duplicate key. §6 forbids `@Attribute(.unique)`, so nothing in the
+        // store enforces that our `id` field is unique — a store that somehow
+        // holds two rows under one id would take the process down here, during
+        // an import, which is the one operation that must fail cleanly (§10.4).
+        //
+        // **Unreachable through `plan`/`apply` today**, and fixed anyway: the
+        // merge's own duplicate guard refuses a locally duplicated store first,
+        // so this is defence in depth for a caller that does not come through
+        // the service. "Unreachable today" is what both of the traps found in
+        // review of PR #29 were, right until they were not. Found auditing the
+        // five record paths as a set — the merge was hardened against exactly
+        // this twice, and this call site, shared by all five, was missed both
+        // times.
         Dictionary(
-            uniqueKeysWithValues: try context.fetch(FetchDescriptor<Model>()).map { (id($0), $0) })
+            try context.fetch(FetchDescriptor<Model>()).map { (id($0), $0) },
+            uniquingKeysWith: { first, _ in first })
     }
 
     private func applyProjects(
