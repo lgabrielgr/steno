@@ -115,6 +115,36 @@ func aSecondImportOfTheSameFileChangesNothing() throws {
 }
 
 @MainActor
+@Test("re-importing a store's own export changes nothing")
+func reImportingItsOwnExportChangesNothing() throws {
+    // **This is the test that needs `wireNormalized`, and the two above are
+    // not.** Their target store was populated entirely from a file, so its
+    // dates are already what the file says and re-expressing them is a no-op.
+    // Here the store's timestamps came from the app's own clock and have never
+    // been through the wire, so the local snapshot is at full precision while
+    // the file it is being compared against is rounded. Without normalization
+    // the two disagree by a fraction of a millisecond on every record they
+    // share — which is not a quiet difference: the merge refuses the file as an
+    // inconsistent record, because an event's timestamp is immutable and the
+    // two copies no longer match.
+    //
+    // It is also the most ordinary thing a user can do: export, then import the
+    // file you just wrote.
+    let fixture = try clockShapedStore()
+    let data = try fixture.encoder(includingCachedData: true).encode()
+    let before = try snapshot(of: fixture)
+
+    let service = ImportService(context: fixture.context)
+    let plan = try service.plan(data)
+
+    #expect(plan.isEmpty)
+    #expect(plan.events.unchanged == 4)
+
+    try service.apply(plan)
+    #expect(try snapshot(of: fixture) == before)
+}
+
+@MainActor
 @Test("a merge into a store that has diverged reports what it will change")
 func aDivergentImportReportsItsCounts() throws {
     let source = try clockShapedStore()
