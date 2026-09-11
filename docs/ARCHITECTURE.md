@@ -154,7 +154,8 @@ StenoKit/         framework — everything testable
                   markdown (M2-02); StandupService, StandupReportedPayload,
                   StandupClipboard (rich text, D-083),
                   the Copy write path (M2-03)                   (exists)
-  Portability/    export, import, merge                  (M2.5)
+  Portability/    ExportDocument, ExportRecords, ExportEncoder, ExportFilename
+                  (exists, M2.5-01); import and merge      (M2.5-02)
   AI/             AIProvider, AnthropicProvider          (M3)
   Sources/        SourceConnector, Jira, Confluence, MCP (M4, M5)
   Features/       view models, by feature — MainWindow (M0-05), Capture (M1-02),

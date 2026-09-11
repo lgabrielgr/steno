@@ -1207,6 +1207,8 @@ crash no test of the happy path would find.
 **Alternatives:** a settings row in SwiftData (a schema addition §6's CloudKit rules and M2.5-02's
 merge would both have to reason about, for two values that are not domain data).
 
+**O-9 is now closed by D-093: neither setting is exported.**
+
 ---
 
 ### D-057 — `LoginItem` reports a status, not a `Bool`
@@ -2135,6 +2137,173 @@ on SwiftUI's render path, the hazard `selectedTaskEvents` documents.
 
 ---
 
+### D-090 — Export sets `.sortedKeys`; key order is alphabetical, not §10.2's
+
+**2026-09-11** · M2.5-01 · **Status:** accepted · amends REQUIREMENTS.md §10.2 (v1.16)
+
+`ExportDocument.encoder()` sets `.prettyPrinted`, `.sortedKeys` and `.withoutEscapingSlashes`. The
+file's keys are therefore alphabetical, and §10.2's example ordering — `schemaVersion` first — is
+illustrative rather than emitted.
+
+**Why:** the appealing alternative was to rely on synthesized `Codable` emitting keys in property
+declaration order, which would have matched §10.2 exactly. That is simply false. `Codable`
+synthesis writes into a dictionary, so without the option the key order is hash order, and **it
+differs between processes** — two runs of the suite produced two different top-level orders for
+the same document. Two exports of an unchanged store would be byte-different files, which defeats
+the diffability §10.2 asks for by name and reduces M2.5-05's auto-export history to noise. No
+single test run can observe this, which is why it is written down here: the falsification is to
+remove the option and run `make test` **twice**.
+**Alternatives:** a hand-written serializer that controls key order (the only way to have both,
+and far too much machinery for a cosmetic property); accepting nondeterminism (it is the one thing
+§10.2 cannot accept).
+
+---
+
+### D-091 — Timestamps carry milliseconds, and encoding truncates
+
+**2026-09-11** · M2.5-01 · **Status:** accepted · amends REQUIREMENTS.md §10.2 (v1.16)
+
+Dates encode as ISO-8601 with three fractional digits, through a `Date.ISO8601FormatStyle`. The
+decoder accepts the fractional form first and falls back to whole seconds, so a hand-edited file
+still imports.
+
+**Why:** §10.1 resolves three of its four mutable-field merge rules by comparing timestamps.
+Whole-second precision makes two notes typed in the same second a tie no rule can break, and
+their order in the append-only log is then unrecoverable.
+
+**The precision claim is narrower than "milliseconds" suggests, and was measured.** Formatting
+**truncates rather than rounds**, and at epoch 1.7e9 most decimals are not representable as a
+`Double`: `.481` is stored as `.4809999…` and emitted as `.480`; `.1` emits as `.099`. So a
+round-trip is *exact* only when the fractional second is dyadic (`0`, `.125`, `.25`, `.5`, …) and
+otherwise lands within 1 ms and **never later**. Every test fixture date is whole or dyadic for
+this reason, which is what lets `ExportDocument ==` be a fair assertion. **M2.5-02's "the object
+graph is identical" criterion means identical at this precision** — an `==` on a `Date` that came
+from `Date.now` will fail there, and will look like a merge bug.
+**Alternatives:** epoch seconds as a JSON number (lossless and bit-exact, and unreadable at
+exactly the field a person most wants to read); whole seconds per the original example (loses
+ordering within a second).
+
+---
+
+### D-092 — Every exported array carries a total order, ending in the record id
+
+**2026-09-11** · M2.5-01 · **Status:** accepted
+
+Projects sort by `(sortOrder, id)`, tasks by `(createdAt, id)`, events by `(timestamp, id)`,
+reports by `(generatedAt, id)`, and refs by §3.4's dedup key then `id`. Sorting happens in memory
+rather than through `FetchDescriptor.sortBy`, so the comparators sit together and `SourceRefKind`
+is not a special case — an enum inside a `#Predicate` does not compile in either spelling
+(`EventQueries.swift`, D-085).
+
+**Why:** `sorted(by:)` is not documented as stable, so two records sharing a timestamp would
+otherwise have an unspecified relative order and consecutive exports of an unchanged store would
+differ. The time-ordered arrays also mean a day's new rows append at the *end*, so a diff between
+two daily exports reads as additions rather than as a reshuffle. This is what makes M2.5-05's
+auto-export a backup history rather than churn. Falsified by dropping the id from the event
+comparator, which turns the tie-break test red.
+**Alternatives:** sorting by `id` alone (fully stable, and it scatters a task's timeline across
+the file); relying on SwiftData's fetch order (unspecified — `ReportGatherer` already records
+this).
+
+---
+
+### D-093 — The export carries no `AppSettings`, closing O-9
+
+**2026-09-11** · M2.5-01 · **Status:** accepted · closes **O-9** · amends D-056
+
+§10's export carries domain data only. The hotkey chord and FR-6's default project stay on the
+machine that set them.
+
+**Why:** three reasons, in the order they matter. FR-6's default project is a `UUID` that may name
+a project the target machine does not have, so importing it installs a dangling pointer into the
+capture path §1.1 requires never to block. A chord free on machine A may collide with another
+app's on machine B, and import has no way to ask. And M2.5-02's merge would need a conflict rule
+for something that is not a record. `AppSettings.swift`'s doc comment already asserted this
+outcome; this decision is what makes the assertion true rather than aspirational, and
+`ExportSecretsTests` asserts that neither key nor value reaches the file.
+**Alternatives:** exporting settings so a new machine comes up configured (a sixth top-level key
+that is not a record type, plus a dangling-`UUID` validation path on import, for two values the
+user sets once).
+
+---
+
+### D-094 — Integration configuration is deferred to M4-04/M5-02, closing O-7
+
+**2026-09-11** · M2.5-01 · **Status:** accepted · closes **O-7**
+
+§10.3 permits integration *configuration* — Jira site URLs, MCP server definitions minus secrets —
+to be exported. M2.5-01 does not export it, and that permission passes to the tasks that create
+those records.
+
+**Why:** there is nothing to serialize. `StenoKit/Sources/` does not exist, there is no
+`SourceConnector` and no MCP server definition anywhere in the codebase. Designing their export
+now would mean inventing the shape of records that do not exist, and fixing that shape in the one
+file format that has to stay compatible. The task that creates them adds them under a bumped
+`schemaVersion`, alongside the first-use credential prompt §10.3 already requires.
+**Alternatives:** reserving empty keys in the envelope now (buys format stability for a shape
+nobody can predict, and every reserved key is one M2.5-02 must decide how to merge).
+
+---
+
+### D-095 — §10.3's guarantee needs two assertions; the JSON allowlist alone misses it
+
+**2026-09-11** · M2.5-01 · **Status:** accepted
+
+The export's field completeness is asserted twice: once over the emitted JSON keys, and once over
+each record type's declared stored properties via `Mirror`. Both read one shared literal
+declaration of the allowed keys.
+
+**Why:** §10.3 asks for the scan because "construction-based guarantees erode silently when
+someone later adds a field" — and a key allowlist read from the JSON **does not catch that case**.
+Mutation testing proved it: adding `public let apiToken: String?` to a record changed nothing. The
+field is `nil`, synthesized `Codable` uses `encodeIfPresent`, the key is omitted, and the bytes are
+byte-for-byte identical. A field with no fixture value is never anything *but* `nil`, so it would
+stay invisible forever. The `Mirror` assertion fails the moment the property is declared, valued
+or not, and it caught the same mutation immediately.
+
+Note what the pattern scan still cannot prove: that a credential in a format nobody anticipated
+would be recognised. The `Mirror` allowlist is what covers the unanticipated field; the scan
+covers the known markers, and its own positive control is what proves the scanner is not vacuous.
+**Alternatives:** the JSON allowlist alone (demonstrably blind to new optionals); requiring every
+new field to be non-optional (a schema rule the domain models cannot follow).
+
+---
+
+### D-096 — `CredentialPatterns` is test infrastructure, not `StenoKit`
+
+**2026-09-11** · M2.5-01 · **Status:** accepted
+
+The §10.3 scanner lives in `StenoTests/Portability/`. Nothing in production reads it.
+
+**Why:** §10.3 asks for an assertion about the output, not a runtime guard. A scanner shipped in
+the framework with no caller is an invitation to wire it into the write path, where it would
+become a filter on user content — and **if the user pastes a token into a note, the export
+containing it is correct.** §10.3 governs credentials *the app holds*, which per §8 live in
+Keychain and never reach SwiftData. Stripping content from a note because it pattern-matches would
+be the export silently deleting the user's data, with no second copy anywhere. M2.5-05's tests,
+which assert the same property on the unattended auto-export path, link it from the test bundle.
+**Alternatives:** a production scanner called before every write (turns a test into a content
+filter, and the false-positive costs the user data).
+
+---
+
+### D-097 — `Event.payload` exports as base64, for now
+
+**2026-09-11** · M2.5-01 · **Status:** accepted
+
+`payload` is `Data?`, so it encodes as a base64 string — neither greppable nor diffable, against
+§10.2's stated goals.
+
+**Why:** it is `nil` for every event the app currently creates. Only M4's `externalUpdate` will
+populate one, so base64 is lossless and costs nothing today, while embedding it as nested JSON
+means deciding the shape of a payload that does not exist yet. **This is a bug filed against the
+task that first writes one** — whoever does should revisit this rather than inherit it, because a
+store full of opaque base64 blobs is exactly what §10.2 says the format is not.
+**Alternatives:** nested JSON now (designs a schema for data nobody has produced); excluding
+`payload` from the export (loses a field, which §10 cannot afford).
+
+---
+
 ## Open — decided by the task that owns them
 
 Each of these is a real choice the spec leaves open. The owning task decides it, records it in
@@ -2143,9 +2312,7 @@ its PR body, and adds an entry above.
 | # | Question | Owning task |
 |---|---|---|
 | O-5 | Where "last-used project" is stored, and its behavior on first ever launch | `M1-02` |
-| O-7 | Whether integration *configuration* (site URLs, MCP definitions minus secrets) is exported by M2.5-01 or added by M4-04/M5-02 | `M2.5-01` |
 | O-8 | How import merges the two mutable boolean flags, `Event.isRedacted` and `StandupReport.isUndone` — §10.1's union-by-UUID default has no rule for them and neither model carries `modifiedAt` | `M2.5-02` |
-| O-9 | Whether the settings in `AppSettings` — the hotkey chord and FR-6's default project — are carried by §10's export. D-056 moved both behind one type, so this is now a single place to read | `M2.5-01` |
 | O-10 | Whether a `SourceRef` orphaned by a **corrected** note (the primary case) or a redacted one is reconciled, and how — stated in full as **D-049** above, which M1-06 left open rather than deciding blind | `M5` |
 
 ## Product questions — not for agents to decide
