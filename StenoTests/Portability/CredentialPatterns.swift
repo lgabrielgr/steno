@@ -14,7 +14,7 @@ import Foundation
 /// are the vendor markers a leaked token is recognisable by, a substring search
 /// has no pattern to get subtly wrong, and the test that matters is the
 /// positive control — see `ExportSecretsTests`.
-struct CredentialPattern {
+struct CredentialPattern: Sendable {
     let name: String
     let marker: String
 }

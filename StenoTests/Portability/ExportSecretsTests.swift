@@ -13,20 +13,25 @@ import Testing
 
 @Test(
     "the scanner recognises every pattern it claims to",
-    arguments: CredentialPatterns.all.map(\.marker))
-func theScannerFlagsAKnownCredential(marker: String) {
+    arguments: CredentialPatterns.all)
+func theScannerFlagsAKnownCredential(pattern: CredentialPattern) {
     // Shaped like the real thing: a credential smuggled into a note body,
     // inside a plausible export. If this test stops failing to find something,
     // the negative test below is no longer evidence of anything.
     let leaked = """
         {
           "events" : [
-            { "body" : "token is \(marker)0123456789abcdef", "kind" : "note" }
+            { "body" : "token is \(pattern.marker)0123456789abcdef", "kind" : "note" }
           ]
         }
         """
 
-    #expect(!CredentialPatterns.matches(in: leaked).isEmpty)
+    // The **name** is asserted, not merely that something matched. `isEmpty`
+    // would pass for a scanner that ignored every marker and matched only the
+    // shared hexadecimal suffix — all eight cases green, and the pattern this
+    // case exists for never exercised. Exactly one marker appears in `leaked`,
+    // so exactly one name may come back.
+    #expect(CredentialPatterns.matches(in: leaked) == [pattern.name])
 }
 
 @Test("ordinary stand-up prose is not mistaken for a credential")

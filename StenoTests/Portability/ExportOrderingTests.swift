@@ -20,6 +20,22 @@ func projectsExportInSortOrder() throws {
 }
 
 @MainActor
+@Test("projects sharing a sortOrder fall back to name, as the sidebar does")
+func projectsTiedOnSortOrderFallBackToName() throws {
+    let fixture = try ExportFixture()
+    try fixture.project("Zebra", sortOrder: 3)
+    try fixture.project("Apple", sortOrder: 3)
+    try fixture.project("Mango", sortOrder: 3)
+
+    let names = try fixture.encoder().snapshot().projects.map(\.name)
+
+    // `sortOrder` is not unique, and `MainWindowModel.fetchProjects` breaks the
+    // tie on `name`. Breaking it on `id` instead would export three projects in
+    // an order that matches nothing the user has ever seen.
+    #expect(names == ["Apple", "Mango", "Zebra"])
+}
+
+@MainActor
 @Test("tasks export oldest first, whatever order they were inserted in")
 func tasksExportOldestFirst() throws {
     let fixture = try ExportFixture()

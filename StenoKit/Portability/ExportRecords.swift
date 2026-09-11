@@ -52,9 +52,17 @@ public struct ExportedTask: Codable, Equatable, Sendable {
 /// for M2.5-02, and a merge cannot resolve a flag it never received.
 ///
 /// `payload` is `Data`, so it encodes as base64 — neither greppable nor
-/// diffable. It is `nil` for every event the app currently creates; only M4's
-/// `externalUpdate` will populate one, and embedding it as nested JSON belongs
-/// to the task that first writes one and knows its shape.
+/// diffable, and **this is already true of ordinary stores.** `StandupService`
+/// writes a `StandupReportedPayload` on every Copy (D-085), so every
+/// `standupReported` event in a real export carries an opaque
+/// `eyJyZXBvcnRJRCI6…` rather than the report id a person could grep for.
+///
+/// Base64 is kept anyway, deliberately: `payload` is `Data`, and a byte-exact
+/// round-trip of arbitrary bytes is what §10 requires of every field. Embedding
+/// it as nested JSON means re-serializing on import, which does not reproduce
+/// the original bytes — key order and whitespace are not preserved — so the
+/// field that survives the trip least well would be the one meant to be
+/// readable. §10.2 records the trade rather than pretending it away (D-097).
 public struct ExportedEvent: Codable, Equatable, Sendable {
     public let id: UUID
     public let taskID: UUID

@@ -93,8 +93,15 @@ extension ExportEncoder {
     // spelling (`EventQueries.swift`, D-085).
 
     /// Projects in the order the UI shows them.
+    ///
+    /// `(sortOrder, name)` is `MainWindowModel.fetchProjects`'s order, and
+    /// `sortOrder` is not unique — so sorting on `(sortOrder, id)` would put two
+    /// equally-ordered projects in a different sequence from the one the user
+    /// sees in the sidebar. The id stays as a third component, because `name`
+    /// is not unique either and the order still has to be total.
     static func precedes(_ lhs: ExportedProject, _ rhs: ExportedProject) -> Bool {
-        (lhs.sortOrder, lhs.id.uuidString) < (rhs.sortOrder, rhs.id.uuidString)
+        (lhs.sortOrder, lhs.name, lhs.id.uuidString)
+            < (rhs.sortOrder, rhs.name, rhs.id.uuidString)
     }
 
     /// Oldest task first, so new tasks land at the end of the array.

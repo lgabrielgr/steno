@@ -2261,9 +2261,19 @@ byte-for-byte identical. A field with no fixture value is never anything *but* `
 stay invisible forever. The `Mirror` assertion fails the moment the property is declared, valued
 or not, and it caught the same mutation immediately.
 
+**A third assertion was added in review, for the direction the first two cannot see.** Both
+allowlists compare the *records* to a literal set, so a field added to `Project` and forgotten in
+`ExportedProject` changes nothing — the DTO has not grown, the JSON has not changed, and the
+export silently drops user data. `everyModelFieldIsAccountedFor` compares each `@Model`'s stored
+properties (via `Mirror`, dropping the macro's `_` prefix and its `_$` artifacts) against the same
+literal set plus a named exclusion list, so the two relationship fields §3.4 deliberately omits
+are stated rather than filtered by a rule. Mutation-tested: adding a field to `Project` turns it
+red.
+
 Note what the pattern scan still cannot prove: that a credential in a format nobody anticipated
-would be recognised. The `Mirror` allowlist is what covers the unanticipated field; the scan
-covers the known markers, and its own positive control is what proves the scanner is not vacuous.
+would be recognised. The allowlists cover the unanticipated *field*; the scan covers the known
+markers, and its positive control — which asserts the specific pattern name, not merely that
+something matched — is what proves the scanner is not vacuous.
 **Alternatives:** the JSON allowlist alone (demonstrably blind to new optionals); requiring every
 new field to be non-optional (a schema rule the domain models cannot follow).
 
@@ -2287,20 +2297,30 @@ filter, and the false-positive costs the user data).
 
 ---
 
-### D-097 — `Event.payload` exports as base64, for now
+### D-097 — `Event.payload` exports as base64, and the cost is real today
 
-**2026-09-11** · M2.5-01 · **Status:** accepted
+**2026-09-11** · M2.5-01 · **Status:** accepted · corrected during review
 
 `payload` is `Data?`, so it encodes as a base64 string — neither greppable nor diffable, against
 §10.2's stated goals.
 
-**Why:** it is `nil` for every event the app currently creates. Only M4's `externalUpdate` will
-populate one, so base64 is lossless and costs nothing today, while embedding it as nested JSON
-means deciding the shape of a payload that does not exist yet. **This is a bug filed against the
-task that first writes one** — whoever does should revisit this rather than inherit it, because a
-store full of opaque base64 blobs is exactly what §10.2 says the format is not.
-**Alternatives:** nested JSON now (designs a schema for data nobody has produced); excluding
-`payload` from the export (loses a field, which §10 cannot afford).
+**This affects ordinary stores, not hypothetical future ones.** An earlier draft of this entry
+claimed `payload` was `nil` for every event the app creates and deferred the question to M4. That
+was false: `StandupService` writes a `StandupReportedPayload` on every Copy (D-085), so every
+`standupReported` event in a real export already carries an opaque `eyJyZXBvcnRJRCI6…` where the
+report id would otherwise be greppable. Caught in review of M2.5-01's PR.
+
+**Why base64 anyway:** round-trip fidelity outranks readability for this field. `payload` is
+`Data`, and §10's first criterion is that every field survives byte-exactly — there is no second
+copy (§10, D1). Embedding the JSON as a nested object means re-serializing it on import, and that
+does not reproduce the original bytes: key order and whitespace are not preserved. The field
+chosen for readability would become the only field that does not survive the trip. §10.2 now
+states the trade rather than implying the file is uniformly greppable, and a test asserts a real
+`standupReported` payload survives the round trip.
+**Alternatives:** a nested JSON object (readable, and it breaks byte-exactness — disqualifying);
+a UTF-8 string when the bytes decode and base64 otherwise (readable, and a decoder facing two
+shapes in one field needs a discriminator the format does not have); excluding `payload` (loses a
+field §10 cannot afford, and would break M2-04's undo across a transfer).
 
 ---
 

@@ -52,6 +52,30 @@ private func declaredKeys(_ value: Any) -> Set<String> {
     Set(Mirror(reflecting: value).children.compactMap(\.label))
 }
 
+/// The stored property names of a SwiftData `@Model`.
+///
+/// The macro renames every stored property with a leading underscore and adds
+/// `_$backingData` and `_$observationRegistrar`, so the names are recovered by
+/// dropping the artifacts and then the underscore.
+private func modelKeys(_ value: Any) -> Set<String> {
+    Set(
+        Mirror(reflecting: value).children
+            .compactMap(\.label)
+            .filter { !$0.hasPrefix("_$") }
+            .map { String($0.dropFirst()) })
+}
+
+/// Fields a model has and its record deliberately does not carry.
+///
+/// Both are the same fact expressed twice: §3.4 makes `SourceRef.taskID` the
+/// authoritative link, and the top-level `sourceRefs` array is keyed by it. The
+/// relationship in either direction is a cycle, and a file carrying both could
+/// disagree with itself.
+private enum DeliberatelyNotExported {
+    static let tasks: Set<String> = ["sourceRefs"]
+    static let sourceRefs: Set<String> = ["task"]
+}
+
 @MainActor
 @Test("§10.3: the exported keys of every record are exactly the allowed set")
 func exportedKeysAreExactlyTheAllowedSet() throws {
@@ -83,6 +107,49 @@ func declaredPropertiesAreExactlyTheAllowedSet() throws {
     #expect(declaredKeys(try #require(document.events.first)) == AllowedKeys.events)
     #expect(declaredKeys(try #require(document.sourceRefs.first)) == AllowedKeys.sourceRefs)
     #expect(declaredKeys(try #require(document.reports.first)) == AllowedKeys.reports)
+}
+
+@MainActor
+@Test("§10.3: every model field is either exported or deliberately excluded")
+func everyModelFieldIsAccountedFor() throws {
+    let fixture = try ExportFixture()
+    let models = try fixture.maximal()
+
+    // **This is the direction the two allowlists above cannot see.** They
+    // compare the records to a literal set, so a field added to `Project` and
+    // forgotten in `ExportedProject` changes nothing: the DTO has not grown,
+    // the JSON has not changed, and the export silently drops user data — the
+    // erosion §10.3 names, arriving from the side nobody was watching.
+    //
+    // Every exclusion is named rather than filtered by a rule, so adding a
+    // model field cannot be absorbed silently by a pattern.
+    #expect(modelKeys(models.project) == AllowedKeys.projects)
+    #expect(modelKeys(models.task) == AllowedKeys.tasks.union(DeliberatelyNotExported.tasks))
+    #expect(modelKeys(models.event) == AllowedKeys.events)
+    #expect(
+        modelKeys(models.ref) == AllowedKeys.sourceRefs.union(DeliberatelyNotExported.sourceRefs))
+    #expect(modelKeys(models.report) == AllowedKeys.reports)
+}
+
+@MainActor
+@Test("§10.2: a real standupReported payload survives byte-exactly")
+func aRealPayloadRoundTripsByteExactly() throws {
+    let fixture = try ExportFixture()
+    try fixture.realistic()
+
+    let data = try fixture.encoder().encode()
+    let decoded = try ExportDocument.decoder().decode(ExportDocument.self, from: data)
+
+    // `StandupService` writes a `StandupReportedPayload` on every Copy (D-085),
+    // so this is not a hypothetical field: an ordinary store has one per
+    // reported task. Base64 is opaque in the file — D-097 takes that trade
+    // openly — but the bytes must survive, because §10 has no second copy.
+    let reported = decoded.events.filter { $0.kind == .standupReported }
+    #expect(!reported.isEmpty)
+    for event in reported {
+        let payload = try #require(event.payload)
+        #expect(StandupReportedPayload.decoded(from: payload) != nil)
+    }
 }
 
 @MainActor
