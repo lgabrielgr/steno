@@ -52,9 +52,12 @@ func applyImportedWritesEveryTaskField() throws {
         "before", in: project, status: .todo, createdAt: ExportFixture.at(1),
         statusAt: ExportFixture.at(1))
 
+    // `createdAt` matches the row's own, because `applyImported` deliberately
+    // does not write it — see `anExistingTasksCreationTimeIsNeverRewritten`.
+    // Every other field differs, which is what makes a dropped write visible.
     let record = ExportedTask(
         id: task.id, title: "after", projectID: other.id, status: .done,
-        createdAt: ExportFixture.at(3), statusChangedAt: ExportFixture.at(4),
+        createdAt: ExportFixture.at(1), statusChangedAt: ExportFixture.at(4),
         completedAt: ExportFixture.at(4), isArchived: true, modifiedAt: ExportFixture.at(5))
 
     task.applyImported(record)

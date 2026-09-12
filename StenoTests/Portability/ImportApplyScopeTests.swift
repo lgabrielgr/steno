@@ -296,3 +296,60 @@ func theMergeAlsoRefusesAnInvertedWindow() throws {
     #expect(throws: ImportError.self) { try StoreMerge.merge(local: clean, incoming: inverted) }
     #expect(throws: ImportError.self) { try StoreMerge.merge(local: inverted, incoming: clean) }
 }
+
+@MainActor
+@Test("an existing task's creation time is never rewritten by an import")
+func anExistingTasksCreationTimeIsNeverRewritten() throws {
+    // **`createdAt` is immutable, and writing it back was quantizing it.** The
+    // merge compares the *wire-normalized* local snapshot, so the record it
+    // resolves carries a rounded `createdAt` while the live row holds the full
+    // precision its own clock produced. `applyImported` wrote that rounded value
+    // back — so any unrelated remote change that made the row writable, a title
+    // or an archive flag, silently moved the task's creation time.
+    //
+    // The write-set filter does not cover this: the row genuinely *is* being
+    // updated. Only not writing the field does.
+    let fixture = try ExportFixture()
+    let project = try fixture.project("Payments", modifiedAt: ExportFixture.at(10))
+    let task = try fixture.task(
+        "Fix the retry handler", in: project, createdAt: ExportFixture.at(20.301_59))
+    let createdAt = task.createdAt
+
+    // A file that renames the same task, later than the local copy.
+    let source = try ExportFixture()
+    let sourceProject = try source.project(
+        "Payments", modifiedAt: ExportFixture.at(10), id: project.id)
+    let sourceTask = try source.task(
+        "Fix the retry handler", in: sourceProject, createdAt: ExportFixture.at(20.301_59))
+    sourceTask.rename(to: "renamed on the other Mac", at: ExportFixture.at(90))
+    try source.context.save()
+
+    let document = try ExportDocument.decoder().decode(
+        ExportDocument.self, from: try source.encoder(includingCachedData: true).encode())
+    let remote = try #require(document.tasks.first)
+    let retitled = ExportedTask(
+        id: task.id, title: remote.title, projectID: project.id, status: remote.status,
+        createdAt: remote.createdAt, statusChangedAt: remote.statusChangedAt,
+        completedAt: remote.completedAt, isArchived: remote.isArchived,
+        modifiedAt: remote.modifiedAt)
+    let file = ExportDocument(
+        schemaVersion: document.schemaVersion, exportedAt: document.exportedAt,
+        exportedBy: document.exportedBy, includesCachedExternalData: true,
+        projects: document.projects.map {
+            ExportedProject(
+                id: project.id, name: $0.name, colorHex: $0.colorHex,
+                jiraProjectKeys: $0.jiraProjectKeys, isArchived: $0.isArchived,
+                sortOrder: $0.sortOrder, lastStandupAt: $0.lastStandupAt,
+                reportCadence: $0.reportCadence, staleThresholdDays: $0.staleThresholdDays,
+                modifiedAt: $0.modifiedAt)
+        },
+        tasks: [retitled], events: [], sourceRefs: [], reports: [])
+
+    let service = ImportService(context: fixture.context)
+    let plan = try service.plan(try ExportDocument.encoder().encode(file))
+    #expect(plan.tasks.updated == 1)
+    try service.apply(plan)
+
+    #expect(task.title == "renamed on the other Mac")
+    #expect(task.createdAt == createdAt)
+}

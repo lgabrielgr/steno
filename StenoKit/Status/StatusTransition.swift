@@ -1,3 +1,5 @@
+import Foundation
+
 /// A status change, as a value.
 ///
 /// Free-standing rather than a method on `Status` or on `StatusService`,

@@ -26,6 +26,13 @@ extension StoreMerge {
         let mineByID = try indexed(local, id: { $0.id }, kind: "task")
         let theirsByID = try indexed(incoming, id: { $0.id }, kind: "task")
 
+        // **Indexed once, not scanned per task.** This filtered the whole event
+        // array inside the loop, making an import O(tasks × events) — and
+        // `ImportService.plan` runs the merge synchronously behind M2.5-03's
+        // preview, so a store with years of history paid for it on every import.
+        let transitionsByTask = Dictionary(
+            grouping: events.filter { $0.kind == .statusChanged }, by: { $0.taskID })
+
         var merged: [ExportedTask] = []
         var unparsed: [UUID] = []
 
@@ -33,7 +40,8 @@ extension StoreMerge {
             let mine = mineByID[id]
             let theirs = theirsByID[id]
             let base = try resolveGovernedTask(mine, theirs)
-            let resolved = try resolveStatus(mine: mine, theirs: theirs, id: id, events: events)
+            let resolved = try resolveStatus(
+                mine: mine, theirs: theirs, transitions: transitionsByTask[id] ?? [])
             if let unparsedID = resolved.unparsedEventID { unparsed.append(unparsedID) }
 
             merged.append(
@@ -93,15 +101,14 @@ extension StoreMerge {
     /// including a task that went done → todo → done, where `completedAt` must
     /// be the latest completion and not the first.
     private static func resolveStatus(
-        mine: ExportedTask?, theirs: ExportedTask?, id: UUID, events: [ExportedEvent]
+        mine: ExportedTask?, theirs: ExportedTask?, transitions: [ExportedEvent]
     ) throws -> StatusResolution {
         // Redacted events count. §3.3 makes `isRedacted` a visibility flag —
         // "hidden from summaries; row retained" — and a status cache is not a
         // summary. Excluding them would let a redaction silently revert a task's
         // status, which is a mutation of the log by the back door.
         let newest =
-            events
-            .filter { $0.taskID == id && $0.kind == .statusChanged }
+            transitions
             .max { lhs, rhs in
                 (ExportDocument.wireString(lhs.timestamp), lhs.id.uuidString)
                     < (ExportDocument.wireString(rhs.timestamp), rhs.id.uuidString)

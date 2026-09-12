@@ -99,15 +99,18 @@ extension TaskItem {
     /// through the guard would drop a resolution that only *looks* like a no-op —
     /// same status, different `statusChangedAt`.
     ///
-    /// `createdAt` is written even though it is immutable: for an inserted task
-    /// it arrives through `init`, and for an existing one the merge has already
-    /// refused the file if the two sides disagreed. Writing it keeps "every
-    /// stored property is written here" true without an exception to explain.
+    /// **`createdAt` is deliberately not written here**, and the reasoning that
+    /// said it should be was wrong. It argued that the merge refuses a file
+    /// whose two sides disagree on it, so writing it is a no-op — but the merge
+    /// compares the *wire-normalized* local snapshot, while the row itself holds
+    /// full precision. Writing the record's value back therefore quantized a
+    /// live task's creation time whenever some unrelated field (a title, an
+    /// archive flag) made the row writable. An inserted task gets `createdAt`
+    /// from `init`; an existing one keeps the instant it was actually created.
     func applyImported(_ record: ExportedTask) {
         title = record.title
         projectID = record.projectID
         status = record.status
-        createdAt = record.createdAt
         statusChangedAt = record.statusChangedAt
         completedAt = record.completedAt
         isArchived = record.isArchived
