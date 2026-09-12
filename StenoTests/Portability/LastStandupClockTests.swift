@@ -179,6 +179,14 @@ func undoSelectionIsOrderIndependent() throws {
 
     #expect(chosenForward != nil)
     #expect(chosenForward?.id == chosenBackward?.id)
+
+    // **And it is the lowest `uuidString`, specifically.** Order-independence is
+    // the property that matters, and `max` would satisfy it just as well — a
+    // mutation to `max` passes every other assertion here. This line exists so
+    // the rule the doc comment and D-086's amendment both name stays the rule
+    // the code implements, which is the drift this PR has spent several rounds
+    // correcting elsewhere.
+    #expect(chosenForward?.id == ids.min { $0.uuidString < $1.uuidString })
 }
 
 @MainActor
