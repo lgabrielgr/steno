@@ -57,12 +57,27 @@ public struct StandupUndoService {
     /// read must never be presented as an empty store.
     public func undoableReport(for project: Project) throws -> StandupReport? {
         let projectID = project.id
-        var descriptor = FetchDescriptor<StandupReport>(
+        let descriptor = FetchDescriptor<StandupReport>(
             predicate: #Predicate { $0.projectID == projectID },
             sortBy: [SortDescriptor(\.generatedAt, order: .reverse)]
         )
-        descriptor.fetchLimit = 1
-        return try context.fetch(descriptor).first.flatMap { $0.isUndone ? nil : $0 }
+        let reports = try context.fetch(descriptor)
+        guard let newest = reports.first else { return nil }
+
+        // **The tie-break is what M2.5-02 made necessary.** This used to take
+        // `fetchLimit = 1` off a sort keyed only on `generatedAt`. On one machine
+        // two reports cannot share that instant — `StandupService` stamps it from
+        // one `now()` per Copy — but a merge unions the reports of two machines,
+        // and two Macs can produce a report in the same millisecond. The sort
+        // then has an unspecified order among equals, so *which* report Undo
+        // offers would depend on store order, and the two machines could disagree
+        // after converging on an identical record set.
+        //
+        // `uuidString` because `UUID` is not `Comparable`, and the same tie-break
+        // D-092 uses for every exported array, so the two orders agree.
+        let tied = reports.filter { $0.generatedAt == newest.generatedAt }
+        let chosen = tied.min { $0.id.uuidString < $1.id.uuidString } ?? newest
+        return chosen.isUndone ? nil : chosen
     }
 
     /// Reverse all three of Copy's store effects, atomically. Returns how many

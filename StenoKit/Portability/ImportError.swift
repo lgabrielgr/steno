@@ -29,6 +29,14 @@ public enum ImportError: Error, Equatable, Sendable {
     /// The single transaction failed. The store is unchanged.
     case saveFailed(detail: String)
 
+    /// Reading the existing store failed, so the import never started.
+    ///
+    /// Distinct from `saveFailed` because the two are different events for the
+    /// user and for a caller: nothing was attempted here, and telling someone
+    /// their import "could not be saved" when the store could not be *read* is
+    /// simply false.
+    case storeUnreadable(detail: String)
+
     /// The store changed between planning and applying, so the plan no longer
     /// describes what would happen.
     ///
@@ -68,6 +76,8 @@ public enum ImportError: Error, Equatable, Sendable {
             """
         case .saveFailed(let detail):
             "The import could not be saved, so nothing was changed. \(detail)"
+        case .storeUnreadable(let detail):
+            "Steno could not read its own store, so nothing was imported. \(detail)"
         case .storeChanged:
             """
             Something changed on this Mac while the import was being previewed, \

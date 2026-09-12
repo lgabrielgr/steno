@@ -104,6 +104,13 @@ extension ImportService {
             try applyRefs(store.sourceRefs, writing: plan.writes.sourceRefs)
             try applyReports(store.reports, writing: plan.writes.reports)
             try save(context)
+        } catch let error as ImportError {
+            // A read failure from `existing(...)` is already classified, and
+            // re-wrapping it as `.saveFailed` would tell the user their import
+            // could not be *saved* when the store could not be *read*. Both roll
+            // back; only one of them is a transaction failure.
+            context.rollback()
+            throw error
         } catch {
             context.rollback()
             throw ImportError.saveFailed(detail: error.localizedDescription)
@@ -132,9 +139,13 @@ extension ImportService {
         // five record paths as a set — the merge was hardened against exactly
         // this twice, and this call site, shared by all five, was missed both
         // times.
-        Dictionary(
-            try context.fetch(FetchDescriptor<Model>()).map { (id($0), $0) },
-            uniquingKeysWith: { first, _ in first })
+        do {
+            return Dictionary(
+                try context.fetch(FetchDescriptor<Model>()).map { (id($0), $0) },
+                uniquingKeysWith: { first, _ in first })
+        } catch {
+            throw ImportError.storeUnreadable(detail: error.localizedDescription)
+        }
     }
 
     private func applyProjects(

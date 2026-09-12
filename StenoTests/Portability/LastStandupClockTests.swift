@@ -121,3 +121,61 @@ func afterCopyUndoCopy() throws {
 
     #expect(try clock.derived() == clock.live)
 }
+
+// MARK: - After a merge, where single-machine undo semantics stop applying
+
+@MainActor
+@Test("two reports in the same millisecond resolve to the same one on both machines")
+func undoPicksTheSameReportOnBothMachines() throws {
+    // M2.5-02 makes this reachable. On one machine `StandupService` stamps
+    // `generatedAt` from a single `now()` per Copy, so two reports cannot share
+    // it — but the merge unions two machines' reports, and two Macs can produce
+    // one in the same millisecond. `undoableReport` sorted on `generatedAt`
+    // alone, so which report Undo offered depended on store order: the two
+    // machines could converge on an identical record set and still disagree
+    // about what Undo would take back.
+    let fixture = try ExportFixture()
+    let project = try fixture.project("Payments", modifiedAt: ExportFixture.at(0))
+    let instant = ExportFixture.at(100)
+    let first = try fixture.report(
+        for: project, generatedAt: instant, windowStart: ExportFixture.at(0),
+        windowEnd: instant)
+    let second = try fixture.report(
+        for: project, generatedAt: instant, windowStart: ExportFixture.at(0),
+        windowEnd: instant, body: "*Yesterday*\n- the other machine")
+
+    let chosen = try StandupUndoService(context: fixture.context).undoableReport(for: project)
+    let expected = [first, second].min { $0.id.uuidString < $1.id.uuidString }
+
+    #expect(chosen?.id == expected?.id)
+}
+
+@MainActor
+@Test("a live report from one machine outranks an undo from the other")
+func aLiveReportOutranksTheOtherMachinesUndo() throws {
+    // **The derivation is not "what undo would have written on one machine", and
+    // after a merge it must not be.** Machine A reported through 100 and never
+    // took it back. Machine B reported a shorter window and undid it. Merged,
+    // the clock is 100 — because the work up to 100 *was* reported aloud, which
+    // is the thing §10.1 says must never be re-reported.
+    //
+    // D-099's claim that the derivation reproduces what `commit` and `undo`
+    // write is a single-machine claim; the other tests in this file are what
+    // pin it. This is the cross-machine rule, stated so it is chosen rather than
+    // accidental.
+    let live = MergeFixture.report(
+        1, project: 1, generatedAt: MergeFixture.at(100), windowStart: MergeFixture.at(0),
+        windowEnd: MergeFixture.at(100))
+    let undone = MergeFixture.report(
+        2, project: 1, generatedAt: MergeFixture.at(110), windowStart: MergeFixture.at(0),
+        windowEnd: MergeFixture.at(90), undone: true)
+
+    let clock = LastStandupClock.value(forProjectID: MergeFixture.id(1), in: [live, undone])
+
+    #expect(clock == MergeFixture.at(100))
+    // And the undo still governs where nothing else covers the window: drop the
+    // live report and the clock falls back to what undo restored.
+    #expect(
+        LastStandupClock.value(forProjectID: MergeFixture.id(1), in: [undone])
+            == MergeFixture.at(0))
+}
