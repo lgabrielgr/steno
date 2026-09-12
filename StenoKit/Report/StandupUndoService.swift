@@ -64,12 +64,29 @@ public struct StandupUndoService {
     ///
     public func undoableReport(for project: Project) throws -> StandupReport? {
         let projectID = project.id
-        let descriptor = FetchDescriptor<StandupReport>(
+        // **Two bounded reads, not one unbounded one.** Adding the tie-break
+        // removed `fetchLimit = 1` and started materializing every report the
+        // project has ever had — on a method `MainWindowModel.reload()` calls
+        // after every write, against a history §D18 never trims. The newest row
+        // comes back on its own, and only its wire millisecond is then read.
+        var newestDescriptor = FetchDescriptor<StandupReport>(
             predicate: #Predicate { $0.projectID == projectID },
             sortBy: [SortDescriptor(\.generatedAt, order: .reverse)]
         )
-        let reports = try context.fetch(descriptor)
-        guard let newest = reports.first else { return nil }
+        newestDescriptor.fetchLimit = 1
+        guard let newest = try context.fetch(newestDescriptor).first else { return nil }
+
+        // Rounding is monotonic, so the raw-newest row is also in the newest
+        // bucket — no report outside this range can outrank it.
+        let bucket = ExportDocument.wireBucket(around: newest.generatedAt)
+        let start = bucket.lowerBound
+        let end = bucket.upperBound
+        let reports = try context.fetch(
+            FetchDescriptor<StandupReport>(
+                predicate: #Predicate {
+                    $0.projectID == projectID && $0.generatedAt >= start && $0.generatedAt < end
+                }
+            ))
 
         // **The tie-break is what M2.5-02 made necessary.** This used to take
         // `fetchLimit = 1` off a sort keyed only on `generatedAt`. On one machine
@@ -90,9 +107,7 @@ public struct StandupUndoService {
         // then disagree about whether it ties with a `.482` report — which is
         // exactly the divergence the tie-break exists to remove. Same key
         // `ExportOrdering` groups on, for the same reason.
-        let newestInstant = ExportDocument.wireString(newest.generatedAt)
-        let tied = reports.filter { ExportDocument.wireString($0.generatedAt) == newestInstant }
-        let chosen = tied.min { $0.id.uuidString < $1.id.uuidString } ?? newest
+        let chosen = reports.min { $0.id.uuidString < $1.id.uuidString } ?? newest
         return chosen.isUndone ? nil : chosen
     }
 

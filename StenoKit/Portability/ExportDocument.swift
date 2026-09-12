@@ -118,6 +118,26 @@ extension ExportDocument {
         return existing
     }
 
+    /// This instant as the file carries it, parsed back to a `Date`.
+    static func wireInstant(_ date: Date) -> Date {
+        (try? Date(wireString(date), strategy: fractionalSeconds)) ?? date
+    }
+
+    /// The half-open range of instants that emit the same wire string as `date`.
+    ///
+    /// Exists so a caller can ask "everything in this millisecond" as a *query*
+    /// rather than by loading rows and grouping them in memory — which is what
+    /// `StandupUndoService` needs, because it runs on every window reload and the
+    /// report history is never trimmed.
+    ///
+    /// `wireString` rounds, so `x` emits the same string as `date` exactly when
+    /// `instant - halfMillisecond <= x < instant + halfMillisecond`.
+    static func wireBucket(around date: Date) -> Range<Date> {
+        let instant = wireInstant(date)
+        return instant.addingTimeInterval(
+            -halfMillisecond)..<instant.addingTimeInterval(halfMillisecond)
+    }
+
     /// Non-optional overload, for the fields that always have a value.
     static func canonical(_ incoming: Date, keeping existing: Date) -> Date {
         wireString(existing) == wireString(incoming) ? existing : incoming

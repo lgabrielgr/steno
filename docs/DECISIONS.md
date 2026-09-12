@@ -2055,6 +2055,15 @@ clause fails the first; matching on `generatedAt` fails the second.
 
 ### D-086 — One query answers both of FR-4.1's eligibility rules
 
+> **Amended by D-099 (2026-09-12): a `generatedAt` tie is reachable after a merge, and is broken
+> deterministically.** The reasoning below is correct for a single machine — `commit` stamps a
+> report and its events from one `now()`, so two Copies cannot share the instant. M2.5-02 unions
+> the reports of two Macs, and two Macs can each produce one inside the same millisecond. The
+> `fetchLimit = 1` this entry records is also gone: `undoableReport` now reads the newest row, then
+> only that row's wire millisecond, and resolves a tie on the lowest `uuidString`. Two bounded
+> queries rather than one, because removing the limit outright made a per-reload check O(report
+> history).
+
 **2026-09-10** · M2-04 · **Status:** accepted
 
 `undoableReport(for:)` fetches `StandupReport` where `projectID` matches, sorted by `generatedAt`

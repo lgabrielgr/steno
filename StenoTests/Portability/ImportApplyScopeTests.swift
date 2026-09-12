@@ -278,3 +278,39 @@ func theCallersContextSeesTheImportAfterRefetching() throws {
     #expect(refetched === project)
     #expect(refetched.name == "renamed on the other Mac")
 }
+
+@MainActor
+@Test("an import repairs a source ref whose relationship was never wired")
+func anImportRepairsADetachedSourceRef() throws {
+    // §3.4 makes `taskID` authoritative and the relationship is never
+    // serialized, so a persisted row can carry the right `taskID` and a nil
+    // `task` — rows written before `applyRefs` set it, or built through the
+    // initializer, which permits it. Such a ref has correct data and is
+    // invisible in the detail pane; an import that only refreshed its cache left
+    // it that way.
+    let fixture = try ExportFixture()
+    let project = try fixture.project("Payments", modifiedAt: ExportFixture.at(10))
+    let task = try fixture.task("Fix the retry handler", in: project)
+    let ref = try fixture.ref("PAY-421", on: task)
+    ref.task = nil
+    try fixture.context.save()
+    #expect(task.sourceRefs?.isEmpty == true)
+
+    // A file that refreshes that ref's cache and nothing else about it.
+    let source = try ExportFixture()
+    let sourceProject = try source.project(
+        "Payments", modifiedAt: ExportFixture.at(10), id: project.id)
+    let sourceTask = try source.task(
+        "Fix the retry handler", in: sourceProject, createdAt: task.createdAt, id: task.id)
+    try source.ref(
+        "PAY-421", on: sourceTask, cachedSummary: "In review", lastFetchedAt: ExportFixture.at(60),
+        id: ref.id)
+    let data = try source.encoder(includingCachedData: true).encode()
+
+    let service = ImportService(context: fixture.context)
+    try service.apply(service.plan(data))
+
+    let fresh = ModelContext(fixture.container)
+    let reloaded = try #require(try fresh.fetch(FetchDescriptor<TaskItem>()).first)
+    #expect(reloaded.sourceRefs?.count == 1)
+}

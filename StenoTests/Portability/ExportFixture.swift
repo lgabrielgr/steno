@@ -86,9 +86,9 @@ struct ExportFixture {
     func task(
         _ title: String, in project: Project, status: Status = .todo,
         createdAt: Date = ExportFixture.origin, statusAt: Date? = nil,
-        archived: Bool = false, archivedAt: Date? = nil
+        archived: Bool = false, archivedAt: Date? = nil, id: UUID = UUID()
     ) throws -> TaskItem {
-        let task = TaskItem(title: title, projectID: project.id, createdAt: createdAt)
+        let task = TaskItem(id: id, title: title, projectID: project.id, createdAt: createdAt)
         context.insert(task)
         if status != .todo { task.setStatus(status, at: statusAt ?? createdAt) }
         if archived { task.setArchived(true, at: archivedAt ?? createdAt) }
@@ -114,9 +114,10 @@ struct ExportFixture {
     @discardableResult
     func ref(
         _ identifier: String, on task: TaskItem, kind: SourceRefKind = .jiraIssue,
-        url: String? = nil, cachedSummary: String? = nil, lastFetchedAt: Date? = nil
+        url: String? = nil, cachedSummary: String? = nil, lastFetchedAt: Date? = nil,
+        id: UUID = UUID()
     ) throws -> SourceRef {
-        let ref = SourceRef(taskID: task.id, kind: kind, identifier: identifier, url: url)
+        let ref = SourceRef(id: id, taskID: task.id, kind: kind, identifier: identifier, url: url)
         context.insert(ref)
         ref.task = task
         if let lastFetchedAt { ref.recordFetch(summary: cachedSummary, at: lastFetchedAt) }

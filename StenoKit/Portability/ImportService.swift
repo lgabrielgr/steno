@@ -258,6 +258,16 @@ extension ImportService {
         let tasks = try existing(TaskItem.self, id: { $0.id }, in: context)
         for record in records where ids.contains(record.id) {
             if let row = rows[record.id] {
+                // **Repair the relationship before touching the cache.** §3.4
+                // makes `taskID` authoritative and the relationship is never
+                // serialized, so a persisted row can carry the right `taskID`
+                // and a nil or stale `task` — rows written before this path set
+                // it, or built through the initializer, which permits it. Such a
+                // ref has correct data and is invisible in the detail pane, and
+                // an import that only refreshed its cache left it that way.
+                if let owner = tasks[record.taskID], row.task !== owner {
+                    row.task = owner
+                }
                 // Unconditional when the merge produced a cache: the previous
                 // form compared `row.lastFetchedAt` — a full-precision `Date` —
                 // against the merged, wire-rounded one, so it was never equal
