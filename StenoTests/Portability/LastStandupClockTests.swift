@@ -132,17 +132,18 @@ private func tiedReportIDs() -> [UUID] {
 
 @MainActor
 private func storeWithTiedReports(
-    insertedIn order: [UUID], firstAt offset: TimeInterval = 100
+    insertedIn order: [UUID], distinctRawInstantFor: UUID? = nil
 ) throws -> (ExportFixture, Project) {
     let fixture = try ExportFixture()
     let project = try fixture.project("Payments", modifiedAt: ExportFixture.at(0))
     let instant = ExportFixture.at(100)
-    for (index, id) in order.enumerated() {
-        // The first report can be given a *raw* instant that differs from the
-        // second while rounding to the same wire millisecond — the shape a
-        // locally-created report has on the Mac that made it, next to the
-        // imported copy of it on the other Mac.
-        let stamp = index == 0 ? ExportFixture.at(offset) : instant
+    for id in order {
+        // One report may be given a *raw* instant that differs from the other
+        // while rounding to the same wire millisecond — the shape a locally
+        // created report has on the Mac that made it, beside the imported copy
+        // on the other Mac, since `apply` leaves unchanged rows at full
+        // precision.
+        let stamp = id == distinctRawInstantFor ? ExportFixture.at(100.000_2) : instant
         fixture.context.insert(
             StandupReport(
                 id: id, projectID: project.id, generatedAt: stamp,
@@ -213,22 +214,27 @@ func aLiveReportOutranksTheOtherMachinesUndo() throws {
 @MainActor
 @Test("the undo tie is decided at wire precision, not by raw Date equality")
 func theUndoTieIsDecidedAtWirePrecision() throws {
-    // **This is the case that broke the first version of the tie-break.** `apply`
-    // leaves unchanged local rows at full precision, so the Mac that created a
-    // report holds `…40.4817263` while the Mac that imported it holds `…40.482`.
-    // Raw `Date` equality therefore groups them differently on the two machines:
-    // one sees a tie and applies the uuid rule, the other sees two distinct
-    // instants and takes the later. Same converged record set, different answer
-    // to "what would Undo take back".
+    // **This is the case that broke the previous version of the tie-break.**
+    // `apply` leaves unchanged local rows at full precision, so the Mac that
+    // created a report holds `…40.4817263` while the Mac that imported it holds
+    // `…40.482`. Raw `Date` equality groups those differently on the two
+    // machines: one sees a tie and applies the uuid rule, the other sees two
+    // distinct instants and takes the later. Same converged record set,
+    // different answer to "what would Undo take back".
     //
-    // `100.4817263` and `100` are *not* the same wire instant — `.482` and
-    // `.000` — so the fixture uses an offset that rounds onto the second one.
+    // **The distinct raw instant goes to the *higher* uuid deliberately.** Give
+    // it to the lower one and both rules happen to choose the same report, and
+    // the test passes against the broken code — which is what the first version
+    // of this test did.
     let ids = tiedReportIDs()
-    let (rounded, roundedProject) = try storeWithTiedReports(insertedIn: ids, firstAt: 100)
-    let (rawPrecision, rawProject) = try storeWithTiedReports(
-        insertedIn: ids, firstAt: 100.000_2)
+    let higher = try #require(ids.max { $0.uuidString < $1.uuidString })
 
-    // Both reports round to `…40.000Z` in each store, so both stores must agree.
+    let (rounded, roundedProject) = try storeWithTiedReports(insertedIn: ids)
+    let (rawPrecision, rawProject) = try storeWithTiedReports(
+        insertedIn: ids, distinctRawInstantFor: higher)
+
+    // Both instants are the same millisecond on the wire, so both stores hold
+    // what is, to the format, the same pair — and must answer identically.
     #expect(
         ExportDocument.wireString(ExportFixture.at(100.000_2))
             == ExportDocument.wireString(ExportFixture.at(100)))
@@ -238,5 +244,6 @@ func theUndoTieIsDecidedAtWirePrecision() throws {
     let fromRaw = try StandupUndoService(context: rawPrecision.context)
         .undoableReport(for: rawProject)
 
+    #expect(fromRounded != nil)
     #expect(fromRounded?.id == fromRaw?.id)
 }
