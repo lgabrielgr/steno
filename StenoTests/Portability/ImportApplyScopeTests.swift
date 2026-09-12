@@ -244,3 +244,37 @@ func aProjectClockIsNotQuantizedByAnUnrelatedChange() throws {
     #expect(stored.name == "renamed on the other Mac")
     #expect(stored.lastStandupAt == clock)
 }
+
+@MainActor
+@Test("after an import the caller's own context observes the change on refetch")
+func theCallersContextSeesTheImportAfterRefetching() throws {
+    // **The question `apply`'s scratch context raises.** Writes are staged in a
+    // context of their own, so an instance the caller already holds is not
+    // updated in place — and `MainWindowModel`/`MenuBarModel` respond to
+    // `.stenoDidWrite` by fetching through their *existing* context, not a new
+    // one. If that fetch returned pre-import values, a successful import would
+    // leave the window visibly stale.
+    //
+    // It does not. `StatusServiceTests.failedSaveLeavesHeldReferenceStaleUntilRefetch`
+    // pins the same SwiftData behaviour from the other side: the held reference
+    // is stale *until the context refetches*, and `refetched === task` with the
+    // store's value. This asserts the half the import path depends on.
+    let fixture = try ExportFixture()
+    let projectID = UUID()
+    let project = try fixture.project(
+        "Payments", modifiedAt: ExportFixture.at(10), id: projectID)
+
+    let source = try ExportFixture()
+    _ = try source.project(
+        "renamed on the other Mac", modifiedAt: ExportFixture.at(90), id: projectID)
+    let data = try source.encoder(includingCachedData: true).encode()
+
+    let service = ImportService(context: fixture.context)
+    try service.apply(service.plan(data))
+
+    // The caller's own context, the way the view models reload.
+    let refetched = try #require(try fixture.context.fetch(FetchDescriptor<Project>()).first)
+
+    #expect(refetched === project)
+    #expect(refetched.name == "renamed on the other Mac")
+}

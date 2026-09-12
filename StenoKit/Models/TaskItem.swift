@@ -119,6 +119,6 @@ extension TaskItem {
             record.statusChangedAt, keeping: statusChangedAt)
         completedAt = ExportDocument.canonical(record.completedAt, keeping: completedAt)
         isArchived = record.isArchived
-        modifiedAt = record.modifiedAt
+        modifiedAt = ExportDocument.canonical(record.modifiedAt, keeping: modifiedAt)
     }
 }

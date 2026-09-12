@@ -33,6 +33,10 @@ public enum ImportError: Error, Equatable, Sendable {
     /// The single transaction failed. The store is unchanged.
     case saveFailed(detail: String)
 
+    /// The caller's context holds unsaved work, so the snapshot the merge would
+    /// resolve against is not the state the import would commit.
+    case unsavedLocalChanges
+
     /// Reading the existing store failed, so the import never started.
     ///
     /// Distinct from `saveFailed` because the two are different events for the
@@ -61,6 +65,8 @@ public enum ImportError: Error, Equatable, Sendable {
             "format \(found); this build reads format \(supported)"
         case .storeChanged:
             "the store changed while the import was being previewed"
+        case .unsavedLocalChanges:
+            "the store has changes that have not been saved"
         }
     }
 
@@ -97,6 +103,11 @@ public enum ImportError: Error, Equatable, Sendable {
             "The import could not be saved, so nothing was changed. \(detail)"
         case .storeUnreadable(let detail):
             "Steno could not read its own store, so nothing was imported. \(detail)"
+        case .unsavedLocalChanges:
+            """
+            Steno has changes it hasn't finished saving, so nothing was imported. \
+            Try again in a moment.
+            """
         case .storeChanged:
             """
             Something changed on this Mac while the import was being previewed, \

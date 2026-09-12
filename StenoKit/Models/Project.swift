@@ -126,6 +126,6 @@ extension Project {
         lastStandupAt = ExportDocument.canonical(record.lastStandupAt, keeping: lastStandupAt)
         reportCadence = record.reportCadence
         staleThresholdDays = record.staleThresholdDays
-        modifiedAt = record.modifiedAt
+        modifiedAt = ExportDocument.canonical(record.modifiedAt, keeping: modifiedAt)
     }
 }

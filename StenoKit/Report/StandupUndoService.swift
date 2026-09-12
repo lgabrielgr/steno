@@ -45,16 +45,23 @@ public struct StandupUndoService {
     /// is one-way by design and names this requirement as the reason there is
     /// no `unredact()`.
     ///
-    /// **A `generatedAt` tie cannot be broken and does not need to be.**
-    /// `SortDescriptor` has no secondary key available — `UUID` is not
-    /// `Comparable`, the wall `EventQueries.timeline` documents for its own tie
-    /// case — but two Copies stamped at the same instant are unreachable:
-    /// `StandupDraftModel.canCopy` is `false` once `phase` leaves `.editing`,
-    /// and a second report needs a second sheet.
+    /// **A `generatedAt` tie is reachable, and is broken deterministically.**
     ///
-    /// `throws` rather than returning `nil` on a failed fetch: this is the
-    /// gate on whether an action is offered, and D-018's rule is that a failed
-    /// read must never be presented as an empty store.
+    /// It is not reachable on one machine: `StandupService.commit` stamps the
+    /// report and its events from a single `now()`, so two Copies cannot share
+    /// the instant. M2.5-02's merge unions the reports of two Macs, and two Macs
+    /// can each produce one inside the same millisecond — at which point a sort
+    /// keyed only on `generatedAt` has an unspecified order among equals, and
+    /// the two stores could converge on an identical record set while disagreeing
+    /// about which report Undo would take back.
+    ///
+    /// Ties are therefore grouped at **wire precision** — not raw `Date`
+    /// equality, because `ImportService.apply` deliberately leaves unchanged rows
+    /// at full precision, so the Mac that created a report and the Mac that
+    /// imported it hold different raw values for the same instant — and resolved
+    /// on the lowest `uuidString`, the tie-break D-092 uses for every exported
+    /// array.
+    ///
     public func undoableReport(for project: Project) throws -> StandupReport? {
         let projectID = project.id
         let descriptor = FetchDescriptor<StandupReport>(

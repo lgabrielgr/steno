@@ -228,3 +228,67 @@ func theMergeAlsoRefusesAnInvertedWindow() throws {
     #expect(throws: ImportError.self) { try StoreMerge.merge(local: clean, incoming: inverted) }
     #expect(throws: ImportError.self) { try StoreMerge.merge(local: inverted, incoming: clean) }
 }
+
+@MainActor
+@Test("an import is refused while the caller's context has unsaved work")
+func unsavedLocalChangesRefuseTheImport() throws {
+    // `plan` snapshots the caller's context, and a fetch sees pending inserts —
+    // but `apply` stages into a scratch context built from the *persisted*
+    // container, which does not have them. The merge would resolve against rows
+    // the transaction cannot see: an event whose task exists only as a pending
+    // insert would commit orphaned.
+    let fixture = try ExportFixture()
+    let project = try fixture.project("Payments", modifiedAt: ExportFixture.at(10))
+
+    let source = try ExportFixture()
+    _ = try source.project("Somewhere else", modifiedAt: ExportFixture.at(70))
+    let data = try source.encoder(includingCachedData: true).encode()
+
+    // An insert that has not been saved — the state every service in this app
+    // avoids by saving as it writes, which is why this is a guard rather than a
+    // workflow restriction.
+    fixture.context.insert(
+        TaskItem(
+            title: "typed but not saved", projectID: project.id, createdAt: ExportFixture.at(80)))
+    #expect(fixture.context.hasChanges)
+
+    #expect(throws: ImportError.unsavedLocalChanges) {
+        try ImportService(context: fixture.context).plan(data)
+    }
+
+    // And once it is saved, the same import proceeds.
+    try fixture.context.save()
+    let service = ImportService(context: fixture.context)
+    let plan = try service.plan(data)
+    #expect(plan.projects.inserted == 1)
+}
+
+@MainActor
+@Test("a locally orphaned row is reported against this Mac, not against the file")
+func aLocallyOrphanedRowIsNotBlamedOnTheFile() throws {
+    // `validateShape` checked shape but not closure, so a locally orphaned row
+    // survived it and failed the *merged* closure check instead — which reports
+    // "This file is incomplete" about a file that is complete.
+    let fixture = try ExportFixture()
+    let project = try fixture.project("Payments", modifiedAt: ExportFixture.at(10))
+    let task = try fixture.task("Fix the retry handler", in: project)
+    // An event whose task is about to vanish from under it.
+    try fixture.event("orphaned", on: task, at: ExportFixture.at(20))
+    fixture.context.delete(task)
+    try fixture.context.save()
+
+    let source = try ExportFixture()
+    _ = try source.project("Somewhere else", modifiedAt: ExportFixture.at(70))
+    let data = try source.encoder(includingCachedData: true).encode()
+
+    var reported: ImportError?
+    do {
+        _ = try ImportService(context: fixture.context).plan(data)
+    } catch let error as ImportError {
+        reported = error
+    }
+    guard case .storeUnreadable = reported else {
+        Issue.record("expected .storeUnreadable, got \(String(describing: reported))")
+        return
+    }
+}

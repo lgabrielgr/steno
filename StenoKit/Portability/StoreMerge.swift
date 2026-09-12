@@ -230,7 +230,7 @@ extension StoreMerge {
     /// The alternative was importing orphans: rows that appear under no sidebar
     /// project and in no timeline, invisible in the preview counts, with nothing
     /// that would ever surface them.
-    private static func validateClosure(of store: MergedStore) throws {
+    static func validateClosure(of store: MergedStore) throws {
         let projectIDs = Set(store.projects.map { $0.id })
         let taskIDs = Set(store.tasks.map { $0.id })
 
@@ -268,6 +268,11 @@ extension StoreMerge {
         _ = try indexed(store.sourceRefs, id: { $0.id }, kind: "source reference")
         _ = try indexed(store.reports, id: { $0.id }, kind: "stand-up report")
         for ref in store.sourceRefs { try validateCachePair(of: ref) }
+        // Closure too. A locally orphaned row would otherwise survive this check
+        // and fail the *merged* closure check instead, which reports
+        // `.danglingReference` — "This file is incomplete" — about a file that is
+        // perfectly complete.
+        try validateClosure(of: store)
         for report in store.reports where report.windowStart > report.windowEnd {
             throw ImportError.malformed(
                 detail:

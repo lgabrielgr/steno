@@ -32,6 +32,16 @@ public struct ImportService {
     /// theoretical — and a locking scheme to close it would be more machinery
     /// than the risk earns.
     public func plan(_ data: Data) throws -> ImportPlan {
+        // **A context with unsaved work cannot be imported into coherently.**
+        // `plan` snapshots this context, and a fetch sees pending inserts and
+        // edits — but `apply` stages into a scratch context built from the
+        // *persisted* container, which does not have them. The merge would then
+        // resolve against rows the transaction cannot see: an event whose task
+        // exists only as a pending insert would commit orphaned. Every service in
+        // this app saves as it writes, so this is a guard on a state the app does
+        // not normally produce, not a workflow restriction.
+        guard !context.hasChanges else { throw ImportError.unsavedLocalChanges }
+
         let document = try ImportReader.read(data)
         let local = try localStore()
         // **Validated before the merge, so the blame lands on the right side.**
@@ -104,7 +114,9 @@ extension ImportService {
         // preview said there was nothing to do.
         guard !plan.isEmpty else { return }
 
-        // The plan describes a diff against a store that may since have moved.
+        // The plan describes a diff against a store that may since have moved,
+        // and the same pending-change reasoning applies to the gap since `plan`.
+        guard !context.hasChanges else { throw ImportError.unsavedLocalChanges }
         guard try localStore() == plan.source else {
             throw ImportError.storeChanged
         }
