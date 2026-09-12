@@ -275,3 +275,24 @@ func aDuplicateRowInTheStoreIsRefusedCleanly() throws {
     // And nothing was written by the attempt.
     #expect(try fixture.context.fetch(FetchDescriptor<Project>()).count == 2)
 }
+
+@Test("the merge refuses an inverted report window, not only the reader")
+func theMergeAlsoRefusesAnInvertedWindow() throws {
+    // Same reasoning as the cache pair: `merge` is the value-level entry point
+    // and takes input it cannot trace. An undone report with `windowStart`
+    // after `windowEnd` makes `LastStandupClock` advance the project's clock
+    // past the report's own window end, so no invalid result may escape here
+    // even when nobody read a file.
+    let project = MergeFixture.project(1)
+    let clean = try MergeFixture.store(projects: [project])
+    let inverted = try MergeFixture.store(
+        projects: [project],
+        reports: [
+            MergeFixture.report(
+                4, generatedAt: MergeFixture.at(100), windowStart: MergeFixture.at(200),
+                windowEnd: MergeFixture.at(50), undone: true)
+        ])
+
+    #expect(throws: ImportError.self) { try StoreMerge.merge(local: clean, incoming: inverted) }
+    #expect(throws: ImportError.self) { try StoreMerge.merge(local: inverted, incoming: clean) }
+}

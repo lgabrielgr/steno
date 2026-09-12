@@ -61,12 +61,23 @@ public struct ImportService {
     /// bundle is unhosted, so `Bundle.main` there is the xctest runner. The
     /// value is discarded; passing it is cheaper than explaining that.
     private func localStore() throws -> MergedStore {
-        let snapshot = try ExportEncoder(
-            context: context,
-            includesCachedExternalData: true,
-            exportedBy: "steno/import (macOS)"
-        ).snapshot()
-        return try MergedStore(snapshot).wireNormalized()
+        do {
+            let snapshot = try ExportEncoder(
+                context: context,
+                includesCachedExternalData: true,
+                exportedBy: "steno/import (macOS)"
+            ).snapshot()
+            return try MergedStore(snapshot).wireNormalized()
+        } catch let error as ImportError {
+            throw error
+        } catch {
+            // `snapshot()` throws when a fetch fails and `wireNormalized()` when
+            // the round trip does. Both are this store failing to be read, and
+            // both escaped as raw `Error`s — uncategorized out of `plan`, and
+            // mislabelled `.saveFailed` out of `apply`, which is the error this
+            // same review round had just corrected one layer down.
+            throw ImportError.storeUnreadable(detail: error.localizedDescription)
+        }
     }
 }
 

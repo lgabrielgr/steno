@@ -105,7 +105,20 @@ extension StoreMerge {
     private static func mergeReports(
         _ local: [ExportedReport], _ incoming: [ExportedReport]
     ) throws -> [ExportedReport] {
-        try union(
+        // **Checked here as well as in `ImportReader`**, for the reason the cache
+        // pair is: `merge` is the value-level entry point and takes input it
+        // cannot trace. An undone report with `windowStart > windowEnd` makes
+        // `LastStandupClock` advance the project's clock past the report's own
+        // window end, so an invalid result must not be able to escape this
+        // function even when nobody read a file.
+        for report in local + incoming where report.windowStart > report.windowEnd {
+            throw ImportError.malformed(
+                detail:
+                    "A stand-up report covers a window that ends before it starts "
+                    + "(\(report.windowStart) to \(report.windowEnd)).")
+        }
+
+        return try union(
             local, incoming, id: { $0.id }, kind: "stand-up report",
             resolve: { mine, theirs in
                 guard mine.projectID == theirs.projectID, mine.generatedAt == theirs.generatedAt,

@@ -75,7 +75,16 @@ public struct StandupUndoService {
         //
         // `uuidString` because `UUID` is not `Comparable`, and the same tie-break
         // D-092 uses for every exported array, so the two orders agree.
-        let tied = reports.filter { $0.generatedAt == newest.generatedAt }
+        // **Grouped at wire precision, not by raw `Date` equality**, and that
+        // distinction is the whole fix rather than a detail. Raw equality was the
+        // first attempt and it does not hold across machines: `apply` leaves
+        // unchanged local rows at full precision, so a report created here keeps
+        // `.4817263` while the Mac that imported it holds `.482`. The two stores
+        // then disagree about whether it ties with a `.482` report — which is
+        // exactly the divergence the tie-break exists to remove. Same key
+        // `ExportOrdering` groups on, for the same reason.
+        let newestInstant = ExportDocument.wireString(newest.generatedAt)
+        let tied = reports.filter { ExportDocument.wireString($0.generatedAt) == newestInstant }
         let chosen = tied.min { $0.id.uuidString < $1.id.uuidString } ?? newest
         return chosen.isUndone ? nil : chosen
     }
