@@ -2400,9 +2400,24 @@ is not undone" rule returns `nil` when the only report is undone, and `nil` make
 compute a *sliding* 24-hour window — the loss D-067 and M2-04's step 5 went out of their way to
 avoid. Reading the undone report's `windowStart` reproduces exactly what undo restores.
 
+**The "reproduces what the services write" claim is a single-machine one, and the cross-machine
+rule is different on purpose.** Raised in review of PR #29: once a merge unions two machines'
+reports, a live report from A with `windowEnd` 100 can sit beside a report from B that B undid,
+and the derivation returns 100 where B's undo had written B's `windowStart`. That is correct, and
+it is the rule rather than an accident: A reported the work up to 100 aloud and never took it
+back, so §10.1's "must not re-report work already spoken aloud" governs. `max` over the set is
+also order-independent, so the merge still converges. What the derivation does *not* do is
+reproduce what a single-machine undo would have written, once the history is no longer from a
+single machine — `aLiveReportOutranksTheOtherMachinesUndo` pins it.
+
+A second consequence needed fixing rather than documenting: the merge makes two reports sharing a
+`generatedAt` reachable, and `StandupUndoService.undoableReport` sorted on that field alone. Two
+machines could converge on an identical record set and still disagree about which report Undo
+offered. Tie-broken on `uuidString`, the key D-092 already uses for every exported array.
+
 `LastStandupClock` is its own type so `LastStandupClockTests` can drive the real `StandupService`
-and `StandupUndoService` through all six sequences and assert the derivation equals the stored
-value. A derivation that models two services drifts from them; a comment claiming otherwise would
+and `StandupUndoService` through all six single-machine sequences and assert the derivation equals
+the stored value. A derivation that models two services drifts from them; a comment claiming otherwise would
 be the defect. Falsified by reverting to `windowEnd` unconditionally, which turns three tests red.
 **Alternatives:** §10.1 verbatim (documented, and it silently loses an undo across a transfer);
 later-wins with a clamp for undone reports (two rules whose application order is load-bearing —

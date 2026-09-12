@@ -124,30 +124,53 @@ func afterCopyUndoCopy() throws {
 
 // MARK: - After a merge, where single-machine undo semantics stop applying
 
+/// Two report ids, fixed so the two stores below hold the *same* pair.
+private func tiedReportIDs() -> [UUID] {
+    ["00000000-0000-0000-0000-0000000000aa", "00000000-0000-0000-0000-0000000000bb"]
+        .map { UUID(uuidString: $0) ?? UUID() }
+}
+
 @MainActor
-@Test("two reports in the same millisecond resolve to the same one on both machines")
-func undoPicksTheSameReportOnBothMachines() throws {
-    // M2.5-02 makes this reachable. On one machine `StandupService` stamps
-    // `generatedAt` from a single `now()` per Copy, so two reports cannot share
-    // it — but the merge unions two machines' reports, and two Macs can produce
-    // one in the same millisecond. `undoableReport` sorted on `generatedAt`
-    // alone, so which report Undo offered depended on store order: the two
-    // machines could converge on an identical record set and still disagree
-    // about what Undo would take back.
+private func storeWithTiedReports(insertedIn order: [UUID]) throws -> (ExportFixture, Project) {
     let fixture = try ExportFixture()
     let project = try fixture.project("Payments", modifiedAt: ExportFixture.at(0))
     let instant = ExportFixture.at(100)
-    let first = try fixture.report(
-        for: project, generatedAt: instant, windowStart: ExportFixture.at(0),
-        windowEnd: instant)
-    let second = try fixture.report(
-        for: project, generatedAt: instant, windowStart: ExportFixture.at(0),
-        windowEnd: instant, body: "*Yesterday*\n- the other machine")
+    for id in order {
+        fixture.context.insert(
+            StandupReport(
+                id: id, projectID: project.id, generatedAt: instant,
+                windowStart: ExportFixture.at(0), windowEnd: instant,
+                markdownBody: "*Yesterday*\n- shipped it", wasAIGenerated: false))
+    }
+    try fixture.context.save()
+    return (fixture, project)
+}
 
-    let chosen = try StandupUndoService(context: fixture.context).undoableReport(for: project)
-    let expected = [first, second].min { $0.id.uuidString < $1.id.uuidString }
+@MainActor
+@Test("which report Undo offers does not depend on the order the store holds them")
+func undoSelectionIsOrderIndependent() throws {
+    // M2.5-02 makes the tie reachable. On one machine `StandupService` stamps
+    // `generatedAt` from a single `now()` per Copy, so two reports cannot share
+    // it — but this PR unions two machines' reports, and two Macs can produce one
+    // in the same millisecond. `undoableReport` sorted on `generatedAt` alone, so
+    // the order among equals was unspecified: two machines could converge on an
+    // identical record set and still disagree about what Undo would take back.
+    //
+    // **Asserted as order-independence, not as "it picks the lowest uuid".** The
+    // first version of this test asserted the implementation's choice and passed
+    // against a deliberately wrong tie-break roughly half the time, because the
+    // fixture's ids were random — a coin flip dressed as a test.
+    let ids = tiedReportIDs()
+    let (forward, forwardProject) = try storeWithTiedReports(insertedIn: ids)
+    let (backward, backwardProject) = try storeWithTiedReports(insertedIn: ids.reversed())
 
-    #expect(chosen?.id == expected?.id)
+    let chosenForward = try StandupUndoService(context: forward.context)
+        .undoableReport(for: forwardProject)
+    let chosenBackward = try StandupUndoService(context: backward.context)
+        .undoableReport(for: backwardProject)
+
+    #expect(chosenForward != nil)
+    #expect(chosenForward?.id == chosenBackward?.id)
 }
 
 @MainActor

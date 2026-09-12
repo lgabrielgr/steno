@@ -21,9 +21,16 @@ public final class Project {
     /// project B.
     ///
     /// A plain `var`, not `private(set)`, and that is the design. §10.1 gives
-    /// this field its own merge rule — take the later timestamp — so it must
-    /// **not** stamp `modifiedAt`. A plain property gets that by construction;
-    /// a mutator would get it by remembering.
+    /// this field its own merge rule, so it must **not** stamp `modifiedAt`. A
+    /// plain property gets that by construction; a mutator would get it by
+    /// remembering.
+    ///
+    /// **That rule is no longer "take the later timestamp".** M2.5-02 replaced
+    /// it with a derivation over the project's reports — `windowEnd` for a live
+    /// one, `windowStart` for an undone one — because comparing timestamps lets
+    /// any older export from another Mac defeat FR-4.1's undo: `undo` moves this
+    /// value *backwards* and stamps nothing a comparison can see. See D-099 and
+    /// `LastStandupClock`.
     public var lastStandupAt: Date?
 
     public private(set) var reportCadence: ReportCadence = ReportCadence.daily
