@@ -33,10 +33,17 @@ enum LastStandupClock {
     /// - Parameter reports: every report in the merged store. Filtering happens
     ///   here rather than at the call site so the rule and its input cannot be
     ///   paired up wrongly.
+    /// - Note: `max` over raw `Date`s is only well-defined because both sides of
+    ///   a merge are wire-normalized before they reach it (`ImportService.plan`),
+    ///   so every value here is already at the format's precision. The
+    ///   `wireInstant` comparison makes that independent of the caller rather
+    ///   than a property of the one call site — two report sets that are equal on
+    ///   the wire must derive the same clock, or two Macs disagree about a window
+    ///   boundary `ReportGatherer` compares with a closed range.
     static func value(forProjectID projectID: UUID, in reports: [ExportedReport]) -> Date? {
         reports
             .filter { $0.projectID == projectID }
             .map { $0.isUndone ? $0.windowStart : $0.windowEnd }
-            .max()
+            .max { ExportDocument.wireString($0) < ExportDocument.wireString($1) }
     }
 }

@@ -129,9 +129,10 @@ struct ExportFixture {
         for project: Project, generatedAt: Date = ExportFixture.origin,
         windowStart: Date = ExportFixture.origin, windowEnd: Date = ExportFixture.origin,
         body: String = "*Yesterday*\n- shipped it", wasAIGenerated: Bool = false,
-        modelUsed: String? = nil, undone: Bool = false
+        modelUsed: String? = nil, undone: Bool = false, id: UUID = UUID()
     ) throws -> StandupReport {
         let report = StandupReport(
+            id: id,
             projectID: project.id, generatedAt: generatedAt, windowStart: windowStart,
             windowEnd: windowEnd, markdownBody: body, wasAIGenerated: wasAIGenerated,
             modelUsed: modelUsed)

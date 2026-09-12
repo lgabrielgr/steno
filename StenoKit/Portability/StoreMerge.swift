@@ -254,6 +254,28 @@ extension StoreMerge {
 }
 
 extension StoreMerge {
+    /// Every shape rule that applies to **one** store on its own.
+    ///
+    /// `merge` runs these over both sides, and a failure there says only that
+    /// something was malformed — not which side. `ImportService.plan` runs this
+    /// over the local snapshot first, so corruption on *this* Mac is reported as
+    /// a store problem rather than telling the user to repair a file that is
+    /// perfectly valid.
+    static func validateShape(of store: MergedStore) throws {
+        _ = try indexed(store.projects, id: { $0.id }, kind: "project")
+        _ = try indexed(store.tasks, id: { $0.id }, kind: "task")
+        _ = try indexed(store.events, id: { $0.id }, kind: "event")
+        _ = try indexed(store.sourceRefs, id: { $0.id }, kind: "source reference")
+        _ = try indexed(store.reports, id: { $0.id }, kind: "stand-up report")
+        for ref in store.sourceRefs { try validateCachePair(of: ref) }
+        for report in store.reports where report.windowStart > report.windowEnd {
+            throw ImportError.malformed(
+                detail:
+                    "A stand-up report covers a window that ends before it starts "
+                    + "(\(report.windowStart) to \(report.windowEnd)).")
+        }
+    }
+
     /// §10.2 writes `lastFetchedAt` and `cachedSummary` together or omits both,
     /// and `SourceRef.recordFetch` cannot produce any other state.
     ///

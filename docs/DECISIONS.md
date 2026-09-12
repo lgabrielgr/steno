@@ -259,13 +259,18 @@ for `build` and `release` too (pays the same cost and rewrites the project on ev
 prevent a failure that would have been loud anyway).
 
 ### D-015 — `modifiedAt` is stamped only by the fields it arbitrates
+
+> **Amended by D-099 (2026-09-12).** This entry's description of `lastStandupAt`'s merge rule as
+> "take the later timestamp" no longer holds — M2.5-02 derives it from the project's reports. The
+> conclusion it draws is unaffected: the field still must not stamp `modifiedAt`, and a plain
+> property is still how that is guaranteed rather than remembered.
 **2026-08-19** · M0-03 · **Status:** accepted — closes O-4
 
 `modifiedAt` is written only by mutations to fields whose §10.1 conflict rule is "later
 `modifiedAt` wins": `Project.name`, `.colorHex`, `.jiraProjectKeys`, `.isArchived`, `.sortOrder`,
 `.reportCadence`, `.staleThresholdDays`; `TaskItem.title`, `.projectID`, `.isArchived`. Fields
 with their own authority never touch it — `status`, `statusChangedAt` and `completedAt` are
-derived from the event log, and `lastStandupAt` takes the later timestamp. `Project.lastStandupAt`
+derived from the event log, and `lastStandupAt` has a rule of its own. `Project.lastStandupAt`
 is a plain `var` rather than a `private(set)` with a mutator, so this holds by construction.
 
 **Why:** `modifiedAt` is per *record*, not per field. Under a broad rule — every mutation stamps
@@ -697,7 +702,8 @@ advisory, the domain mutators — `TaskItem.rename`/`.move`/`.setArchived`/`.set
 `.setCadence`/`.setStaleThresholdDays`, `Event.redact()`,
 `StandupReport.markUndone()` and `SourceRef.recordFetch(summary:at:)` — drop from
 `public` to `internal`. `Project.lastStandupAt` stays `public`: §10.1 gives it its own
-merge rule (later timestamp wins), which a plain property gets by construction
+merge rule of its own (**superseded**: D-099 derives it from the reports rather than
+comparing timestamps), which a plain property gets by construction
 and a mutator would get only by remembering.
 
 **Why:** `MainWindowModel` publishes live `@Model` objects, so view code holds a
@@ -1526,7 +1532,8 @@ it would be a line of code nothing can verify).
 letting `windowStart` land after `windowEnd`.
 
 **This is reachable through a supported path, not defensive padding.** §10.1 merges
-`lastStandupAt` by "take the later timestamp." Report on a Mac whose clock runs a few minutes fast,
+`lastStandupAt` by "take the later timestamp" — the rule **D-099 supersedes**, though not its
+reasoning. Report on a Mac whose clock runs a few minutes fast,
 export, import onto a Mac whose clock does not — the second machine's stored `lastStandupAt` is
 genuinely ahead of its own `now`. M2.5 is core rather than optional (§10), so this arrives by
 design.
@@ -2160,6 +2167,13 @@ and far too much machinery for a cosmetic property); accepting nondeterminism (i
 ---
 
 ### D-091 — Timestamps carry milliseconds, and encoding truncates
+
+> **Superseded in part by D-101 (2026-09-11): encoding now rounds to the nearest millisecond.**
+> Everything below about *why* the format carries milliseconds still stands, and the measurements
+> of truncation were correct — they were simply of the wrong direction. `Date → string → Date` is
+> what this entry measured; `string → Date → string` is what a merge needs, and truncation made
+> that unstable for 496 of 1000 values. Read D-101 for the format's current contract: the error is
+> 0.5 ms in either direction rather than 1 ms downward, and `.0625` still emits `.062`.
 
 **2026-09-11** · M2.5-01 · **Status:** accepted · amends REQUIREMENTS.md §10.2 (v1.16)
 

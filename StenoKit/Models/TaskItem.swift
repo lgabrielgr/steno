@@ -111,8 +111,13 @@ extension TaskItem {
         title = record.title
         projectID = record.projectID
         status = record.status
-        statusChangedAt = record.statusChangedAt
-        completedAt = record.completedAt
+        // Preserved when the wire instant already agrees: `applyEvents` skips an
+        // unchanged `statusChanged` event, so rewriting this cache would leave it
+        // quantized and no longer equal to the event it is derived from — an
+        // invariant `PersistedInvariantsTests` asserts.
+        statusChangedAt = ExportDocument.canonical(
+            record.statusChangedAt, keeping: statusChangedAt)
+        completedAt = ExportDocument.canonical(record.completedAt, keeping: completedAt)
         isArchived = record.isArchived
         modifiedAt = record.modifiedAt
     }

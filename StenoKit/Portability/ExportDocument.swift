@@ -97,6 +97,32 @@ extension ExportDocument {
         date.addingTimeInterval(halfMillisecond).formatted(fractionalSeconds)
     }
 
+    /// `incoming`, unless `existing` already means the same instant on the wire.
+    ///
+    /// **Import must not quantize a live row it is not actually changing.** The
+    /// merge resolves against wire-normalized snapshots, so every date it hands
+    /// back is rounded — while the row holds whatever its own clock produced. A
+    /// record written because some *other* field changed would otherwise drag
+    /// every date on it down to millisecond precision as collateral: a task's
+    /// `createdAt`, its `statusChangedAt` (which must keep matching the event it
+    /// came from), a project's stand-up clock (which `ReportGatherer` compares
+    /// against a closed window boundary).
+    ///
+    /// Keeping the existing value when the two agree on the wire is both safe —
+    /// they are the same instant as far as anything that crosses a file is
+    /// concerned — and necessary, because the alternative changes data the merge
+    /// did not decide to change.
+    static func canonical(_ incoming: Date?, keeping existing: Date?) -> Date? {
+        guard let incoming else { return nil }
+        guard let existing, wireString(existing) == wireString(incoming) else { return incoming }
+        return existing
+    }
+
+    /// Non-optional overload, for the fields that always have a value.
+    static func canonical(_ incoming: Date, keeping existing: Date) -> Date {
+        wireString(existing) == wireString(incoming) ? existing : incoming
+    }
+
     /// The same format without the fractional part, accepted on **decode only**.
     ///
     /// §10.2 chose JSON so a file could be inspected — and edited — by hand

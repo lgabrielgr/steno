@@ -34,6 +34,16 @@ public struct ImportService {
     public func plan(_ data: Data) throws -> ImportPlan {
         let document = try ImportReader.read(data)
         let local = try localStore()
+        // **Validated before the merge, so the blame lands on the right side.**
+        // `merge` checks both stores and reports only that something was
+        // malformed — and `ImportError.malformed`'s message opens "This file
+        // isn't a readable Steno export." For corruption in *this Mac's* store
+        // that tells the user to repair a file that is perfectly good.
+        do {
+            try StoreMerge.validateShape(of: local)
+        } catch let error as ImportError {
+            throw ImportError.storeUnreadable(detail: error.detail)
+        }
         // **The incoming side is normalized too, and that is not belt-and-braces.**
         // It was not, on the reasoning that a file is already at wire precision —
         // true of files this app writes, and §10.2 chose JSON precisely so a
@@ -99,6 +109,20 @@ extension ImportService {
             throw ImportError.storeChanged
         }
 
+        // **The writes go to a context of their own.** `context.rollback()`
+        // restores the persisted store but *not* the values already held by
+        // live model instances — behaviour `StatusServiceTests` pins for the
+        // services. A save failing partway therefore left the caller's objects
+        // holding imported values that were never saved: the UI could show them
+        // as imported, and any later mutation of one of those objects would
+        // persist them, which is exactly what §10.4's "nothing was changed"
+        // forbids. A scratch context is discarded whole, so there is nothing to
+        // restore and nothing to get wrong.
+        //
+        // The caller learns about the import through `.stenoDidWrite` and
+        // refetches, which is the path every write in this app already takes
+        // (D-019).
+        let scratch = ModelContext(context.container)
         let store = plan.merged
         do {
             // **The whole sequence is inside the rollback, not just the save.**
@@ -109,21 +133,20 @@ extension ImportService {
             //
             // Parents first. SwiftData does not require it; a debugger stepping
             // through this does.
-            try applyProjects(store.projects, writing: plan.writes.projects)
-            try applyTasks(store.tasks, writing: plan.writes.tasks)
-            try applyEvents(store.events, writing: plan.writes.events)
-            try applyRefs(store.sourceRefs, writing: plan.writes.sourceRefs)
-            try applyReports(store.reports, writing: plan.writes.reports)
-            try save(context)
+            try applyProjects(store.projects, writing: plan.writes.projects, into: scratch)
+            try applyTasks(store.tasks, writing: plan.writes.tasks, into: scratch)
+            try applyEvents(store.events, writing: plan.writes.events, into: scratch)
+            try applyRefs(store.sourceRefs, writing: plan.writes.sourceRefs, into: scratch)
+            try applyReports(store.reports, writing: plan.writes.reports, into: scratch)
+            try save(scratch)
         } catch let error as ImportError {
             // A read failure from `existing(...)` is already classified, and
             // re-wrapping it as `.saveFailed` would tell the user their import
-            // could not be *saved* when the store could not be *read*. Both roll
-            // back; only one of them is a transaction failure.
-            context.rollback()
+            // could not be *saved* when the store could not be *read*.
+            scratch.rollback()
             throw error
         } catch {
-            context.rollback()
+            scratch.rollback()
             throw ImportError.saveFailed(detail: error.localizedDescription)
         }
 
@@ -134,7 +157,7 @@ extension ImportService {
     }
 
     private func existing<Model: PersistentModel>(
-        _ type: Model.Type, id: (Model) -> UUID
+        _ type: Model.Type, id: (Model) -> UUID, in context: ModelContext
     ) throws -> [UUID: Model] {
         // `uniquingKeysWith:` rather than `uniqueKeysWithValues:`, which **traps**
         // on a duplicate key. §6 forbids `@Attribute(.unique)`, so nothing in the
@@ -160,9 +183,9 @@ extension ImportService {
     }
 
     private func applyProjects(
-        _ records: [ExportedProject], writing ids: Set<UUID>
+        _ records: [ExportedProject], writing ids: Set<UUID>, into context: ModelContext
     ) throws {
-        let rows = try existing(Project.self, id: { $0.id })
+        let rows = try existing(Project.self, id: { $0.id }, in: context)
         for record in records where ids.contains(record.id) {
             if let row = rows[record.id] {
                 row.applyImported(record)
@@ -177,9 +200,9 @@ extension ImportService {
     }
 
     private func applyTasks(
-        _ records: [ExportedTask], writing ids: Set<UUID>
+        _ records: [ExportedTask], writing ids: Set<UUID>, into context: ModelContext
     ) throws {
-        let rows = try existing(TaskItem.self, id: { $0.id })
+        let rows = try existing(TaskItem.self, id: { $0.id }, in: context)
         for record in records where ids.contains(record.id) {
             if let row = rows[record.id] {
                 row.applyImported(record)
@@ -196,9 +219,9 @@ extension ImportService {
     /// §3.3: an event is inserted or its one flag is flipped. There is no third
     /// case, and the model exposes no mutator that would allow one.
     private func applyEvents(
-        _ records: [ExportedEvent], writing ids: Set<UUID>
+        _ records: [ExportedEvent], writing ids: Set<UUID>, into context: ModelContext
     ) throws {
-        let rows = try existing(Event.self, id: { $0.id })
+        let rows = try existing(Event.self, id: { $0.id }, in: context)
         for record in records where ids.contains(record.id) {
             if let row = rows[record.id] {
                 if record.isRedacted && !row.isRedacted { row.redact() }
@@ -217,10 +240,10 @@ extension ImportService {
     }
 
     private func applyRefs(
-        _ records: [ExportedSourceRef], writing ids: Set<UUID>
+        _ records: [ExportedSourceRef], writing ids: Set<UUID>, into context: ModelContext
     ) throws {
-        let rows = try existing(SourceRef.self, id: { $0.id })
-        let tasks = try existing(TaskItem.self, id: { $0.id })
+        let rows = try existing(SourceRef.self, id: { $0.id }, in: context)
+        let tasks = try existing(TaskItem.self, id: { $0.id }, in: context)
         for record in records where ids.contains(record.id) {
             if let row = rows[record.id] {
                 // Unconditional when the merge produced a cache: the previous
@@ -249,9 +272,9 @@ extension ImportService {
     }
 
     private func applyReports(
-        _ records: [ExportedReport], writing ids: Set<UUID>
+        _ records: [ExportedReport], writing ids: Set<UUID>, into context: ModelContext
     ) throws {
-        let rows = try existing(StandupReport.self, id: { $0.id })
+        let rows = try existing(StandupReport.self, id: { $0.id }, in: context)
         for record in records where ids.contains(record.id) {
             if let row = rows[record.id] {
                 if record.isUndone && !row.isUndone { row.markUndone() }

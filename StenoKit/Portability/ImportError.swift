@@ -2,12 +2,16 @@ import Foundation
 
 /// Why an import was refused, and what to tell the user.
 ///
-/// **Every case is raised before the store is written to.** §10.4 requires that
-/// a malformed file leave the store untouched, and the strongest form of that is
-/// not a rollback but an absence of any write: `ImportService.plan` does all of
-/// the decoding and all of the validation, and `apply` is reached only with a
-/// plan that already passed. `saveFailed` is the one case that can occur with a
-/// transaction open, and it is the one case that rolls back.
+/// **Almost every case is raised before the store is written to.** §10.4 requires
+/// that a malformed file leave the store untouched, and the strongest form of
+/// that is not a rollback but an absence of any write: `ImportService.plan` does
+/// all of the decoding and all of the validation, and `apply` is reached only
+/// with a plan that already passed.
+///
+/// Two cases can occur once writing has begun — `saveFailed`, and
+/// `storeUnreadable` from a fetch inside the apply sequence. Both are staged in
+/// a scratch `ModelContext` that is discarded whole, so neither can leave a live
+/// model instance holding a value that was never saved.
 ///
 /// `message` lives here rather than in a view so M2.5-03's alert and M2.5-04's
 /// stderr say the same thing about the same failure. `Equatable`, so tests can
@@ -44,6 +48,21 @@ public enum ImportError: Error, Equatable, Sendable {
     /// committing. Applying a stale plan would both mis-describe the result and
     /// overwrite the newer rows with the merge's older resolution of them.
     case storeChanged
+
+    /// The payload, without the sentence around it — so a failure attributed to
+    /// the wrong side can be re-reported against the right one.
+    var detail: String {
+        switch self {
+        case .malformed(let detail), .danglingReference(let detail),
+            .inconsistentRecord(let detail), .saveFailed(let detail),
+            .storeUnreadable(let detail):
+            detail
+        case .unsupportedSchemaVersion(let found, let supported):
+            "format \(found); this build reads format \(supported)"
+        case .storeChanged:
+            "the store changed while the import was being previewed"
+        }
+    }
 
     public var message: String {
         switch self {

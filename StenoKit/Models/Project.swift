@@ -123,7 +123,7 @@ extension Project {
         jiraProjectKeys = record.jiraProjectKeys
         isArchived = record.isArchived
         sortOrder = record.sortOrder
-        lastStandupAt = record.lastStandupAt
+        lastStandupAt = ExportDocument.canonical(record.lastStandupAt, keeping: lastStandupAt)
         reportCadence = record.reportCadence
         staleThresholdDays = record.staleThresholdDays
         modifiedAt = record.modifiedAt
