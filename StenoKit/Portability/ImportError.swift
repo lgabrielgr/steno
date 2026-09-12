@@ -42,11 +42,20 @@ public enum ImportError: Error, Equatable, Sendable {
         case .malformed(let detail):
             "This file isn't a readable Steno export. \(detail)"
         case .unsupportedSchemaVersion(let found, let supported):
-            """
-            This file was written by a newer version of Steno (format \(found); \
-            this build reads format \(supported)). Nothing was imported. \
-            Update Steno and try again.
-            """
+            // **Not every unrecognized version is a newer one.** `ImportReader`
+            // raises this case for any value it does not recognise, including
+            // `0` or a negative from a hand-edited file, and telling the user to
+            // update Steno there sends them after a release that will not help.
+            found > supported
+                ? """
+                This file was written by a newer version of Steno (format \(found); \
+                this build reads format \(supported)). Nothing was imported. \
+                Update Steno and try again.
+                """
+                : """
+                This file isn't in a format Steno recognises (format \(found); \
+                this build reads format \(supported)). Nothing was imported.
+                """
         case .danglingReference(let detail):
             """
             This file is incomplete — it refers to something that isn't in the \

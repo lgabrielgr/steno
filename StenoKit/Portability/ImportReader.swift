@@ -62,6 +62,20 @@ enum ImportReader {
         // summary with no timestamp was previously accepted and then dropped on
         // the floor, because the applier only records a fetch when it has a date
         // to record it at — data loss with no message.
+        // D-067 clamps a report's window so `windowStart` never exceeds
+        // `windowEnd`, and nothing in the app can produce one that does. A
+        // hand-edited file can, and the damage is specific: `LastStandupClock`
+        // reads `windowStart` for an **undone** report, so an inverted window
+        // advances the project's clock past its own window end — and the work in
+        // between is then never reported, which is the exact harm §10.1's rule
+        // exists to prevent.
+        for report in document.reports where report.windowStart > report.windowEnd {
+            throw ImportError.malformed(
+                detail:
+                    "A stand-up report covers a window that ends before it starts "
+                    + "(\(report.windowStart) to \(report.windowEnd)).")
+        }
+
         for ref in document.sourceRefs where ref.cachedSummary != nil && ref.lastFetchedAt == nil {
             throw ImportError.malformed(
                 detail:

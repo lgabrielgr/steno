@@ -34,7 +34,17 @@ public struct ImportService {
     public func plan(_ data: Data) throws -> ImportPlan {
         let document = try ImportReader.read(data)
         let local = try localStore()
-        let result = try StoreMerge.merge(local: local, incoming: MergedStore(document))
+        // **The incoming side is normalized too, and that is not belt-and-braces.**
+        // It was not, on the reasoning that a file is already at wire precision —
+        // true of files this app writes, and §10.2 chose JSON precisely so a
+        // person could edit one. `ExportDocument.decoder()` accepts more than
+        // three fractional digits, and `…20.4817Z` parses to a value that
+        // re-emits as `…20.482Z`. Left un-normalized it lands in the store at a
+        // precision the format cannot hold: the first export silently changes
+        // it, and for an event — whose timestamp is immutable — the next import
+        // of the same file is refused as an inconsistent record.
+        let incoming = try MergedStore(document).wireNormalized()
+        let result = try StoreMerge.merge(local: local, incoming: incoming)
         return ImportPlan(local: local, result: result)
     }
 

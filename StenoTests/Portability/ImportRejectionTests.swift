@@ -178,3 +178,89 @@ func aDivergentLineageIsRefused() throws {
     #expect(throws: ImportError.self) { try StoreMerge.merge(local: mine, incoming: theirs) }
     #expect(throws: ImportError.self) { try StoreMerge.merge(local: theirs, incoming: mine) }
 }
+
+// MARK: - Hand-edited files (§10.2 invites them)
+
+@MainActor
+@Test("a timestamp with more precision than the format holds is normalized, not persisted")
+func extraFractionalDigitsAreNormalized() throws {
+    // `ExportDocument.decoder()` accepts more than three fractional digits, and
+    // `…20.4817Z` parses to a value that re-emits as `…20.482Z`. Only the local
+    // snapshot was normalized, so this landed in the store at a precision the
+    // format cannot hold: the first export silently changed it, and the next
+    // import of the *same file* was refused as an inconsistent record, because
+    // an event's timestamp is immutable and the two copies no longer matched.
+    let source = try ExportFixture()
+    let project = try source.project("Payments", modifiedAt: ExportFixture.at(10))
+    let task = try source.task("Fix the retry handler", in: project)
+    try source.event("repro'd the race", on: task, at: ExportFixture.at(20))
+
+    let text = try ExportJSON.text(of: source.encoder().encode())
+    let handEdited = text.replacingOccurrences(
+        of: "22:13:40.000Z", with: "22:13:40.4817Z")
+    #expect(handEdited != text, "the fixture's event timestamp was not where expected")
+
+    let target = try ExportFixture()
+    let service = ImportService(context: target.context)
+    let data = Data(handEdited.utf8)
+    try service.apply(service.plan(data))
+
+    // Importing the same file again must still be a no-op. Without normalizing
+    // the incoming side this throws `.inconsistentRecord` instead.
+    let second = try service.plan(data)
+    #expect(second.isEmpty)
+
+    // And what landed is expressible in the format: exporting it reproduces the
+    // same instant rather than shifting it.
+    let stored = try #require(try target.context.fetch(FetchDescriptor<Event>()).first)
+    #expect(ExportDocument.wireString(stored.timestamp) == "2023-11-14T22:13:40.482Z")
+}
+
+@MainActor
+@Test("a report whose window ends before it starts is refused")
+func anInvertedReportWindowIsRefused() throws {
+    // D-067 clamps the window so this cannot occur in the app. A hand-edited
+    // file can produce it, and for an **undone** report `LastStandupClock` reads
+    // `windowStart` — so an inverted window advances the project's clock past
+    // its own window end and the work in between is never reported again.
+    let source = try ExportFixture()
+    let project = try source.project("Payments", modifiedAt: ExportFixture.at(10))
+    try source.report(
+        for: project, generatedAt: ExportFixture.at(30), windowStart: ExportFixture.at(20),
+        windowEnd: ExportFixture.at(40), undone: true)
+    let document = try ExportDocument.decoder().decode(
+        ExportDocument.self, from: try source.encoder().encode())
+
+    let report = try #require(document.reports.first)
+    let inverted = ExportedReport(
+        id: report.id, projectID: report.projectID, generatedAt: report.generatedAt,
+        windowStart: ExportFixture.at(90), windowEnd: ExportFixture.at(40),
+        markdownBody: report.markdownBody, wasAIGenerated: report.wasAIGenerated,
+        modelUsed: report.modelUsed, isUndone: true)
+    let broken = ExportDocument(
+        schemaVersion: document.schemaVersion, exportedAt: document.exportedAt,
+        exportedBy: document.exportedBy,
+        includesCachedExternalData: document.includesCachedExternalData,
+        projects: document.projects, tasks: document.tasks, events: document.events,
+        sourceRefs: document.sourceRefs, reports: [inverted])
+
+    let target = try ExportFixture()
+    #expect(throws: ImportError.self) {
+        try ImportService(context: target.context).plan(try ExportDocument.encoder().encode(broken))
+    }
+}
+
+@Test("an unrecognized version is not always described as a newer one")
+func anOlderSchemaVersionIsNotCalledNewer() {
+    // `ImportReader` raises this case for any value it does not recognise,
+    // including a 0 from a hand-edited file. Telling the user to update Steno
+    // there sends them after a release that will not help.
+    let newer = ImportError.unsupportedSchemaVersion(found: 99, supported: 1)
+    let older = ImportError.unsupportedSchemaVersion(found: 0, supported: 1)
+
+    #expect(newer.message.contains("newer version"))
+    #expect(newer.message.contains("Update Steno"))
+    #expect(!older.message.contains("newer version"))
+    #expect(!older.message.contains("Update Steno"))
+    #expect(older.message.contains("isn't in a format Steno recognises"))
+}
