@@ -259,13 +259,18 @@ for `build` and `release` too (pays the same cost and rewrites the project on ev
 prevent a failure that would have been loud anyway).
 
 ### D-015 — `modifiedAt` is stamped only by the fields it arbitrates
+
+> **Amended by D-099 (2026-09-12).** This entry's description of `lastStandupAt`'s merge rule as
+> "take the later timestamp" no longer holds — M2.5-02 derives it from the project's reports. The
+> conclusion it draws is unaffected: the field still must not stamp `modifiedAt`, and a plain
+> property is still how that is guaranteed rather than remembered.
 **2026-08-19** · M0-03 · **Status:** accepted — closes O-4
 
 `modifiedAt` is written only by mutations to fields whose §10.1 conflict rule is "later
 `modifiedAt` wins": `Project.name`, `.colorHex`, `.jiraProjectKeys`, `.isArchived`, `.sortOrder`,
 `.reportCadence`, `.staleThresholdDays`; `TaskItem.title`, `.projectID`, `.isArchived`. Fields
 with their own authority never touch it — `status`, `statusChangedAt` and `completedAt` are
-derived from the event log, and `lastStandupAt` takes the later timestamp. `Project.lastStandupAt`
+derived from the event log, and `lastStandupAt` has a rule of its own. `Project.lastStandupAt`
 is a plain `var` rather than a `private(set)` with a mutator, so this holds by construction.
 
 **Why:** `modifiedAt` is per *record*, not per field. Under a broad rule — every mutation stamps
@@ -697,7 +702,8 @@ advisory, the domain mutators — `TaskItem.rename`/`.move`/`.setArchived`/`.set
 `.setCadence`/`.setStaleThresholdDays`, `Event.redact()`,
 `StandupReport.markUndone()` and `SourceRef.recordFetch(summary:at:)` — drop from
 `public` to `internal`. `Project.lastStandupAt` stays `public`: §10.1 gives it its own
-merge rule (later timestamp wins), which a plain property gets by construction
+merge rule of its own (**superseded**: D-099 derives it from the reports rather than
+comparing timestamps), which a plain property gets by construction
 and a mutator would get only by remembering.
 
 **Why:** `MainWindowModel` publishes live `@Model` objects, so view code holds a
@@ -1526,7 +1532,8 @@ it would be a line of code nothing can verify).
 letting `windowStart` land after `windowEnd`.
 
 **This is reachable through a supported path, not defensive padding.** §10.1 merges
-`lastStandupAt` by "take the later timestamp." Report on a Mac whose clock runs a few minutes fast,
+`lastStandupAt` by "take the later timestamp" — the rule **D-099 supersedes**, though not its
+reasoning. Report on a Mac whose clock runs a few minutes fast,
 export, import onto a Mac whose clock does not — the second machine's stored `lastStandupAt` is
 genuinely ahead of its own `now`. M2.5 is core rather than optional (§10), so this arrives by
 design.
@@ -2161,6 +2168,13 @@ and far too much machinery for a cosmetic property); accepting nondeterminism (i
 
 ### D-091 — Timestamps carry milliseconds, and encoding truncates
 
+> **Superseded in part by D-101 (2026-09-11): encoding now rounds to the nearest millisecond.**
+> Everything below about *why* the format carries milliseconds still stands, and the measurements
+> of truncation were correct — they were simply of the wrong direction. `Date → string → Date` is
+> what this entry measured; `string → Date → string` is what a merge needs, and truncation made
+> that unstable for 496 of 1000 values. Read D-101 for the format's current contract: the error is
+> 0.5 ms in either direction rather than 1 ms downward, and `.0625` still emits `.062`.
+
 **2026-09-11** · M2.5-01 · **Status:** accepted · amends REQUIREMENTS.md §10.2 (v1.16)
 
 Dates encode as ISO-8601 with three fractional digits, through a `Date.ISO8601FormatStyle`. The
@@ -2352,6 +2366,273 @@ field §10 cannot afford, and would break M2-04's undo across a transfer).
 
 ---
 
+### D-098 — Both mutable flags merge sticky-true, closing O-8
+
+**2026-09-11** · M2.5-02 · **Status:** accepted · **closes O-8** · amends REQUIREMENTS.md §10.1 (v1.17)
+
+`Event.isRedacted` and `StandupReport.isUndone` merge as `local || incoming`. Once set on either
+machine, set everywhere.
+
+**Why:** neither model carries `modifiedAt`, so §10.1's "later wins" cannot reach them, and adding
+one would put a mutable timestamp on the record §3.3 says is never edited. It is not needed:
+**both flags are one-way in the domain.** `Event.redact()` and `StandupReport.markUndone()` only
+ever assign `true`, and nothing anywhere un-assigns. A grow-only boolean is commutative, idempotent
+and order-free with no clock at all, and it fails in the safe direction — a redaction made on
+either machine survives the trip, so text the user took back cannot reappear in a stand-up, which
+is the specific harm §10.1 warns about.
+
+The cost is that a future un-redact would not propagate. That is pinned rather than commented:
+`StoreMergeRuleTests` asserts the sticky behaviour in both directions, and the day someone adds an
+`unredact()` the premise is wrong in a place a test is looking.
+**Alternatives:** `modifiedAt` on both models (a migration for two booleans, and a mutable
+timestamp on an append-only record); deriving `isUndone` from whether the report's
+`standupReported` events are redacted (couples two records M2-04 keeps apart, and leaves
+`isRedacted` itself still open).
+
+---
+
+### D-099 — `lastStandupAt` is derived from the reports, not compared
+
+**2026-09-11** · M2.5-02 · **Status:** accepted · amends REQUIREMENTS.md §10.1 (v1.17)
+
+`Project.lastStandupAt` merges as `max` over that project's reports of
+`isUndone ? windowStart : windowEnd`, and `nil` when there are none.
+
+**Why: §10.1's "take the later timestamp" was written before M2-04, and the two do not compose.**
+`StandupService.commit` sets the clock to the window's end; `StandupUndoService.undo` moves it
+*backwards* to `report.windowStart`, and stamps nothing. With `isUndone` sticky (D-098), taking the
+later timestamp means any older export from the other machine defeats an undo: the report comes
+back marked undone, its `standupReported` events stay redacted, and the clock keeps the pre-undo
+value — so the window the user reclaimed is never reported again. That is the same class of failure
+§10.1's rule exists to prevent, pointing the other way.
+
+The derivation is also the more faithful reading of §10.1's own principle — *"any mutable field
+that can be recomputed from the log, should be"* — since a `StandupReport` is part of the log.
+
+**The `isUndone ? windowStart : windowEnd` shape is load-bearing.** The simpler "newest report that
+is not undone" rule returns `nil` when the only report is undone, and `nil` makes the next Prepare
+compute a *sliding* 24-hour window — the loss D-067 and M2-04's step 5 went out of their way to
+avoid. Reading the undone report's `windowStart` reproduces exactly what undo restores.
+
+**The "reproduces what the services write" claim is a single-machine one, and the cross-machine
+rule is different on purpose.** Raised in review of PR #29: once a merge unions two machines'
+reports, a live report from A with `windowEnd` 100 can sit beside a report from B that B undid,
+and the derivation returns 100 where B's undo had written B's `windowStart`. That is correct, and
+it is the rule rather than an accident: A reported the work up to 100 aloud and never took it
+back, so §10.1's "must not re-report work already spoken aloud" governs. `max` over the set is
+also order-independent, so the merge still converges. What the derivation does *not* do is
+reproduce what a single-machine undo would have written, once the history is no longer from a
+single machine — `aLiveReportOutranksTheOtherMachinesUndo` pins it.
+
+A second consequence needed fixing rather than documenting: the merge makes two reports sharing a
+`generatedAt` reachable, and `StandupUndoService.undoableReport` sorted on that field alone. Two
+machines could converge on an identical record set and still disagree about which report Undo
+offered. Tie-broken on `uuidString`, the key D-092 already uses for every exported array.
+
+`LastStandupClock` is its own type so `LastStandupClockTests` can drive the real `StandupService`
+and `StandupUndoService` through all six single-machine sequences and assert the derivation equals
+the stored value. A derivation that models two services drifts from them; a comment claiming otherwise would
+be the defect. Falsified by reverting to `windowEnd` unconditionally, which turns three tests red.
+**Alternatives:** §10.1 verbatim (documented, and it silently loses an undo across a transfer);
+later-wins with a clamp for undone reports (two rules whose application order is load-bearing —
+reads fine, converges wrong).
+
+---
+
+### D-100 — `TaskItem.status` is parsed out of the event body, and `displayName` is now persisted
+
+**2026-09-11** · M2.5-02 · **Status:** accepted
+
+The merge derives a task's status by reading `StatusTransition.eventBody` back — `"IN-PROGRESS →
+BLOCKED"` — through a new `init?(eventBody:)` beside it. `Status.displayName` moved out of
+`StenoKit/Features/MainWindow/` as part of this; `menuOrder` stayed.
+
+**Why:** §10.1 requires deriving rather than copying, and the body is the only machine-readable
+record of a transition that exists. `StatusService` writes it with a `nil` payload, and **every
+event already in every store is written that way**, so a structured payload cannot be retrofitted
+onto history. Parsing is the only option the data model offers, not the preferred one.
+
+Moving `displayName` is the point, not housekeeping: it stopped being display text the moment a
+merge read it back. A rename in a view-adjacent file would break every import on every machine, and
+the only symptom would be a task's status reverting after a transfer. Both directions now live in
+one type, and a test asserts all four spellings literally plus a `body → Status → body` round trip
+over `allCases` squared.
+
+Parsing returns `nil` rather than throwing, and import falls back to the record's own
+`statusChangedAt` and reports the event in its plan. §10.2 chose JSON partly so a file could be
+edited by hand, so a mistyped arrow is reachable in practice; refusing the whole import over one is
+a poor trade and swallowing it silently is worse.
+
+Redacted `statusChanged` events still count. §3.3 makes `isRedacted` a visibility flag and a status
+cache is not a summary — excluding them would let a redaction silently revert a task, which is a
+mutation of the log by the back door.
+**Alternatives:** adding a structured payload to new `statusChanged` events (changes M1-05's write
+path, and every historical event still needs the parser — a second format without removing the
+first); resolving status by later `statusChangedAt` (no parsing, and it contradicts §10.1's stated
+reason the scheme is robust).
+
+---
+
+### D-101 — The wire format rounds to the nearest millisecond, because it must be a fixed point
+
+**2026-09-11** · M2.5-02 · **Status:** accepted · amends REQUIREMENTS.md §10.2 (v1.17) and D-091
+
+`ExportDocument.wireString` is the single implementation of what the file says an instant is, and
+it adds half a millisecond before formatting so that the style's truncation becomes
+round-to-nearest. Both the encoder's date strategy and D-092's sort key call it.
+
+**Why: D-091 measured the round trip in one direction and the other one was broken.** `Date →
+string → Date` is lossy in a known way, as recorded. The direction M2.5-02 needs is `string → Date
+→ string`, and under truncation it was not a fixed point: parsing `…20.481Z` yields a `Double` of
+`.4809999…`, which truncates back out as `…20.480Z`. **Measured over every millisecond value at
+four epochs from 2020 to 2033: 496 of 1000 unstable**, walking backwards up to 2 ms across at most
+two hops before sticking (504 values stable immediately, 392 after one hop, 104 after two).
+
+Two things rested on that fixed point. §10.6 asks that importing the same file twice change
+nothing — with the format moving underneath it, roughly half the timestamps come back lower on the
+second read and the merge writes them again. And §10.2 promises two exports of an unchanged store
+are byte-identical, which is what makes M2.5-05's auto-export a history rather than churn; a round
+trip through a file undid what D-090 established.
+
+After the change: **0 of 4000 unstable** across the same four epochs, 0 of 50000 for clock-shaped
+dates, worst error halved to 0.5 ms and no longer one-sided. Eighths are still exact — all eight
+verified. `schemaVersion` stays 1: the grammar is unchanged and every file already written still
+parses. `.5001` still collides with `.500`, so M2.5-01's ordering test keeps its premise, and
+`.0625` still emits `.062`, so D-091's example survives — **both checked rather than reasoned
+about, after the reasoned version of the second one was wrong.** Behaviour at an exact
+half-millisecond input is deterministic but not predictable by arithmetic.
+
+One implementation matters more now than it did: rounding makes the `.999` boundary live, since
+`…20.9995` carries into the next whole second, and that is precisely where the two implementations
+D-092 found had disagreed. Falsified by deleting the half-millisecond, which turns the fixed-point
+test red at exactly 1984 of 4000 — the figure quoted in its comment.
+**This is the last moment the change is free, and that is load-bearing.** Raised in review of PR
+#29: changing the quantization while keeping `schemaVersion: 1` would break a merge against a file
+written by the old encoder — a local event at `.4817263` normalizes to `.482` here while the old
+file carries `.481`, and the immutable-field check refuses the whole file as an inconsistent
+record. It cannot happen today because **no v1 export file can exist**: `ExportEncoder`'s only
+callers are `ImportService` and the test fixture, and nothing writes bytes to disk until M2.5-03's
+save panel and M2.5-04's CLI. **Once M2.5-03 ships, the timestamp semantics of `schemaVersion: 1`
+are frozen** — a later change needs a version bump with the v1 normalization retained for v1 files,
+which means carrying a second quantizer permanently, the hazard D-092 records.
+**Alternatives:** iterating the local snapshot's round trip to a fixed point (never more than two
+passes, and it leaves export → import → export producing different bytes, so §10.2's diffability
+keeps the defect and the workaround lives two layers from the cause); treating timestamps within
+1 ms as equal (equality stops being transitive, and "later wins" becomes ambiguous exactly where
+two machines disagree).
+
+---
+
+### D-102 — Orphaned records are refused, with closure checked against file ∪ store
+
+**2026-09-11** · M2.5-02 · **Status:** accepted
+
+A record whose parent is in neither the file nor the local store makes the import fail with
+`ImportError.danglingReference`, applying nothing.
+
+**Why:** a genuine Steno export always has referential closure — it is whole-store and nothing is
+ever deleted — so a file that lacks it is truncated or hand-trimmed. Importing the orphans anyway
+puts rows in the store that appear under no sidebar project and in no timeline: present,
+unreachable, and invisible in the preview counts, with nothing that would ever surface them.
+
+**Checking the union rather than the file alone is what keeps §10.2's hand-editability promise.**
+Trimming one project out of an export still imports cleanly on a machine that already has that
+project, and only a file that would actually leave a broken store is refused. Both directions are
+tested.
+**Alternatives:** importing orphans (invisible data); skipping them and reporting the count (leaves
+the store having accepted half a file, against the single-transaction guarantee the rest of the
+task is built on).
+
+---
+
+### D-103 — Duplicate `SourceRef` rows are kept, not collapsed — extending O-10
+
+**2026-09-11** · M2.5-02 · **Status:** accepted · extends **O-10**
+
+The merge unions refs by `id` only. Two rows sharing §3.4's `(taskID, kind, identifier)` dedup key
+both survive.
+
+**Why:** two machines that each extract `PAY-421` onto a task they both already have produce
+exactly that. Collapsing them converges too — keep the lowest `uuidString`, fold the cached pair
+into the survivor — but it would make import **the only path in the product outside Replace mode
+that deletes a row**, and "import never deletes, except duplicate refs" is the kind of documented
+exception that becomes the next task's bug. Keeping both satisfies every §10.6 property, since
+`merge(A,B)` and `merge(B,A)` both yield the pair.
+
+The cost is a duplicate chip in the task detail pane. O-10 already owns §3.4 ref reconciliation in
+M5 and now names this case, rather than opening a competing rule here.
+**Alternatives:** collapse to the lowest id (tidier UI, and it buys a deletion path); keying refs
+by the dedup key instead of `id` (no duplicates, and not commutative — each machine keeps its own
+row and the two stores never converge on the same object graph).
+
+---
+
+### D-104 — The merge is pure over records; the local store is normalized through the exporter
+
+**2026-09-11** · M2.5-02 · **Status:** accepted
+
+`StoreMerge` is a `nonisolated` function over the five record arrays. `ImportService` snapshots the
+local store, round-trips it through `ExportDocument.encoder()` and back, and merges the result.
+
+**Why:** §10.6's properties are algebraic, and a commutativity test written against two live
+SwiftData stores is slow, long, and least readable exactly where the reasoning matters most. Purity
+makes them comparisons between values.
+
+**The normalization is not tidiness — without it nothing converges.** The local store holds
+full-precision `Date`s and the incoming file's were quantized on the way out, so for the same
+record the local value is almost always the larger by a fraction of a millisecond: every §10.1 rule
+that compares timestamps hands the local machine a win it did not earn, and `merge(A,B)` stops
+equalling `merge(B,A)`. It does not fail loudly; it fails by half a millisecond. In practice it
+fails *loudly* instead, because an event's timestamp is immutable and the two copies no longer
+match — so re-importing a store's own export is refused as an inconsistent record. That is the test
+that catches it, and it took three attempts to write: a target store populated **from** a file
+already holds wire-rounded dates, so the obvious round-trip tests cannot see the defect at all.
+
+Round-tripping the whole document rather than mapping each `Date` through `wireString`: the
+per-field version is cheaper and exactly equivalent, and there are twenty-odd date fields across
+five record types where a missed one is silent. D-095 records what happens to a rule that depends
+on someone remembering a field.
+
+`includesCachedExternalData: true` on that snapshot is mandatory and the parameter defaults to
+`false`. A cache-free local snapshot presents every local `cachedSummary` as `nil`, and §10.1's
+"nil loses to any value" then hands every ref's cache to the incoming file. One word, and the
+user's offline summaries are gone; a test asserts it.
+**Alternatives:** a planner that queries the context per record (no double materialization, and the
+merge rules interleave with fetches so commutativity needs two real stores); a single-pass merger
+with a dry-run flag (least machinery, and preview fidelity depends on every write site honouring
+the flag).
+
+---
+
+### D-105 — §10.6's commutativity is stated over everything the file actually carries
+
+**2026-09-11** · M2.5-02 · **Status:** accepted · amends REQUIREMENTS.md §10.6 (v1.18)
+
+Merging in either direction converges on the same record set and the same value for every field
+**except** `SourceRef.lastFetchedAt` and `.cachedSummary`, which converge only for exports taken
+with `includesCachedExternalData` set.
+
+**Why:** read literally, §10.6 was false in the default configuration, and that is worth stating
+plainly rather than defending. §10.2 excludes the two cached fields from an export unless the
+opt-in is set, so an ordinary file carries no information about them at all. §10.1's "`nil` loses
+to any value" is the right rule for that — a cache-free file must never clear a cache the other
+machine built — but it necessarily preserves whichever machine is the import *target*, so A→B and
+B→A differ in exactly those two fields.
+
+Nothing in the merge is wrong. The requirement was asserting convergence over data the file does
+not contain, and the honest fix is to say what the property is stated over.
+
+**It was recorded in a test comment first, and that was the actual mistake.** `StoreMergeRuleTests`
+asserted the asymmetry deliberately, with a comment explaining why it was correct — which makes it
+discoverable by someone reading that file and invisible to everyone reading §10.6. A property the
+spec claims and the code does not have belongs in the spec's own words. Raised in review of PR #29.
+**Alternatives:** making cache state deterministic in the merge (there is nothing to be
+deterministic *about* — the file carries neither field); exporting cached data by default
+(contradicts §10.2, which excludes it for being bulky and re-fetchable, and would grow every
+export for data that re-fetches in a second).
+
+---
+
 ## Open — decided by the task that owns them
 
 Each of these is a real choice the spec leaves open. The owning task decides it, records it in
@@ -2360,8 +2641,7 @@ its PR body, and adds an entry above.
 | # | Question | Owning task |
 |---|---|---|
 | O-5 | Where "last-used project" is stored, and its behavior on first ever launch | `M1-02` |
-| O-8 | How import merges the two mutable boolean flags, `Event.isRedacted` and `StandupReport.isUndone` — §10.1's union-by-UUID default has no rule for them and neither model carries `modifiedAt` | `M2.5-02` |
-| O-10 | Whether a `SourceRef` orphaned by a **corrected** note (the primary case) or a redacted one is reconciled, and how — stated in full as **D-049** above, which M1-06 left open rather than deciding blind | `M5` |
+| O-10 | Whether a `SourceRef` orphaned by a **corrected** note (the primary case) or a redacted one is reconciled, and how — stated in full as **D-049** above, which M1-06 left open rather than deciding blind. **Extended by D-103:** a merge can also produce two rows sharing §3.4's dedup key, when two machines each extract the same reference onto a task they both hold. Same question, second source | `M5` |
 
 ## Product questions — not for agents to decide
 

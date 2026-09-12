@@ -87,3 +87,38 @@ public final class TaskItem {
         completedAt = (new == .done) ? date : nil
     }
 }
+
+extension TaskItem {
+    /// Overwrite every field from an imported record — see
+    /// `Project.applyImported` for why this bypasses the stamping mutators.
+    ///
+    /// `setStatus` is bypassed for a second reason of its own: it guards
+    /// `new != status` and derives `completedAt` from the transition it is
+    /// making. The merge has already derived all three fields together from the
+    /// newest `statusChanged` event in the log (§10.1), and routing them back
+    /// through the guard would drop a resolution that only *looks* like a no-op —
+    /// same status, different `statusChangedAt`.
+    ///
+    /// **`createdAt` is deliberately not written here**, and the reasoning that
+    /// said it should be was wrong. It argued that the merge refuses a file
+    /// whose two sides disagree on it, so writing it is a no-op — but the merge
+    /// compares the *wire-normalized* local snapshot, while the row itself holds
+    /// full precision. Writing the record's value back therefore quantized a
+    /// live task's creation time whenever some unrelated field (a title, an
+    /// archive flag) made the row writable. An inserted task gets `createdAt`
+    /// from `init`; an existing one keeps the instant it was actually created.
+    func applyImported(_ record: ExportedTask) {
+        title = record.title
+        projectID = record.projectID
+        status = record.status
+        // Preserved when the wire instant already agrees: `applyEvents` skips an
+        // unchanged `statusChanged` event, so rewriting this cache would leave it
+        // quantized and no longer equal to the event it is derived from — an
+        // invariant `PersistedInvariantsTests` asserts.
+        statusChangedAt = ExportDocument.canonical(
+            record.statusChangedAt, keeping: statusChangedAt)
+        completedAt = ExportDocument.canonical(record.completedAt, keeping: completedAt)
+        isArchived = record.isArchived
+        modifiedAt = record.modifiedAt
+    }
+}

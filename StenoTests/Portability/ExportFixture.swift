@@ -21,7 +21,7 @@ struct ExportFixture {
     /// 2023-11-14 22:13:20 UTC, matching `ReportFixture.origin`.
     ///
     /// A whole second. Offsets used in `==` assertions stay whole or land on an
-    /// eighth (`.25`, `.5`), because encoding truncates at the millisecond and
+    /// eighth (`.25`, `.5`), because encoding quantizes to the millisecond and
     /// most decimals are not representable as a `Double` at this magnitude — so
     /// only those round-trip *exactly* and let `ExportDocument ==` be used
     /// directly. Tests that pin ordering or tolerance deliberately use values
@@ -129,9 +129,10 @@ struct ExportFixture {
         for project: Project, generatedAt: Date = ExportFixture.origin,
         windowStart: Date = ExportFixture.origin, windowEnd: Date = ExportFixture.origin,
         body: String = "*Yesterday*\n- shipped it", wasAIGenerated: Bool = false,
-        modelUsed: String? = nil, undone: Bool = false
+        modelUsed: String? = nil, undone: Bool = false, id: UUID = UUID()
     ) throws -> StandupReport {
         let report = StandupReport(
+            id: id,
             projectID: project.id, generatedAt: generatedAt, windowStart: windowStart,
             windowEnd: windowEnd, markdownBody: body, wasAIGenerated: wasAIGenerated,
             modelUsed: modelUsed)
