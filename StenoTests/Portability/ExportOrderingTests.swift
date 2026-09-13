@@ -132,7 +132,7 @@ func subMillisecondOrderSurvivesTheRoundTrip() throws {
     let exported = try fixture.encoder().snapshot().events.map(\.body)
     let decoded = try ExportDocument.decoder()
         .decode(ExportDocument.self, from: try fixture.encoder().encode())
-    let reExported = ExportEncoder.sortedByWireInstant(
+    let reExported = ExportOrdering.sortedByWireInstant(
         decoded.events, instant: { $0.timestamp }, id: { $0.id }
     ).map(\.body)
 

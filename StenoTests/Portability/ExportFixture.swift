@@ -21,7 +21,7 @@ struct ExportFixture {
     /// 2023-11-14 22:13:20 UTC, matching `ReportFixture.origin`.
     ///
     /// A whole second. Offsets used in `==` assertions stay whole or land on an
-    /// eighth (`.25`, `.5`), because encoding truncates at the millisecond and
+    /// eighth (`.25`, `.5`), because encoding quantizes to the millisecond and
     /// most decimals are not representable as a `Double` at this magnitude — so
     /// only those round-trip *exactly* and let `ExportDocument ==` be used
     /// directly. Tests that pin ordering or tolerance deliberately use values
@@ -86,9 +86,9 @@ struct ExportFixture {
     func task(
         _ title: String, in project: Project, status: Status = .todo,
         createdAt: Date = ExportFixture.origin, statusAt: Date? = nil,
-        archived: Bool = false, archivedAt: Date? = nil
+        archived: Bool = false, archivedAt: Date? = nil, id: UUID = UUID()
     ) throws -> TaskItem {
-        let task = TaskItem(title: title, projectID: project.id, createdAt: createdAt)
+        let task = TaskItem(id: id, title: title, projectID: project.id, createdAt: createdAt)
         context.insert(task)
         if status != .todo { task.setStatus(status, at: statusAt ?? createdAt) }
         if archived { task.setArchived(true, at: archivedAt ?? createdAt) }
@@ -114,9 +114,10 @@ struct ExportFixture {
     @discardableResult
     func ref(
         _ identifier: String, on task: TaskItem, kind: SourceRefKind = .jiraIssue,
-        url: String? = nil, cachedSummary: String? = nil, lastFetchedAt: Date? = nil
+        url: String? = nil, cachedSummary: String? = nil, lastFetchedAt: Date? = nil,
+        id: UUID = UUID()
     ) throws -> SourceRef {
-        let ref = SourceRef(taskID: task.id, kind: kind, identifier: identifier, url: url)
+        let ref = SourceRef(id: id, taskID: task.id, kind: kind, identifier: identifier, url: url)
         context.insert(ref)
         ref.task = task
         if let lastFetchedAt { ref.recordFetch(summary: cachedSummary, at: lastFetchedAt) }
@@ -129,9 +130,10 @@ struct ExportFixture {
         for project: Project, generatedAt: Date = ExportFixture.origin,
         windowStart: Date = ExportFixture.origin, windowEnd: Date = ExportFixture.origin,
         body: String = "*Yesterday*\n- shipped it", wasAIGenerated: Bool = false,
-        modelUsed: String? = nil, undone: Bool = false
+        modelUsed: String? = nil, undone: Bool = false, id: UUID = UUID()
     ) throws -> StandupReport {
         let report = StandupReport(
+            id: id,
             projectID: project.id, generatedAt: generatedAt, windowStart: windowStart,
             windowEnd: windowEnd, markdownBody: body, wasAIGenerated: wasAIGenerated,
             modelUsed: modelUsed)

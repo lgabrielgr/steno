@@ -15,10 +15,11 @@ func timestampsCarryMilliseconds() throws {
 
     let text = try ExportJSON.text(of: try fixture.encoder().encode())
 
-    // An eighth of a second, so the emitted digits are exact. Encoding truncates
-    // at the millisecond rather than rounding, and most decimals are not
-    // representable as a `Double` at this magnitude: `.481` is stored as
-    // `.4809999…` and emits as `.480`.
+    // An eighth of a second, so the emitted digits are exact. Encoding rounds
+    // to the nearest millisecond, which most decimals need: `.481` is stored as
+    // `.4809999…` at this magnitude, and truncating it — which the format style
+    // does on its own — would emit `.480` and make the format lose a
+    // millisecond every time a value crossed a file (D-101).
     #expect(text.contains("2023-11-14T22:13:20.500Z"))
 }
 
@@ -37,9 +38,10 @@ func aMillisecondApartSurvivesTheRoundTrip() throws {
     // becomes unrecoverable and §10.1's three timestamp-comparison merge rules
     // get a tie they cannot break. This is the assertion that would go red.
     //
-    // The values are asserted as *distinct and ordered*, not as exact: both
-    // truncate down a millisecond on the way out, which is within the
-    // precision this format promises.
+    // The values are asserted as *distinct and ordered*, not as exact. They
+    // happen to be exact now that encoding rounds, but the property this test
+    // exists for is that a millisecond of separation survives at all — asserting
+    // equality here would tie the test to the rounding rule it is not about.
     #expect(decoded.events.map(\.body) == ["first", "second"])
     #expect(decoded.events[0].timestamp < decoded.events[1].timestamp)
 }
@@ -59,21 +61,21 @@ func anEighthOfASecondIsExact() throws {
     // not survive — `.5001`, `.5002`, a clock-shaped date — because that is the
     // behaviour they exist to pin; they assert order or tolerance, never
     // equality. "Dyadic" would be too broad for the exact set: `.0625` is
-    // dyadic and still truncates to `.062`, because three fractional digits
-    // cannot hold it. The eighths — 0, .125, .25, .375, .5, .625, .75, .875 —
-    // are the only values both exactly representable as a `Double` and exactly
-    // expressible in three decimals.
+    // dyadic and still emits `.062`, because adding the half-millisecond lands
+    // just below `.063` at this magnitude — measured, not derived. The eighths
+    // — 0, .125, .25, .375, .5, .625, .75, .875 — are the only values both
+    // exactly representable as a `Double` and exactly expressible in three
+    // decimals.
     #expect(decoded.events.first?.timestamp == ExportFixture.at(0.25))
 }
 
 @MainActor
-@Test("a date off the clock round-trips to within a millisecond, not exactly")
-func aClockDateRoundTripsWithinAMillisecond() throws {
+@Test("a date off the clock round-trips to within half a millisecond, not exactly")
+func aClockDateRoundTripsWithinHalfAMillisecond() throws {
     let fixture = try ExportFixture()
     let task = try fixture.task("ship it", in: try fixture.project("Payments"))
-    // Sub-millisecond precision, as `Date.now` produces. The encoded string
-    // **truncates** to three fractional digits — it does not round — so this is
-    // the case `==` would fail, and it fails in one direction only.
+    // Sub-millisecond precision, as `Date.now` produces. Three fractional
+    // digits cannot hold it, so this is the case `==` would fail.
     let imprecise = Date(timeIntervalSince1970: 1_700_000_000.4817263)
     try fixture.event("from the clock", on: task, at: imprecise)
 
@@ -81,10 +83,11 @@ func aClockDateRoundTripsWithinAMillisecond() throws {
     let decoded = try ExportDocument.decoder().decode(ExportDocument.self, from: data)
 
     let timestamp = try #require(decoded.events.first?.timestamp)
-    // Truncation, so the decoded value is never later than the original and is
-    // short by less than a millisecond.
-    #expect(timestamp <= imprecise)
-    #expect(abs(timestamp.timeIntervalSince(imprecise)) < 0.001)
+    // **Rounding, so the error goes in either direction** — this value moves
+    // *up*, to `.482`. That is the assertion that changed in M2.5-02: it read
+    // `timestamp <= imprecise` while the format truncated. Half a millisecond
+    // plus the representation slack measured at this magnitude (0.5002 ms).
+    #expect(abs(timestamp.timeIntervalSince(imprecise)) < 0.000_51)
     // Stated as plainly as possible, because M2.5-02's "the object graph is
     // identical" criterion means identical at this precision, and an `==` on a
     // clock date there would fail in a way that looks like a merge bug.

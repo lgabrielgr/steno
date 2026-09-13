@@ -45,24 +45,70 @@ public struct StandupUndoService {
     /// is one-way by design and names this requirement as the reason there is
     /// no `unredact()`.
     ///
-    /// **A `generatedAt` tie cannot be broken and does not need to be.**
-    /// `SortDescriptor` has no secondary key available — `UUID` is not
-    /// `Comparable`, the wall `EventQueries.timeline` documents for its own tie
-    /// case — but two Copies stamped at the same instant are unreachable:
-    /// `StandupDraftModel.canCopy` is `false` once `phase` leaves `.editing`,
-    /// and a second report needs a second sheet.
+    /// **A `generatedAt` tie is reachable, and is broken deterministically.**
     ///
-    /// `throws` rather than returning `nil` on a failed fetch: this is the
-    /// gate on whether an action is offered, and D-018's rule is that a failed
-    /// read must never be presented as an empty store.
+    /// It is not reachable on one machine: `StandupService.commit` stamps the
+    /// report and its events from a single `now()`, so two Copies cannot share
+    /// the instant. M2.5-02's merge unions the reports of two Macs, and two Macs
+    /// can each produce one inside the same millisecond — at which point a sort
+    /// keyed only on `generatedAt` has an unspecified order among equals, and
+    /// the two stores could converge on an identical record set while disagreeing
+    /// about which report Undo would take back.
+    ///
+    /// Ties are therefore grouped at **wire precision** — not raw `Date`
+    /// equality, because `ImportService.apply` deliberately leaves unchanged rows
+    /// at full precision, so the Mac that created a report and the Mac that
+    /// imported it hold different raw values for the same instant — and resolved
+    /// on the lowest `uuidString`, the tie-break D-092 uses for every exported
+    /// array.
+    ///
     public func undoableReport(for project: Project) throws -> StandupReport? {
         let projectID = project.id
-        var descriptor = FetchDescriptor<StandupReport>(
+        // **Two bounded reads, not one unbounded one.** Adding the tie-break
+        // removed `fetchLimit = 1` and started materializing every report the
+        // project has ever had — on a method `MainWindowModel.reload()` calls
+        // after every write, against a history §D18 never trims. The newest row
+        // comes back on its own, and only its wire millisecond is then read.
+        var newestDescriptor = FetchDescriptor<StandupReport>(
             predicate: #Predicate { $0.projectID == projectID },
             sortBy: [SortDescriptor(\.generatedAt, order: .reverse)]
         )
-        descriptor.fetchLimit = 1
-        return try context.fetch(descriptor).first.flatMap { $0.isUndone ? nil : $0 }
+        newestDescriptor.fetchLimit = 1
+        guard let newest = try context.fetch(newestDescriptor).first else { return nil }
+
+        // Rounding is monotonic, so the raw-newest row is also in the newest
+        // bucket — no report outside this range can outrank it.
+        let bucket = ExportDocument.wireBucket(around: newest.generatedAt)
+        let start = bucket.lowerBound
+        let end = bucket.upperBound
+        let reports = try context.fetch(
+            FetchDescriptor<StandupReport>(
+                predicate: #Predicate {
+                    $0.projectID == projectID && $0.generatedAt >= start && $0.generatedAt < end
+                }
+            ))
+
+        // **The tie-break is what M2.5-02 made necessary.** This used to take
+        // `fetchLimit = 1` off a sort keyed only on `generatedAt`. On one machine
+        // two reports cannot share that instant — `StandupService` stamps it from
+        // one `now()` per Copy — but a merge unions the reports of two machines,
+        // and two Macs can produce a report in the same millisecond. The sort
+        // then has an unspecified order among equals, so *which* report Undo
+        // offers would depend on store order, and the two machines could disagree
+        // after converging on an identical record set.
+        //
+        // `uuidString` because `UUID` is not `Comparable`, and the same tie-break
+        // D-092 uses for every exported array, so the two orders agree.
+        // **Grouped at wire precision, not by raw `Date` equality**, and that
+        // distinction is the whole fix rather than a detail. Raw equality was the
+        // first attempt and it does not hold across machines: `apply` leaves
+        // unchanged local rows at full precision, so a report created here keeps
+        // `.4817263` while the Mac that imported it holds `.482`. The two stores
+        // then disagree about whether it ties with a `.482` report — which is
+        // exactly the divergence the tie-break exists to remove. Same key
+        // `ExportOrdering` groups on, for the same reason.
+        let chosen = reports.min { $0.id.uuidString < $1.id.uuidString } ?? newest
+        return chosen.isUndone ? nil : chosen
     }
 
     /// Reverse all three of Copy's store effects, atomically. Returns how many
