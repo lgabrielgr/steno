@@ -69,12 +69,17 @@ public final class ImportPreviewModel {
     /// plan was produced by `ImportService.plan`, which reads the store and
     /// writes nothing; this only puts it on screen. That is what makes
     /// "cancelling changes nothing" true by construction rather than by care.
-    public func begin(
-        plan: ImportPlan, filename: String, mode: ImportMode, backupURL: URL? = nil
-    ) {
+    /// **The mode comes from the plan, and is not a separate parameter.**
+    /// It was one until review of PR #30 pointed out what that allows: a
+    /// `.replace` plan begun with `mode: .merge` makes `canApply` skip the
+    /// typed-confirmation check while `applyImport` still applies the plan's
+    /// deletion set — a public API that bypasses the only guard on the one
+    /// destructive operation in the product. One source of truth removes the
+    /// possibility rather than documenting it.
+    public func begin(plan: ImportPlan, filename: String, backupURL: URL? = nil) {
         self.plan = plan
         self.filename = filename
-        self.mode = mode
+        self.mode = plan.mode
         self.backupURL = backupURL
         self.confirmation = ""
         self.lastError = nil

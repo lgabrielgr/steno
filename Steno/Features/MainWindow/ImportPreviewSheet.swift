@@ -114,10 +114,19 @@ struct ImportPreviewSheet: View {
             // rather than "not a single click", and a field that fires on
             // Return turns the guard back into one keystroke past the last
             // letter.
+            //
+            // The empty title is deliberate — the instruction above is the
+            // visible label — but an empty title leaves VoiceOver with no name
+            // for the control, on the one field standing between the user and
+            // an irreversible wipe. The explicit accessibility label is what
+            // gives it one. Raised in review of PR #30.
             TextField("", text: $preview.confirmation)
                 .textFieldStyle(.roundedBorder)
                 .frame(maxWidth: 200)
                 .autocorrectionDisabled()
+                .accessibilityLabel(
+                    "Type \(ImportPreviewModel.replaceConfirmationWord) to confirm replacing all data"
+                )
         }
     }
 

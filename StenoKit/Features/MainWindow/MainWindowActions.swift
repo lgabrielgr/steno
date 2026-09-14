@@ -93,7 +93,7 @@ public protocol MainWindowActions: AnyObject {
     /// The store-failed case is already covered elsewhere: `StenoApp` builds no
     /// `MainWindowView` when the container fails, so the menu's
     /// `@FocusedValue` is nil and every item is disabled. What this actually
-    /// prevents is ⌘E or ⌘O opening a file panel on top of an open sheet —
+    /// prevents is ⌘E or ⌘I opening a file panel on top of an open sheet —
     /// including on top of the import preview itself, where it would replace
     /// the plan the user is in the middle of reading.
     var canExchangeData: Bool { get }

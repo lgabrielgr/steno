@@ -98,7 +98,7 @@ func singularsAreSingular() {
             "− 1 report will be deleted",
             "+ 1 new task",
             "~ 1 reference updated",
-            "= 1 record already present, kept as the file has them",
+            "= 1 record already present, kept as the file has it",
         ])
 }
 

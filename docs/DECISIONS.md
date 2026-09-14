@@ -2696,13 +2696,25 @@ so nothing the local store contains can reach what gets written.
 It is still **read**, because the diff and the staleness check both need it, and
 `ImportPlan.diff` indexes it with `uniquingKeysWith:` rather than `uniqueKeysWithValues:` — so a
 locally duplicated id produces slightly approximate counts instead of trapping the process during
-the one operation that must fail cleanly (§10.4). Both duplicates are still deleted, because the
-deletion set is keyed on ids the merged store lacks.
+the one operation that must fail cleanly (§10.4).
+
+**Deleting a duplicated id removes every physical row carrying it.** The first version of this
+entry claimed that and the code did not do it: `delete` went through the same
+`[UUID: Model]` dictionary, so of two rows sharing an id it deleted one and kept the other — and
+Replace's whole contract is that the store afterwards *is* the file. Caught in review of PR #30,
+against this paragraph. `delete` now filters the fetched array by id instead.
+
+**What is still not guaranteed**, stated rather than implied: a duplicated id that also appears
+*in the file* is not in the deletion set at all, so `applyX` updates one row and the other
+survives with stale values. Making that case converge means deleting rows the preview never
+counted, which trades one §10.4 guarantee for another. Replace recovers a store with orphaned or
+surplus rows; it does not de-duplicate one. If that becomes a real failure rather than a
+hypothetical, it is its own task.
 
 A store so damaged that a *fetch* throws is still out of reach, and deliberately: that is the
 `storeDirectory`-deletion case, not an import.
 
-**Falsified by** removing the mode check, which turns `replaceSkipsLocalShapeValidation` red.
+**Falsified by** removing the mode check, which turns `replaceSkipsLocalShapeValidation` red; and by restoring the dictionary lookup in `delete`, which turns `replaceRemovesEveryDuplicateRow` red.
 
 ---
 

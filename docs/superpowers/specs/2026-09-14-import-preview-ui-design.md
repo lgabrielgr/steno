@@ -40,6 +40,12 @@ the quantizer; this is a note that the window for free changes closes with this 
 `ImportMode` is a new public enum — `.merge` / `.replace` — and `ImportService.plan(_:mode:)`
 takes it, defaulting to `.merge` so every M2.5-02 caller and test is unchanged.
 
+> **Superseded on one point (2026-09-14, D-107).** Implementation showed that running
+> `validateShape` over the *local* store in `.replace` disables the recovery operation exactly
+> when the store is malformed — which is when a user reaches for Replace. Replace now skips that
+> check; merge still runs it. The text below describes the design as approved; `DECISIONS.md`
+> D-107 is authoritative where the two disagree.
+
 In `.replace`, `plan` does everything it does today — the `hasChanges` guard, `ImportReader`,
 `validateShape` on both sides, `wireNormalized` on the incoming side — and substitutes exactly
 one input to the merge: `local` becomes an empty `MergedStore()`. Three consequences fall out

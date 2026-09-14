@@ -14,7 +14,7 @@ func mergeIsReadyImmediately() {
     let preview = ImportPreviewModel()
     preview.begin(
         plan: PlanFixture.plan(tasks: PlanFixture.counts(inserted: 1)),
-        filename: "steno-export-2026-08-10.json", mode: .merge)
+        filename: "steno-export-2026-08-10.json")
 
     #expect(preview.canApply)
     #expect(preview.phase == .previewing)
@@ -26,7 +26,7 @@ func replaceDemandsTheExactWord() {
     let preview = ImportPreviewModel()
     preview.begin(
         plan: PlanFixture.plan(mode: .replace, tasks: PlanFixture.counts(inserted: 1)),
-        filename: "steno-export-2026-08-10.json", mode: .replace)
+        filename: "steno-export-2026-08-10.json")
 
     #expect(!preview.canApply)
 
@@ -46,7 +46,7 @@ func replaceDemandsTheExactWord() {
 @Test("an empty plan is never applicable, whatever is typed")
 func anEmptyPlanIsNeverApplicable() {
     let preview = ImportPreviewModel()
-    preview.begin(plan: PlanFixture.plan(mode: .replace), filename: "f.json", mode: .replace)
+    preview.begin(plan: PlanFixture.plan(mode: .replace), filename: "f.json")
 
     // §10.6's idempotency, seen from the sheet: the second import of a file
     // lands here. A button that is live only to refuse is worse than one that
@@ -62,7 +62,7 @@ func nothingToImportIsItsOwnPhase() {
     let preview = ImportPreviewModel()
     preview.begin(
         plan: PlanFixture.plan(tasks: PlanFixture.counts(unchanged: 12)),
-        filename: "f.json", mode: .merge)
+        filename: "f.json")
     #expect(preview.phase == .nothingToImport)
     #expect(!preview.canApply)
 }
@@ -73,7 +73,7 @@ func dismissClearsEverything() {
     let preview = ImportPreviewModel()
     preview.begin(
         plan: PlanFixture.plan(mode: .replace, tasks: PlanFixture.counts(inserted: 1)),
-        filename: "steno-export-2026-08-10.json", mode: .replace,
+        filename: "steno-export-2026-08-10.json",
         backupURL: URL(fileURLWithPath: "/tmp/backup.json"))
     preview.confirmation = "REPLACE"
 
@@ -94,7 +94,7 @@ func a2ndPreviewStartsUnconfirmed() {
     let preview = ImportPreviewModel()
     preview.begin(
         plan: PlanFixture.plan(mode: .replace, tasks: PlanFixture.counts(inserted: 1)),
-        filename: "a.json", mode: .replace)
+        filename: "a.json")
     preview.confirmation = "REPLACE"
     #expect(preview.canApply)
 
@@ -103,7 +103,7 @@ func a2ndPreviewStartsUnconfirmed() {
     // read a word about.
     preview.begin(
         plan: PlanFixture.plan(mode: .replace, tasks: PlanFixture.counts(inserted: 2)),
-        filename: "b.json", mode: .replace)
+        filename: "b.json")
     #expect(!preview.canApply)
 }
 
@@ -112,8 +112,7 @@ func a2ndPreviewStartsUnconfirmed() {
 func failureAndSuccessAreDifferentProperties() {
     let preview = ImportPreviewModel()
     preview.begin(
-        plan: PlanFixture.plan(tasks: PlanFixture.counts(inserted: 1)), filename: "f.json",
-        mode: .merge)
+        plan: PlanFixture.plan(tasks: PlanFixture.counts(inserted: 1)), filename: "f.json")
 
     preview.failed("nope")
     #expect(preview.lastError == "nope")

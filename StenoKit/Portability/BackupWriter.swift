@@ -90,9 +90,18 @@ public struct BackupWriter {
     ///
     /// `exportedBy` is passed rather than defaulted for D-010's reason: the
     /// test bundle is unhosted, so `Bundle.main` there is the xctest runner.
+    /// `to` is the path the confirmation sheet already showed the user.
+    ///
+    /// **Not defaulted away.** `plannedURL()` reads the clock, so a preview
+    /// shown at 14:22:05 and confirmed at 14:22:06 wrote a *different* filename
+    /// from the one in the safety prompt — the recovery path the sheet promised
+    /// pointed at nothing. Raised in review of PR #30. Passing the planned URL
+    /// back in is what makes the promise and the file the same thing.
     @discardableResult
-    public func write(userAgent: String = ExportDocument.userAgent()) throws -> URL {
-        let url = plannedURL()
+    public func write(
+        userAgent: String = ExportDocument.userAgent(), to destination: URL? = nil
+    ) throws -> URL {
+        let url = destination ?? plannedURL()
         let data = try ExportEncoder(
             context: context,
             includesCachedExternalData: true,

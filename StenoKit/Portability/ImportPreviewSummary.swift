@@ -91,7 +91,12 @@ public enum ImportPreviewSummary {
         // The two modes do different things to a record that is already
         // present, and the line says which. A merge leaves it alone; a replace
         // has decided the file's copy is the truth and happens to agree.
-        let fate = plan.mode == .replace ? "kept as the file has them" : "skipped"
+        // "…has it" for one, "…has them" for several. The singular case is
+        // reachable and was shipping a grammatical error into a sentence the
+        // user reads while deciding whether to wipe their store.
+        let fate =
+            plan.mode == .replace
+            ? "kept as the file has \(total == 1 ? "it" : "them")" : "skipped"
         return "= \(total) \(noun) already present, \(fate)"
     }
 

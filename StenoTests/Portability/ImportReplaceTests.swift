@@ -221,3 +221,32 @@ func replaceThatOnlyDeletesIsNotEmpty() throws {
     try service.apply(plan)
     #expect(try snapshot(local.context).tasks.isEmpty)
 }
+
+@MainActor
+@Test("replace removes every physical row sharing a duplicated id")
+func replaceRemovesEveryDuplicateRow() throws {
+    let (local, file) = try divergentStores()
+    // Two physical rows under one id — reachable only because D-107 has Replace
+    // skip `validateShape`, which is the whole point of that decision. The
+    // deletion went through a `[UUID: Model]` dictionary, so it removed one of
+    // these and left the other: a store that is not the file, which is exactly
+    // what Replace promises it will be. Raised in review of PR #30.
+    let twinID = UUID()
+    for index in 0..<2 {
+        let twin = TaskItem(
+            id: twinID, title: "twin \(index)", projectID: UUID(),
+            createdAt: ExportFixture.at(200))
+        local.context.insert(twin)
+    }
+    try local.context.save()
+
+    let data = try file.encoder(includingCachedData: true).encode()
+    let service = ImportService(context: local.context)
+    let plan = try service.plan(data, mode: .replace)
+    #expect(plan.deletions.tasks.contains(twinID))
+
+    try service.apply(plan)
+
+    let survivors = try local.context.fetch(FetchDescriptor<TaskItem>())
+    #expect(!survivors.contains { $0.id == twinID })
+}

@@ -26,11 +26,27 @@ extension MainWindowModel {
                 defaultName: ExportFilename.forDate(now()))
         else { return }
 
+        // **Two failures, two sentences.** `encode()` throws when the *store*
+        // cannot be read; `write(to:)` throws when the *file* cannot be written.
+        // One catch told the user "Could not write the export" for both, sending
+        // someone whose store failed to read off to check their disk. Raised in
+        // review of PR #30, and the same distinction `ImportError` already draws
+        // between `.storeUnreadable` and `.saveFailed`.
+        let data: Data
         do {
-            let data = try ExportEncoder(
+            data = try ExportEncoder(
                 context: context,
                 includesCachedExternalData: destination.includesCachedExternalData
             ).encode()
+        } catch {
+            Log.app.error(
+                "export could not be built: \(String(describing: error), privacy: .public)")
+            lastNotice = nil
+            lastError = "Steno could not read its own store, so nothing was exported."
+            return
+        }
+
+        do {
             try data.write(to: destination.url, options: .atomic)
             lastError = nil
             lastNotice = "Exported to \(destination.url.path)."
@@ -113,7 +129,7 @@ extension MainWindowModel {
         lastError = nil
         lastNotice = nil
         importPreview.begin(
-            plan: plan, filename: url.lastPathComponent, mode: mode, backupURL: backupURL)
+            plan: plan, filename: url.lastPathComponent, backupURL: backupURL)
         activeSheet = .importPreview
     }
 
@@ -131,7 +147,7 @@ extension MainWindowModel {
         var backupURL: URL?
         if plan.mode == .replace {
             do {
-                backupURL = try makeBackupWriter(context).write()
+                backupURL = try makeBackupWriter(context).write(to: importPreview.backupURL)
             } catch {
                 Log.app.error(
                     "replace backup failed: \(String(describing: error), privacy: .public)")

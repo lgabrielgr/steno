@@ -205,43 +205,6 @@ extension ImportService {
         )
     }
 
-    /// §10.1's Replace, and **the only code in this product that removes a
-    /// row.**
-    ///
-    /// CLAUDE.md's non-negotiable #3 and §3.3 forbid deleting an `Event`;
-    /// §10.1 requires exactly that of Replace. The exception is confined here,
-    /// and the confinement is structural rather than documentary: this reads
-    /// `plan.deletions`, which a `.merge` plan cannot populate because the
-    /// merged store it is diffed against is a union of both sides. D-106
-    /// records the reasoning.
-    ///
-    /// **Children before parents**, the mirror of the write order. The one real
-    /// relationship is `TaskItem.sourceRefs` ⟷ `SourceRef.task` under the
-    /// default nullify rule, so deleting a task first would write every one of
-    /// its refs on the way past — rows that are themselves about to be deleted.
-    /// The file's referential closure (D-102) is what guarantees this set is
-    /// itself closed: a surviving ref's task survives, so a deleted task's refs
-    /// are always in this set too.
-    private func deleteRecords(_ ids: ImportPlan.Writes, from context: ModelContext) throws {
-        guard !ids.isEmpty else { return }
-        try delete(StandupReport.self, id: { $0.id }, ids: ids.reports, in: context)
-        try delete(SourceRef.self, id: { $0.id }, ids: ids.sourceRefs, in: context)
-        try delete(Event.self, id: { $0.id }, ids: ids.events, in: context)
-        try delete(TaskItem.self, id: { $0.id }, ids: ids.tasks, in: context)
-        try delete(Project.self, id: { $0.id }, ids: ids.projects, in: context)
-    }
-
-    private func delete<Model: PersistentModel>(
-        _ type: Model.Type, id: (Model) -> UUID, ids: Set<UUID>, in context: ModelContext
-    ) throws {
-        guard !ids.isEmpty else { return }
-        let rows = try existing(type, id: id, in: context)
-        for key in ids {
-            guard let row = rows[key] else { continue }
-            context.delete(row)
-        }
-    }
-
     private func existing<Model: PersistentModel>(
         _ type: Model.Type, id: (Model) -> UUID, in context: ModelContext
     ) throws -> [UUID: Model] {
