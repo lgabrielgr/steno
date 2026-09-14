@@ -8,8 +8,13 @@ struct MainWindowView: View {
 
     /// The model is built once here, from the container, rather than in `body`
     /// — which would rebuild it on every render and drop the selection.
+    /// **The one place `AppKitFilePanels` is constructed.** Every other
+    /// injection point defaults to `UnavailableFilePanels`, so the headless
+    /// test bundle cannot open a modal panel and hang the suite (D-010).
     init(container: ModelContainer) {
-        _model = State(initialValue: MainWindowModel(context: container.mainContext))
+        _model = State(
+            initialValue: MainWindowModel(
+                context: container.mainContext, panels: AppKitFilePanels()))
     }
 
     @Environment(\.openWindow) private var openWindow
@@ -45,6 +50,24 @@ struct MainWindowView: View {
                 .padding(8)
                 .background(.yellow.opacity(0.25))
             }
+
+            // §10.5's export has an outcome worth stating — where the file
+            // went — and it is not a failure. Its own row rather than reusing
+            // the error banner above, for `MainWindowModel.lastNotice`'s
+            // reason: rendering a success in the error colours would misreport
+            // an operation that just wrote a file. Selectable, so the path can
+            // be copied.
+            if let notice = model.lastNotice {
+                HStack(spacing: 8) {
+                    Image(systemName: "checkmark.circle.fill")
+                    Text(notice)
+                        .textSelection(.enabled)
+                    Spacer()
+                    Button("Dismiss") { model.dismissNotice() }
+                }
+                .padding(8)
+                .background(.green.opacity(0.18))
+            }
         }
         .sheet(item: $model.activeSheet) { sheet in
             switch sheet {
@@ -66,6 +89,11 @@ struct MainWindowView: View {
                     placeholder: "Optional — waiting on what?",
                     confirm: "Add Reason"
                 ) { model.addBlockedReason($0, to: id) }
+            case .importPreview:
+                ImportPreviewSheet(
+                    preview: model.importPreview,
+                    onApply: { model.applyImport() },
+                    onClose: { model.dismissImportPreview() })
             case .standupDraft:
                 StandupDraftSheet(
                     draft: model.standupDraft,

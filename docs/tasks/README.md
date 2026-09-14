@@ -76,8 +76,8 @@ something better than paper. **M2 is the true MVP; M6 is the finish line.**
 > Exit: export from Mac A, import on Mac B, resume with nothing lost. Core, not optional (§10).
 
 - [x] [M2.5-01](M2.5-01-export-encoder.md) — JSON export, secrets-free by construction — PR #28
-- [x] [M2.5-02](M2.5-02-import-merge.md) — merge-by-UUID: idempotent, bidirectional, non-destructive
-- [ ] [M2.5-03](M2.5-03-import-preview-ui.md) — preview, cancel, single-transaction apply, Replace mode
+- [x] [M2.5-02](M2.5-02-import-merge.md) — merge-by-UUID: idempotent, bidirectional, non-destructive — PR #29
+- [x] [M2.5-03](M2.5-03-import-preview-ui.md) — preview, cancel, single-transaction apply, Replace mode
 - [ ] [M2.5-04](M2.5-04-cli-subcommands.md) — `steno export`/`import` and the matching make targets
 - [ ] [M2.5-05](M2.5-05-auto-export.md) — auto-export, defaulting ON at onboarding
 

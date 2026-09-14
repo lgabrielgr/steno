@@ -31,7 +31,7 @@ public struct ImportService {
     /// again first. Steno is single-user and single-window, so the gap is
     /// theoretical — and a locking scheme to close it would be more machinery
     /// than the risk earns.
-    public func plan(_ data: Data) throws -> ImportPlan {
+    public func plan(_ data: Data, mode: ImportMode = .merge) throws -> ImportPlan {
         // **A context with unsaved work cannot be imported into coherently.**
         // `plan` snapshots this context, and a fetch sees pending inserts and
         // edits — but `apply` stages into a scratch context built from the
@@ -49,10 +49,22 @@ public struct ImportService {
         // malformed — and `ImportError.malformed`'s message opens "This file
         // isn't a readable Steno export." For corruption in *this Mac's* store
         // that tells the user to repair a file that is perfectly good.
-        do {
-            try StoreMerge.validateShape(of: local)
-        } catch let error as ImportError {
-            throw ImportError.storeUnreadable(detail: error.detail)
+        //
+        // **Skipped entirely in `.replace`, and that is the point of Replace.**
+        // §10.1 has it exist "for restoring a known-good snapshot", so refusing
+        // to run it because *this Mac's* store is malformed would disable the
+        // recovery operation in precisely the situation it was built for. The
+        // local store is not an input to a replace merge — nothing it contains
+        // can reach the result — so its shape cannot corrupt what gets written.
+        // It is still read, because the diff and the staleness check both need
+        // it; `ImportPlan.diff` tolerates a duplicated id rather than trapping
+        // on one. See D-106.
+        if mode == .merge {
+            do {
+                try StoreMerge.validateShape(of: local)
+            } catch let error as ImportError {
+                throw ImportError.storeUnreadable(detail: error.detail)
+            }
         }
         // **The incoming side is normalized too, and that is not belt-and-braces.**
         // It was not, on the reasoning that a file is already at wire precision —
@@ -64,8 +76,26 @@ public struct ImportService {
         // it, and for an event — whose timestamp is immutable — the next import
         // of the same file is refused as an inconsistent record.
         let incoming = try MergedStore(document).wireNormalized()
-        let result = try StoreMerge.merge(local: local, incoming: incoming)
-        return ImportPlan(local: local, result: result)
+        // **`.replace` merges the file against an empty store, and one
+        // substitution is the whole of it.** Three things fall out rather than
+        // being written separately: D-102's closure check then runs over the
+        // file alone, which is correct because the rows it would otherwise
+        // resolve against are about to be deleted; D-100's status and D-099's
+        // `lastStandupAt` are still derived, now from the file's own events and
+        // reports, so a hand-edited file whose `status` field disagrees with
+        // its own log installs the log's answer; and D-098's sticky-true flags
+        // become a no-op, which is what they should be when there is no local
+        // opinion to preserve.
+        let base = mode == .replace ? MergedStore() : local
+        let result = try StoreMerge.merge(local: base, incoming: incoming)
+        return ImportPlan(
+            local: local,
+            result: result,
+            mode: mode,
+            origin: ImportPlan.Origin(
+                exportedAt: document.exportedAt,
+                exportedBy: document.exportedBy,
+                includesCachedExternalData: document.includesCachedExternalData))
     }
 
     /// The local store as a file would express it.
@@ -145,6 +175,11 @@ extension ImportService {
             //
             // Parents first. SwiftData does not require it; a debugger stepping
             // through this does.
+            //
+            // Deletions before any of it: §10.1's Replace makes the file the
+            // whole store, and a row the file lacks must be gone before the
+            // rows it shares an id space with are written.
+            try deleteRecords(plan.deletions, from: scratch)
             try applyProjects(store.projects, writing: plan.writes.projects, into: scratch)
             try applyTasks(store.tasks, writing: plan.writes.tasks, into: scratch)
             try applyEvents(store.events, writing: plan.writes.events, into: scratch)
@@ -165,7 +200,46 @@ extension ImportService {
         // After the save, never before: an observer that reloads must not read a
         // context whose write has not landed (D-019).
         NotificationCenter.default.post(name: .stenoDidWrite, object: nil)
-        Log.app.info("import applied: \(plan.tasks.inserted, privacy: .public) new tasks")
+        Log.app.info(
+            "import applied: \(plan.tasks.inserted, privacy: .public) new tasks, \(plan.deletions.tasks.count, privacy: .public) removed"
+        )
+    }
+
+    /// §10.1's Replace, and **the only code in this product that removes a
+    /// row.**
+    ///
+    /// CLAUDE.md's non-negotiable #3 and §3.3 forbid deleting an `Event`;
+    /// §10.1 requires exactly that of Replace. The exception is confined here,
+    /// and the confinement is structural rather than documentary: this reads
+    /// `plan.deletions`, which a `.merge` plan cannot populate because the
+    /// merged store it is diffed against is a union of both sides. D-106
+    /// records the reasoning.
+    ///
+    /// **Children before parents**, the mirror of the write order. The one real
+    /// relationship is `TaskItem.sourceRefs` ⟷ `SourceRef.task` under the
+    /// default nullify rule, so deleting a task first would write every one of
+    /// its refs on the way past — rows that are themselves about to be deleted.
+    /// The file's referential closure (D-102) is what guarantees this set is
+    /// itself closed: a surviving ref's task survives, so a deleted task's refs
+    /// are always in this set too.
+    private func deleteRecords(_ ids: ImportPlan.Writes, from context: ModelContext) throws {
+        guard !ids.isEmpty else { return }
+        try delete(StandupReport.self, id: { $0.id }, ids: ids.reports, in: context)
+        try delete(SourceRef.self, id: { $0.id }, ids: ids.sourceRefs, in: context)
+        try delete(Event.self, id: { $0.id }, ids: ids.events, in: context)
+        try delete(TaskItem.self, id: { $0.id }, ids: ids.tasks, in: context)
+        try delete(Project.self, id: { $0.id }, ids: ids.projects, in: context)
+    }
+
+    private func delete<Model: PersistentModel>(
+        _ type: Model.Type, id: (Model) -> UUID, ids: Set<UUID>, in context: ModelContext
+    ) throws {
+        guard !ids.isEmpty else { return }
+        let rows = try existing(type, id: id, in: context)
+        for key in ids {
+            guard let row = rows[key] else { continue }
+            context.delete(row)
+        }
     }
 
     private func existing<Model: PersistentModel>(
