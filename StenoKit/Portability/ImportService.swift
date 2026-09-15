@@ -136,16 +136,29 @@ extension ImportService {
     ///
     /// Every validation already ran on values, before this is reached, so the
     /// only failure left in flight is the save itself — which rolls back.
-    /// - Parameter backup: proof that §10.1's mandatory pre-Replace backup was
-    ///   written. Required for a `.replace` plan, ignored for a `.merge` one,
-    ///   and obtainable only from `BackupWriter.write`.
-    public func apply(_ plan: ImportPlan, backup: BackupReceipt? = nil) throws {
+    /// - Parameter backup: takes §10.1's mandatory pre-Replace backup. Required
+    ///   for a `.replace` plan, unused for a `.merge` one.
+    ///
+    /// **The writer, not a receipt handed in by the caller.** A receipt only
+    /// proves that *a* backup exists somewhere, not that it describes the store
+    /// about to be wiped — a caller could mint one, let the store change, plan a
+    /// fresh Replace and reuse it, so the only recovery file would hold the
+    /// older state. Raised in review of PR #30. Taking the backup here binds it
+    /// to this transaction: it runs after the staleness check and immediately
+    /// before the first write.
+    ///
+    /// - Parameter backupTo: the path the confirmation sheet already showed the
+    ///   user; `nil` lets the writer choose. See `BackupWriter.write(to:)`.
+    @discardableResult
+    public func apply(
+        _ plan: ImportPlan, backupWith writer: BackupWriter? = nil, backupTo url: URL? = nil
+    ) throws -> BackupReceipt? {
         // **The backup is enforced here, not only in the UI.** It was a property
         // of `MainWindowModel.applyImport()` alone, which left the destructive
         // engine itself unguarded for every other caller — and M2.5-04's
         // `steno import --replace` is one. §10.1 makes the backup a property of
         // Replace, so it belongs at the boundary Replace actually crosses.
-        if plan.mode == .replace, backup == nil {
+        if plan.mode == .replace, writer == nil {
             throw ImportError.backupRequired
         }
         // **An empty plan writes nothing and posts nothing.** It used to reapply
@@ -153,7 +166,7 @@ extension ImportService {
         // import of a file made every observer reload, and would in M2.5-05 have
         // dirtied the store enough to trigger an auto-export, all while the
         // preview said there was nothing to do.
-        guard !plan.isEmpty else { return }
+        guard !plan.isEmpty else { return nil }
 
         // The plan describes a diff against a store that may since have moved,
         // and the same pending-change reasoning applies to the gap since `plan`.
@@ -161,6 +174,12 @@ extension ImportService {
         guard try localStore() == plan.source else {
             throw ImportError.storeChanged
         }
+
+        // **After the staleness check, before the first write.** Ordering it
+        // here means a refused plan never writes a spare backup, and the file
+        // that does get written describes the store this transaction is about
+        // to change rather than some earlier one.
+        let receipt = try writer?.write(to: url)
 
         // **The writes go to a context of their own.** `context.rollback()`
         // restores the persisted store but *not* the values already held by
@@ -190,12 +209,30 @@ extension ImportService {
             // Deletions before any of it: §10.1's Replace makes the file the
             // whole store, and a row the file lacks must be gone before the
             // rows it shares an id space with are written.
-            try deleteRecords(plan.deletions, from: scratch)
-            try applyProjects(store.projects, writing: plan.writes.projects, into: scratch)
-            try applyTasks(store.tasks, writing: plan.writes.tasks, into: scratch)
-            try applyEvents(store.events, writing: plan.writes.events, into: scratch)
-            try applyRefs(store.sourceRefs, writing: plan.writes.sourceRefs, into: scratch)
-            try applyReports(store.reports, writing: plan.writes.reports, into: scratch)
+            switch plan.mode {
+            case .replace:
+                // **§10.1 says "wipes the local store first", and this is that,
+                // literally.** The merge-mode helpers below cannot express
+                // Replace: for a row present on both sides their existing-row
+                // branch only flips `isRedacted` / `isUndone` or refreshes a
+                // cache, because in a *merge* an id collision means identical
+                // content — `mergeEvents` refuses anything else. Replace merges
+                // against an empty base, so that check never runs, and a file
+                // whose event body differs from the local one silently kept the
+                // local wording. `Event` exposes no mutator for its body and
+                // must not gain one (§3.3), so the only honest way to install
+                // the file's version is to remove the row and insert it fresh.
+                // Raised in review of PR #30.
+                try deleteEverything(from: scratch)
+                installFresh(store, into: scratch)
+            case .merge:
+                try deleteRecords(plan.deletions, from: scratch)
+                try applyProjects(store.projects, writing: plan.writes.projects, into: scratch)
+                try applyTasks(store.tasks, writing: plan.writes.tasks, into: scratch)
+                try applyEvents(store.events, writing: plan.writes.events, into: scratch)
+                try applyRefs(store.sourceRefs, writing: plan.writes.sourceRefs, into: scratch)
+                try applyReports(store.reports, writing: plan.writes.reports, into: scratch)
+            }
             try save(scratch)
         } catch let error as ImportError {
             // A read failure from `existing(...)` is already classified, and
@@ -211,152 +248,13 @@ extension ImportService {
         // After the save, never before: an observer that reloads must not read a
         // context whose write has not landed (D-019).
         NotificationCenter.default.post(name: .stenoDidWrite, object: nil)
+        // `deletedRows`, not `deletions.count`: the latter counts ids, and a
+        // malformed store can carry two rows under one — so destructive
+        // telemetry would under-report the work exactly as the preview did
+        // before D-111. Raised in review of PR #30.
         Log.app.info(
-            "import applied: \(plan.tasks.inserted, privacy: .public) new tasks, \(plan.deletions.tasks.count, privacy: .public) removed"
+            "import applied: \(plan.tasks.inserted, privacy: .public) new tasks, \(plan.deletedRows.tasks, privacy: .public) rows removed"
         )
-    }
-
-    private func existing<Model: PersistentModel>(
-        _ type: Model.Type, id: (Model) -> UUID, in context: ModelContext
-    ) throws -> [UUID: Model] {
-        // `uniquingKeysWith:` rather than `uniqueKeysWithValues:`, which **traps**
-        // on a duplicate key. §6 forbids `@Attribute(.unique)`, so nothing in the
-        // store enforces that our `id` field is unique — a store that somehow
-        // holds two rows under one id would take the process down here, during
-        // an import, which is the one operation that must fail cleanly (§10.4).
-        //
-        // **Unreachable through `plan`/`apply` today**, and fixed anyway: the
-        // merge's own duplicate guard refuses a locally duplicated store first,
-        // so this is defence in depth for a caller that does not come through
-        // the service. "Unreachable today" is what both of the traps found in
-        // review of PR #29 were, right until they were not. Found auditing the
-        // five record paths as a set — the merge was hardened against exactly
-        // this twice, and this call site, shared by all five, was missed both
-        // times.
-        do {
-            return Dictionary(
-                try context.fetch(FetchDescriptor<Model>()).map { (id($0), $0) },
-                uniquingKeysWith: { first, _ in first })
-        } catch {
-            throw ImportError.storeUnreadable(detail: error.localizedDescription)
-        }
-    }
-
-    private func applyProjects(
-        _ records: [ExportedProject], writing ids: Set<UUID>, into context: ModelContext
-    ) throws {
-        let rows = try existing(Project.self, id: { $0.id }, in: context)
-        for record in records where ids.contains(record.id) {
-            if let row = rows[record.id] {
-                row.applyImported(record)
-                continue
-            }
-            let project = Project(
-                id: record.id, name: record.name, colorHex: record.colorHex,
-                modifiedAt: record.modifiedAt)
-            context.insert(project)
-            project.applyImported(record)
-        }
-    }
-
-    private func applyTasks(
-        _ records: [ExportedTask], writing ids: Set<UUID>, into context: ModelContext
-    ) throws {
-        let rows = try existing(TaskItem.self, id: { $0.id }, in: context)
-        for record in records where ids.contains(record.id) {
-            if let row = rows[record.id] {
-                row.applyImported(record)
-                continue
-            }
-            let task = TaskItem(
-                id: record.id, title: record.title, projectID: record.projectID,
-                createdAt: record.createdAt)
-            context.insert(task)
-            task.applyImported(record)
-        }
-    }
-
-    /// §3.3: an event is inserted or its one flag is flipped. There is no third
-    /// case, and the model exposes no mutator that would allow one.
-    private func applyEvents(
-        _ records: [ExportedEvent], writing ids: Set<UUID>, into context: ModelContext
-    ) throws {
-        let rows = try existing(Event.self, id: { $0.id }, in: context)
-        for record in records where ids.contains(record.id) {
-            if let row = rows[record.id] {
-                if record.isRedacted && !row.isRedacted { row.redact() }
-                continue
-            }
-            let event = Event(
-                id: record.id, taskID: record.taskID, timestamp: record.timestamp,
-                kind: record.kind, body: record.body, payload: record.payload)
-            context.insert(event)
-            // Held, not looked up again: `rows` was fetched before this insert,
-            // so `rows[record.id]` is nil here and a redacted event would have
-            // landed un-redacted — putting text the user took back into the next
-            // stand-up. Caught by `ImportApplyTests`.
-            if record.isRedacted { event.redact() }
-        }
-    }
-
-    private func applyRefs(
-        _ records: [ExportedSourceRef], writing ids: Set<UUID>, into context: ModelContext
-    ) throws {
-        let rows = try existing(SourceRef.self, id: { $0.id }, in: context)
-        let tasks = try existing(TaskItem.self, id: { $0.id }, in: context)
-        for record in records where ids.contains(record.id) {
-            if let row = rows[record.id] {
-                // **Repair the relationship before touching the cache.** §3.4
-                // makes `taskID` authoritative and the relationship is never
-                // serialized, so a persisted row can carry the right `taskID`
-                // and a nil or stale `task` — rows written before this path set
-                // it, or built through the initializer, which permits it. Such a
-                // ref has correct data and is invisible in the detail pane, and
-                // an import that only refreshed its cache left it that way.
-                if let owner = tasks[record.taskID], row.task !== owner {
-                    row.task = owner
-                }
-                // Unconditional when the merge produced a cache: the previous
-                // form compared `row.lastFetchedAt` — a full-precision `Date` —
-                // against the merged, wire-rounded one, so it was never equal
-                // and the "skip" branch was dead. Writing the resolved value is
-                // what the other four record types do.
-                if let fetchedAt = record.lastFetchedAt {
-                    row.recordFetch(summary: record.cachedSummary, at: fetchedAt)
-                }
-                continue
-            }
-            let ref = SourceRef(
-                id: record.id, taskID: record.taskID, kind: record.kind,
-                identifier: record.identifier, url: record.url)
-            context.insert(ref)
-            // **Load-bearing, and silent if forgotten.** `taskID` is the
-            // authoritative link (§3.4, D-016), but `TaskItem.sourceRefs` is the
-            // inverse relationship the detail pane reads — a ref inserted
-            // without this has correct data and is invisible in the UI.
-            ref.task = tasks[record.taskID]
-            if let fetchedAt = record.lastFetchedAt {
-                ref.recordFetch(summary: record.cachedSummary, at: fetchedAt)
-            }
-        }
-    }
-
-    private func applyReports(
-        _ records: [ExportedReport], writing ids: Set<UUID>, into context: ModelContext
-    ) throws {
-        let rows = try existing(StandupReport.self, id: { $0.id }, in: context)
-        for record in records where ids.contains(record.id) {
-            if let row = rows[record.id] {
-                if record.isUndone && !row.isUndone { row.markUndone() }
-                continue
-            }
-            let report = StandupReport(
-                id: record.id, projectID: record.projectID, generatedAt: record.generatedAt,
-                windowStart: record.windowStart, windowEnd: record.windowEnd,
-                markdownBody: record.markdownBody, wasAIGenerated: record.wasAIGenerated,
-                modelUsed: record.modelUsed)
-            context.insert(report)
-            if record.isUndone { report.markUndone() }
-        }
+        return receipt
     }
 }

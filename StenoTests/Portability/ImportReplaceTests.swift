@@ -93,7 +93,7 @@ func replaceDeletesLocalOnlyRecords() throws {
     #expect(plan.deletions.sourceRefs.count == 1)
     #expect(plan.deletions.reports.count == 1)
 
-    try service.apply(plan, backup: try replaceBackup(for: local.context))
+    try service.apply(plan, backupWith: try replaceBackupWriter(for: local.context))
 
     let after = try snapshot(local.context)
     #expect(after.projects.count == 2)
@@ -113,7 +113,7 @@ func replaceMakesTheStoreEqualTheFile() throws {
     let service = ImportService(context: local.context)
     try service.apply(
         try service.plan(data, mode: .replace),
-        backup: try replaceBackup(for: local.context))
+        backupWith: try replaceBackupWriter(for: local.context))
 
     let after = try snapshot(local.context)
     let expected = try MergedStore(
@@ -180,7 +180,7 @@ func replaceSkipsLocalShapeValidation() throws {
     let plan = try service.plan(data, mode: .replace)
     #expect(plan.deletions.tasks.contains(orphan.id))
 
-    try service.apply(plan, backup: try replaceBackup(for: local.context))
+    try service.apply(plan, backupWith: try replaceBackupWriter(for: local.context))
     let after = try snapshot(local.context)
     #expect(!after.tasks.contains { $0.title == "orphan" })
 }
@@ -220,7 +220,7 @@ func replaceThatOnlyDeletesIsNotEmpty() throws {
     let plan = try service.plan(data, mode: .replace)
 
     #expect(!plan.isEmpty)
-    try service.apply(plan, backup: try replaceBackup(for: local.context))
+    try service.apply(plan, backupWith: try replaceBackupWriter(for: local.context))
     #expect(try snapshot(local.context).tasks.isEmpty)
 }
 
@@ -247,7 +247,7 @@ func replaceRemovesEveryDuplicateRow() throws {
     let plan = try service.plan(data, mode: .replace)
     #expect(plan.deletions.tasks.contains(twinID))
 
-    try service.apply(plan, backup: try replaceBackup(for: local.context))
+    try service.apply(plan, backupWith: try replaceBackupWriter(for: local.context))
 
     let survivors = try local.context.fetch(FetchDescriptor<TaskItem>())
     #expect(!survivors.contains { $0.id == twinID })
@@ -317,4 +317,52 @@ func theDeletionCountIsPhysicalRows() throws {
 @MainActor
 private func data(_ fixture: ExportFixture) throws -> Data {
     try fixture.encoder(includingCachedData: true).encode()
+}
+
+@MainActor
+@Test("replace overwrites a shared row whose content differs from the file")
+func replaceOverwritesSharedRows() throws {
+    // One id, two different histories — an event body, a report body, and a
+    // ref's identity that disagree between this Mac and the file.
+    //
+    // **Merge cannot reach this state**: `mergeEvents` refuses two different
+    // events sharing an id as `.inconsistentRecord`. Replace merges against an
+    // empty base, so that check never runs — and the existing-row branches only
+    // flip `isRedacted` / `isUndone` / the cache, leaving the local body in
+    // place. The store afterwards was therefore *not* the file, which is the
+    // one thing Replace promises. Raised in review of PR #30.
+    let sharedEvent = UUID()
+    let sharedReport = UUID()
+    let sharedRef = UUID()
+
+    let local = try ExportFixture()
+    let project = try local.project("Payments", modifiedAt: ExportFixture.at(10), id: UUID())
+    let task = try local.task(
+        "Fix the retry handler", in: project, createdAt: ExportFixture.at(20), id: UUID())
+    try local.event("the local wording", on: task, at: ExportFixture.at(30), id: sharedEvent)
+    try local.ref("PAY-1", on: task, id: sharedRef)
+    try local.report(
+        for: project, generatedAt: ExportFixture.at(40), body: "the local report", id: sharedReport)
+
+    let file = try ExportFixture()
+    let fileProject = try file.project(
+        "Payments", modifiedAt: ExportFixture.at(10), id: project.id)
+    let fileTask = try file.task(
+        "Fix the retry handler", in: fileProject, createdAt: ExportFixture.at(20), id: task.id)
+    try file.event("the file wording", on: fileTask, at: ExportFixture.at(30), id: sharedEvent)
+    try file.ref("PAY-999", on: fileTask, id: sharedRef)
+    try file.report(
+        for: fileProject, generatedAt: ExportFixture.at(40), body: "the file report",
+        id: sharedReport)
+
+    let data = try file.encoder(includingCachedData: true).encode()
+    let service = ImportService(context: local.context)
+    try service.apply(
+        try service.plan(data, mode: .replace),
+        backupWith: try replaceBackupWriter(for: local.context))
+
+    let after = try snapshot(local.context)
+    #expect(after.events.first?.body == "the file wording")
+    #expect(after.reports.first?.markdownBody == "the file report")
+    #expect(after.sourceRefs.first?.identifier == "PAY-999")
 }

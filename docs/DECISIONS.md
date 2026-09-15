@@ -2659,7 +2659,10 @@ to state the exception where a reader of §3.3 will find it (v1.19) rather than 
 deletion into an append-only store and let the next agent discover it as a defect.
 
 **Structural rather than documentary.** A comment saying "only Replace calls this" is the kind of
-exception D-088 records becoming the next task's bug. Instead the deletion phase reads a plan
+exception D-088 records becoming the next task's bug. (D-112 later widened what Replace deletes:
+it wipes the whole store rather than only `plan.deletions`, for reasons the merge helpers could not
+express. The confinement argument is unchanged — both deletion paths are reachable only from a
+`.replace` plan.) Instead the deletion phase reads a plan
 field, and the only way to populate that field is to have built the plan in `.replace`. Merge
 mode is non-destructive **by construction**, which is also the form §10.1's "non-destructive by
 default" needed to become testable — it was prose until this task.
@@ -2811,6 +2814,44 @@ D-107. The count is taken over the snapshot array rather than the dictionary, be
 dictionary is the thing that collapses the duplicates.
 
 **Falsified by** counting `doomed.count` instead, which turns `theDeletionCountIsPhysicalRows` red.
+
+---
+
+### D-112 — Replace wipes and reinstalls; it does not update rows in place
+
+**2026-09-14** · M2.5-03 · **Status:** accepted · supersedes part of D-106
+
+`ImportService.apply` branches on `plan.mode`. `.merge` keeps the row-by-row helpers in
+`ImportService+Merge.swift`; `.replace` calls `deleteEverything` and then `installFresh`, inserting
+every record in the file as a new row.
+
+**Why: the merge helpers cannot express Replace, and quietly did not.** For a row present on both
+sides their existing-row branch only flips `isRedacted` / `isUndone` or refreshes a `SourceRef`
+cache. That is correct for a merge, because an id collision there is *guaranteed* to mean identical
+content — `mergeEvents` refuses two different events sharing an id as `.inconsistentRecord`.
+**Replace merges against an empty base, so that check never runs.** A file whose event body, report
+body, or ref identifier differed from the local row's therefore left the local value in place: the
+store after a Replace was not the file, which is the one thing Replace promises. §10.2 explicitly
+invites hand-editing an export before importing it, so this is a reachable path, not a UUID-collision
+curiosity. Raised in review of PR #30.
+
+Overwriting the fields in place was rejected: `Event` exposes no mutator for its body and must not
+gain one (§3.3, non-negotiable #3). Removing the row and inserting a fresh one installs the file's
+version without adding a mutation path the merge could later reach — and it is also literally what
+§10.1 says Replace does, "wipes the local store first".
+
+**`installFresh` looks nothing up**, deliberately. A fetch there would run against a context whose
+deletions are staged but unsaved, and SwiftData does not promise what such a fetch returns; a row
+that came back would send the record down the update path and reinstate the defect. The `taskID →
+TaskItem` index is built from what was just inserted, which is also what keeps `SourceRef.task`
+wired (D-016).
+
+The cost is that Replace rewrites rows it could have left alone, so an untouched row's timestamps
+come back at wire rather than full precision. That is correct for Replace: the file is the truth,
+and every value it carries is already at wire precision.
+
+**Falsified by** routing `.replace` back through the merge helpers, which turns
+`replaceOverwritesSharedRows` red.
 
 ---
 

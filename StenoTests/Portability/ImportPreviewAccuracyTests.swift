@@ -66,8 +66,8 @@ private func assertPreviewMatchesReality(
 
     let before = try snapshot(local.context)
     // A `.replace` plan needs §10.1's backup receipt; `.merge` does not.
-    let backup = mode == .replace ? try replaceBackup(for: local.context) : nil
-    try service.apply(plan, backup: backup)
+    let writer = mode == .replace ? try replaceBackupWriter(for: local.context) : nil
+    try service.apply(plan, backupWith: writer)
     let after = try snapshot(local.context)
 
     #expect(

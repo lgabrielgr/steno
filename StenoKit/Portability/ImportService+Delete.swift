@@ -63,4 +63,86 @@ extension ImportService {
             context.delete(row)
         }
     }
+
+    /// Every row of every type, children before parents.
+    ///
+    /// §10.1's wipe. Used only by `.replace`, and unreachable otherwise for the
+    /// same structural reason `deleteRecords` is: `apply` switches on
+    /// `plan.mode`, and only a plan built in `.replace` takes this branch.
+    func deleteEverything(from context: ModelContext) throws {
+        try deleteAll(StandupReport.self, in: context)
+        try deleteAll(SourceRef.self, in: context)
+        try deleteAll(Event.self, in: context)
+        try deleteAll(TaskItem.self, in: context)
+        try deleteAll(Project.self, in: context)
+    }
+
+    private func deleteAll<Model: PersistentModel>(
+        _ type: Model.Type, in context: ModelContext
+    ) throws {
+        do {
+            for row in try context.fetch(FetchDescriptor<Model>()) { context.delete(row) }
+        } catch {
+            throw ImportError.storeUnreadable(detail: error.localizedDescription)
+        }
+    }
+
+    /// Insert every record in `store` as a new row.
+    ///
+    /// **Nothing is looked up.** A fetch here would run against a context whose
+    /// deletions are staged but unsaved, and SwiftData does not promise what
+    /// such a fetch returns — a row that came back would send the record down
+    /// the *update* path and reinstate the defect this whole branch exists to
+    /// fix. Building the task index from what was just inserted avoids asking.
+    func installFresh(_ store: MergedStore, into context: ModelContext) {
+        for record in store.projects {
+            let project = Project(
+                id: record.id, name: record.name, colorHex: record.colorHex,
+                modifiedAt: record.modifiedAt)
+            context.insert(project)
+            project.applyImported(record)
+        }
+
+        var tasks: [UUID: TaskItem] = [:]
+        for record in store.tasks {
+            let task = TaskItem(
+                id: record.id, title: record.title, projectID: record.projectID,
+                createdAt: record.createdAt)
+            context.insert(task)
+            task.applyImported(record)
+            tasks[record.id] = task
+        }
+
+        for record in store.events {
+            let event = Event(
+                id: record.id, taskID: record.taskID, timestamp: record.timestamp,
+                kind: record.kind, body: record.body, payload: record.payload)
+            context.insert(event)
+            if record.isRedacted { event.redact() }
+        }
+
+        for record in store.sourceRefs {
+            let ref = SourceRef(
+                id: record.id, taskID: record.taskID, kind: record.kind,
+                identifier: record.identifier, url: record.url)
+            context.insert(ref)
+            // §3.4 makes `taskID` authoritative, but `TaskItem.sourceRefs` is
+            // the inverse the detail pane reads — a ref inserted without this
+            // has correct data and is invisible in the UI.
+            ref.task = tasks[record.taskID]
+            if let fetchedAt = record.lastFetchedAt {
+                ref.recordFetch(summary: record.cachedSummary, at: fetchedAt)
+            }
+        }
+
+        for record in store.reports {
+            let report = StandupReport(
+                id: record.id, projectID: record.projectID, generatedAt: record.generatedAt,
+                windowStart: record.windowStart, windowEnd: record.windowEnd,
+                markdownBody: record.markdownBody, wasAIGenerated: record.wasAIGenerated,
+                modelUsed: record.modelUsed)
+            context.insert(report)
+            if record.isUndone { report.markUndone() }
+        }
+    }
 }

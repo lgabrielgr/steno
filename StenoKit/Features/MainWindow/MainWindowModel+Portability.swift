@@ -144,22 +144,31 @@ extension MainWindowModel {
     public func applyImport() {
         guard importPreview.canApply, let plan = importPreview.plan else { return }
 
-        var receipt: BackupReceipt?
+        // **The writer is handed to `apply`, which takes the backup itself.**
+        // It runs after `apply`'s own staleness check and immediately before the
+        // first write, which is what binds the backup to the transaction that
+        // actually happens — a receipt minted out here would prove only that
+        // some backup exists somewhere (D-110). It still writes to the path the
+        // sheet showed the user.
+        var writer: BackupWriter?
         if plan.mode == .replace {
             do {
-                receipt = try makeBackupWriter(context).write(to: importPreview.backupURL)
+                writer = try makeBackupWriter(context)
             } catch {
                 Log.app.error(
-                    "replace backup failed: \(String(describing: error), privacy: .public)")
+                    "backup writer could not be built: \(String(describing: error), privacy: .public)"
+                )
                 importPreview.failed(
-                    "Steno could not write a backup of your current data, so nothing was "
-                        + "replaced. \(error.localizedDescription)")
+                    "Steno could not prepare a backup of your current data, so nothing was "
+                        + "replaced.")
                 return
             }
         }
 
+        var receipt: BackupReceipt?
         do {
-            try ImportService(context: context, save: save).apply(plan, backup: receipt)
+            receipt = try ImportService(context: context, save: save)
+                .apply(plan, backupWith: writer, backupTo: importPreview.backupURL)
         } catch let error as ImportError {
             importPreview.failed(error.message)
             // Reloads even on the failure: a rollback keeps the refused write
@@ -168,9 +177,16 @@ extension MainWindowModel {
             reload()
             return
         } catch {
+            // Reached when the backup closure itself threw: `apply` propagates
+            // it untouched, and nothing was written because the closure runs
+            // before the first staged change.
             Log.app.error(
                 "import failed: \(String(describing: error), privacy: .public)")
-            importPreview.failed("The import could not be saved, so nothing was changed.")
+            importPreview.failed(
+                plan.mode == .replace
+                    ? "Steno could not write a backup of your current data, so nothing was "
+                        + "replaced. \(error.localizedDescription)"
+                    : "The import could not be saved, so nothing was changed.")
             reload()
             return
         }
