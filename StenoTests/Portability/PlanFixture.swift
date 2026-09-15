@@ -55,6 +55,7 @@ enum PlanFixture {
         sourceRefs: ImportPlan.Counts = counts(),
         reports: ImportPlan.Counts = counts(),
         deletions: ImportPlan.Writes = .none,
+        deletedRows: ImportPlan.RowCounts? = nil,
         statusChanged: [UUID] = []
     ) -> ImportPlan {
         ImportPlan(
@@ -63,6 +64,13 @@ enum PlanFixture {
             merged: MergedStore(),
             writes: .none,
             deletions: deletions,
+            // Defaults to one row per doomed id — the well-formed case. A test
+            // that needs them to disagree passes `deletedRows` explicitly.
+            deletedRows: deletedRows
+                ?? ImportPlan.RowCounts(
+                    projects: deletions.projects.count, tasks: deletions.tasks.count,
+                    events: deletions.events.count, sourceRefs: deletions.sourceRefs.count,
+                    reports: deletions.reports.count),
             source: MergedStore(),
             projects: projects,
             tasks: tasks,

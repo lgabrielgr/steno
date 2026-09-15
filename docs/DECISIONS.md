@@ -2765,6 +2765,55 @@ not to know about views (D-019).
 
 ---
 
+### D-110 — The pre-Replace backup is enforced at the service boundary, by a receipt
+
+**2026-09-14** · M2.5-03 · **Status:** accepted
+
+`ImportService.apply(_:backup:)` refuses a `.replace` plan unless it is handed a `BackupReceipt`,
+and `BackupReceipt`'s initializer is `fileprivate` to `BackupWriter.swift` — so the only way to
+obtain one is to have actually written a backup.
+
+**Why: the guard was in the wrong layer.** §10.1 makes the backup mandatory for Replace, but it
+lived in `MainWindowModel.applyImport()` — one of two planned callers. `ImportService.apply` would
+wipe a store for anyone else, and M2.5-04's `steno import --replace` is precisely such a caller,
+already named in §10.5. A safety property enforced in a surface rather than in the engine is one
+the next surface forgets, which is the failure D-095 records for §10.3's credential rule.
+
+A receipt rather than a `Bool` or a URL: both of those can be fabricated by a caller in a hurry,
+and the whole point is that the type cannot be produced without the side effect having happened.
+It carries the URL because the success notice needs it.
+
+**`.merge` is unaffected** — the parameter defaults to `nil`, so every M2.5-02 call site is
+untouched, and a merge is refused nothing. A merge cannot delete, so demanding a backup of it
+would be ceremony with no safety, and `mergeNeedsNoBackup` pins that.
+
+**Falsified by** disabling the guard, which turns `replaceWithoutABackupIsRefused` red.
+
+---
+
+### D-111 — The preview counts physical rows, not ids
+
+**2026-09-14** · M2.5-03 · **Status:** accepted · refines D-107
+
+`ImportPlan.deletedRows` carries a per-type count of the **rows** a deletion removes, and
+`ImportPreviewSummary` renders that rather than `deletions.<type>.count`.
+
+**Why:** the two disagree exactly when the local store is malformed. `deletions` holds one entry
+per doomed *id* because `ImportPlan.diff` indexes the local snapshot by id; `delete` removes every
+row carrying a doomed id, after the duplicate-row fix earlier in the same review round. So a store
+with two rows under one id had the preview announce "1 task will be deleted" over work that
+destroyed two — under-reporting, which M2.5-03's first acceptance criterion calls worse than no
+preview at all.
+
+Reachable only through Replace, since `validateShape` refuses a duplicate on the merge path — but
+Replace is the destructive one, and it is also the path deliberately opened to malformed stores by
+D-107. The count is taken over the snapshot array rather than the dictionary, because the
+dictionary is the thing that collapses the duplicates.
+
+**Falsified by** counting `doomed.count` instead, which turns `theDeletionCountIsPhysicalRows` red.
+
+---
+
 ## Open — decided by the task that owns them
 
 Each of these is a real choice the spec leaves open. The owning task decides it, records it in

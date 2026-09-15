@@ -93,7 +93,7 @@ func replaceDeletesLocalOnlyRecords() throws {
     #expect(plan.deletions.sourceRefs.count == 1)
     #expect(plan.deletions.reports.count == 1)
 
-    try service.apply(plan)
+    try service.apply(plan, backup: try replaceBackup(for: local.context))
 
     let after = try snapshot(local.context)
     #expect(after.projects.count == 2)
@@ -111,7 +111,9 @@ func replaceMakesTheStoreEqualTheFile() throws {
     let data = try file.encoder(includingCachedData: true).encode()
 
     let service = ImportService(context: local.context)
-    try service.apply(try service.plan(data, mode: .replace))
+    try service.apply(
+        try service.plan(data, mode: .replace),
+        backup: try replaceBackup(for: local.context))
 
     let after = try snapshot(local.context)
     let expected = try MergedStore(
@@ -178,7 +180,7 @@ func replaceSkipsLocalShapeValidation() throws {
     let plan = try service.plan(data, mode: .replace)
     #expect(plan.deletions.tasks.contains(orphan.id))
 
-    try service.apply(plan)
+    try service.apply(plan, backup: try replaceBackup(for: local.context))
     let after = try snapshot(local.context)
     #expect(!after.tasks.contains { $0.title == "orphan" })
 }
@@ -218,7 +220,7 @@ func replaceThatOnlyDeletesIsNotEmpty() throws {
     let plan = try service.plan(data, mode: .replace)
 
     #expect(!plan.isEmpty)
-    try service.apply(plan)
+    try service.apply(plan, backup: try replaceBackup(for: local.context))
     #expect(try snapshot(local.context).tasks.isEmpty)
 }
 
@@ -245,8 +247,74 @@ func replaceRemovesEveryDuplicateRow() throws {
     let plan = try service.plan(data, mode: .replace)
     #expect(plan.deletions.tasks.contains(twinID))
 
-    try service.apply(plan)
+    try service.apply(plan, backup: try replaceBackup(for: local.context))
 
     let survivors = try local.context.fetch(FetchDescriptor<TaskItem>())
     #expect(!survivors.contains { $0.id == twinID })
+}
+
+@MainActor
+@Test("apply refuses a replace plan with no backup receipt")
+func replaceWithoutABackupIsRefused() throws {
+    let (local, file) = try divergentStores()
+    let data = try file.encoder(includingCachedData: true).encode()
+    let service = ImportService(context: local.context)
+    let plan = try service.plan(data, mode: .replace)
+
+    // **§10.1's backup is a property of Replace, not of the GUI.** It lived only
+    // in `MainWindowModel.applyImport()`, so the destructive engine itself was
+    // unguarded for every other caller — and M2.5-04's `steno import --replace`
+    // is exactly such a caller. Raised in review of PR #30.
+    #expect(throws: ImportError.backupRequired) { try service.apply(plan) }
+
+    // And nothing was touched on the way to refusing.
+    let after = try snapshot(local.context)
+    #expect(after.tasks.contains { $0.title == "Only on this Mac" })
+}
+
+@MainActor
+@Test("a merge still applies with no receipt, because it destroys nothing")
+func mergeNeedsNoBackup() throws {
+    let (local, file) = try divergentStores()
+    let data = try file.encoder(includingCachedData: true).encode()
+    let service = ImportService(context: local.context)
+
+    // The guard must not spread to the non-destructive path: a merge cannot
+    // delete, so demanding a backup of it would be ceremony with no safety.
+    try service.apply(try service.plan(data, mode: .merge))
+    #expect(try snapshot(local.context).tasks.count == 3)
+}
+
+@MainActor
+@Test("the preview counts physical rows, not ids, when a store is malformed")
+func theDeletionCountIsPhysicalRows() throws {
+    let (local, file) = try divergentStores()
+    // Two rows under one id, reachable only because Replace skips
+    // `validateShape` (D-107). `deletions` holds one entry per doomed *id*
+    // while `delete` removes every row carrying one, so the preview announced
+    // "1 task will be deleted" over work that destroyed two — §10.4's
+    // under-reporting failure, introduced by the fix for the duplicate-row
+    // defect earlier in this same review.
+    let twinID = UUID()
+    for index in 0..<2 {
+        local.context.insert(
+            TaskItem(
+                id: twinID, title: "twin \(index)", projectID: UUID(),
+                createdAt: ExportFixture.at(200)))
+    }
+    try local.context.save()
+
+    let plan = try ImportService(context: local.context).plan(data(file), mode: .replace)
+
+    // One id, two rows, and the preview must say two.
+    #expect(plan.deletions.tasks.count == 2)
+    #expect(plan.deletedRows.tasks == 3)
+    #expect(
+        ImportPreviewSummary.lines(for: plan).contains { $0.contains("3 tasks") })
+}
+
+/// The file fixture as bytes — a local shorthand for the test above.
+@MainActor
+private func data(_ fixture: ExportFixture) throws -> Data {
+    try fixture.encoder(includingCachedData: true).encode()
 }

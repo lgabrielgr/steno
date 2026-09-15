@@ -45,6 +45,13 @@ public enum ImportError: Error, Equatable, Sendable {
     /// simply false.
     case storeUnreadable(detail: String)
 
+    /// A `.replace` plan was applied without proof of a backup.
+    ///
+    /// §10.1 makes the pre-Replace backup mandatory, and `BackupReceipt` can
+    /// only be minted by `BackupWriter.write` — so this is what a caller that
+    /// skipped the backup gets, rather than a wiped store.
+    case backupRequired
+
     /// The store changed between planning and applying, so the plan no longer
     /// describes what would happen.
     ///
@@ -65,6 +72,8 @@ public enum ImportError: Error, Equatable, Sendable {
             "format \(found); this build reads format \(supported)"
         case .storeChanged:
             "the store changed while the import was being previewed"
+        case .backupRequired:
+            "Replace requires a backup, and none was written"
         case .unsavedLocalChanges:
             "the store has changes that have not been saved"
         }
@@ -113,6 +122,11 @@ public enum ImportError: Error, Equatable, Sendable {
             Something changed on this Mac while the import was being previewed, \
             so nothing was imported. Open the file again to see an up-to-date \
             summary.
+            """
+        case .backupRequired:
+            """
+            Replace needs a backup of your current data first, and none was \
+            written. Nothing was changed.
             """
         }
     }

@@ -1,6 +1,23 @@
 import Foundation
 import SwiftData
 
+/// Proof that a backup was actually written.
+///
+/// **The point is that nothing else can construct one.** §10.1 makes the
+/// pre-Replace backup mandatory, but it was enforced only in
+/// `MainWindowModel.applyImport()` — so `ImportService.apply` would happily
+/// wipe a store for any other caller, and M2.5-04's `steno import --replace` is
+/// exactly such a caller. A guard that lives in one of two call sites is a
+/// guard the next surface forgets. Raised in review of PR #30.
+///
+/// `init` is private to this file, so the only way to obtain a receipt is to
+/// have called `BackupWriter.write`.
+public struct BackupReceipt: Equatable, Sendable {
+    public let url: URL
+
+    fileprivate init(url: URL) { self.url = url }
+}
+
 /// §10.1's "must auto-export a backup beforehand", for Replace.
 ///
 /// **It throws rather than returning an optional.** The acceptance criterion is
@@ -100,7 +117,7 @@ public struct BackupWriter {
     @discardableResult
     public func write(
         userAgent: String = ExportDocument.userAgent(), to destination: URL? = nil
-    ) throws -> URL {
+    ) throws -> BackupReceipt {
         let url = destination ?? plannedURL()
         let data = try ExportEncoder(
             context: context,
@@ -112,6 +129,6 @@ public struct BackupWriter {
             at: directory, withIntermediateDirectories: true)
         try write(data, url)
         Log.app.info("replace backup written to \(url.path, privacy: .public)")
-        return url
+        return BackupReceipt(url: url)
     }
 }

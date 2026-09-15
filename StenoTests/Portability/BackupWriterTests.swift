@@ -47,7 +47,7 @@ func theBackupIsFullFidelity() throws {
 
     let writer = try BackupWriter(
         context: fixture.context, directory: directory, now: { ExportFixture.at(0) })
-    let url = try writer.write(userAgent: "steno/test (macOS)")
+    let url = try writer.write(userAgent: "steno/test (macOS)").url
 
     let document = try ExportDocument.decoder().decode(
         ExportDocument.self, from: try Data(contentsOf: url))
@@ -75,7 +75,7 @@ func theBackupDirectoryIsCreated() throws {
 
     let writer = try BackupWriter(
         context: fixture.context, directory: directory, now: { ExportFixture.at(0) })
-    let url = try writer.write(userAgent: "steno/test (macOS)")
+    let url = try writer.write(userAgent: "steno/test (macOS)").url
 
     #expect(FileManager.default.fileExists(atPath: url.path))
     // The planned path and the written path must agree, because the sheet shows
@@ -115,7 +115,7 @@ func anEmptyStoreBacksUp() throws {
     // it for no reason.
     let writer = try BackupWriter(
         context: fixture.context, directory: directory, now: { ExportFixture.at(0) })
-    let url = try writer.write(userAgent: "steno/test (macOS)")
+    let url = try writer.write(userAgent: "steno/test (macOS)").url
     let document = try ExportDocument.decoder().decode(
         ExportDocument.self, from: try Data(contentsOf: url))
     #expect(document.projects.isEmpty)

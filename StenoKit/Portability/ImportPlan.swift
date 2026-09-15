@@ -49,6 +49,30 @@ public struct ImportPlan: Equatable, Sendable {
         }
     }
 
+    /// How many **physical rows** each type's deletion actually removes.
+    ///
+    /// **Not the same as `deletions.<type>.count`, and the difference is a
+    /// preview that lies.** The deletion set holds one entry per doomed *id*,
+    /// while `delete` removes every row carrying one — so a malformed store
+    /// with two rows under one id had the preview announce "1 task will be
+    /// deleted" over work that destroyed two. §10.4's whole point is that the
+    /// counts match what the import does, and "a preview that under-reports is
+    /// worse than no preview". Raised in review of PR #30, against the fix for
+    /// the duplicate-row defect earlier in the same review.
+    ///
+    /// Equal to the set counts for any well-formed store, which is every store
+    /// reachable through `.merge` — `validateShape` refuses a duplicate there.
+    public struct RowCounts: Equatable, Sendable {
+        public let projects: Int
+        public let tasks: Int
+        public let events: Int
+        public let sourceRefs: Int
+        public let reports: Int
+
+        public static let none = RowCounts(
+            projects: 0, tasks: 0, events: 0, sourceRefs: 0, reports: 0)
+    }
+
     /// The envelope the file arrived in — §10.2's `exportedAt`, `exportedBy`
     /// and `includesCachedExternalData`.
     ///
@@ -83,6 +107,9 @@ public struct ImportPlan: Equatable, Sendable {
     /// the only way to reach it is to have built a plan in `.replace` — see
     /// D-106.
     public let deletions: Writes
+
+    /// Physical rows the deletion removes — see `RowCounts`.
+    public let deletedRows: RowCounts
 
     /// The local store this plan was computed against.
     ///
@@ -169,6 +196,10 @@ extension ImportPlan {
             deletions: Writes(
                 projects: projects.deletions, tasks: tasks.deletions, events: events.deletions,
                 sourceRefs: refs.deletions, reports: reports.deletions),
+            deletedRows: RowCounts(
+                projects: projects.deletedRows, tasks: tasks.deletedRows,
+                events: events.deletedRows, sourceRefs: refs.deletedRows,
+                reports: reports.deletedRows),
             source: local,
             projects: projects.counts,
             tasks: tasks.counts,
@@ -190,6 +221,8 @@ extension ImportPlan {
         let counts: Counts
         let writes: Set<UUID>
         let deletions: Set<UUID>
+        /// Physical rows behind `deletions`, which collapses duplicate ids.
+        let deletedRows: Int
     }
 
     /// Counts, write set and deletion set from one walk, so they cannot
@@ -225,10 +258,14 @@ extension ImportPlan {
                 writes.insert(record.id)
             }
         }
+        let doomed = Set(localByID.keys).subtracting(survivors)
         return Diff(
             counts: Counts(inserted: inserted, updated: updated, unchanged: unchanged),
             writes: writes,
-            deletions: Set(localByID.keys).subtracting(survivors))
+            deletions: doomed,
+            // Counted over `local`, not over `localByID` — the dictionary is
+            // exactly what collapses the duplicates this number exists to see.
+            deletedRows: local.filter { doomed.contains($0.id) }.count)
     }
 }
 

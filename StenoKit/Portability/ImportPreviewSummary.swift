@@ -122,19 +122,19 @@ public enum ImportPreviewSummary {
     private static func categories(_ plan: ImportPlan) -> [Category] {
         [
             Category(
-                counts: plan.tasks, deleted: plan.deletions.tasks.count,
+                counts: plan.tasks, deleted: plan.deletedRows.tasks,
                 singular: "task", plural: "tasks"),
             Category(
-                counts: plan.projects, deleted: plan.deletions.projects.count,
+                counts: plan.projects, deleted: plan.deletedRows.projects,
                 singular: "project", plural: "projects"),
             Category(
-                counts: plan.events, deleted: plan.deletions.events.count,
+                counts: plan.events, deleted: plan.deletedRows.events,
                 singular: "event", plural: "events"),
             Category(
-                counts: plan.sourceRefs, deleted: plan.deletions.sourceRefs.count,
+                counts: plan.sourceRefs, deleted: plan.deletedRows.sourceRefs,
                 singular: "reference", plural: "references"),
             Category(
-                counts: plan.reports, deleted: plan.deletions.reports.count,
+                counts: plan.reports, deleted: plan.deletedRows.reports,
                 singular: "report", plural: "reports"),
         ]
     }

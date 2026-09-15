@@ -136,7 +136,18 @@ extension ImportService {
     ///
     /// Every validation already ran on values, before this is reached, so the
     /// only failure left in flight is the save itself — which rolls back.
-    public func apply(_ plan: ImportPlan) throws {
+    /// - Parameter backup: proof that §10.1's mandatory pre-Replace backup was
+    ///   written. Required for a `.replace` plan, ignored for a `.merge` one,
+    ///   and obtainable only from `BackupWriter.write`.
+    public func apply(_ plan: ImportPlan, backup: BackupReceipt? = nil) throws {
+        // **The backup is enforced here, not only in the UI.** It was a property
+        // of `MainWindowModel.applyImport()` alone, which left the destructive
+        // engine itself unguarded for every other caller — and M2.5-04's
+        // `steno import --replace` is one. §10.1 makes the backup a property of
+        // Replace, so it belongs at the boundary Replace actually crosses.
+        if plan.mode == .replace, backup == nil {
+            throw ImportError.backupRequired
+        }
         // **An empty plan writes nothing and posts nothing.** It used to reapply
         // every merged row, save, and post `.stenoDidWrite` — so the second
         // import of a file made every observer reload, and would in M2.5-05 have

@@ -144,10 +144,10 @@ extension MainWindowModel {
     public func applyImport() {
         guard importPreview.canApply, let plan = importPreview.plan else { return }
 
-        var backupURL: URL?
+        var receipt: BackupReceipt?
         if plan.mode == .replace {
             do {
-                backupURL = try makeBackupWriter(context).write(to: importPreview.backupURL)
+                receipt = try makeBackupWriter(context).write(to: importPreview.backupURL)
             } catch {
                 Log.app.error(
                     "replace backup failed: \(String(describing: error), privacy: .public)")
@@ -159,7 +159,7 @@ extension MainWindowModel {
         }
 
         do {
-            try ImportService(context: context, save: save).apply(plan)
+            try ImportService(context: context, save: save).apply(plan, backup: receipt)
         } catch let error as ImportError {
             importPreview.failed(error.message)
             // Reloads even on the failure: a rollback keeps the refused write
@@ -175,7 +175,7 @@ extension MainWindowModel {
             return
         }
 
-        importPreview.succeeded(backupURL: backupURL)
+        importPreview.succeeded(backupURL: receipt?.url)
         // `apply` posts `.stenoDidWrite`, which this window's own observer turns
         // into a `reload()`, and then this line reloads again. Known and
         // harmless — `reload()` is idempotent — and the same shape
