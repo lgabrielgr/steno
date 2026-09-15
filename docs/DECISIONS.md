@@ -2642,6 +2642,219 @@ export for data that re-fetches in a second).
 
 ---
 
+### D-106 — Replace is the one sanctioned deletion, and the confinement is structural
+
+**2026-09-14** · M2.5-03 · **Status:** accepted · amends REQUIREMENTS.md §3.3 (v1.19)
+
+`ImportService.apply` deletes rows, but only the ids in `ImportPlan.deletions` — a field that a
+`.merge` plan cannot populate, because the merged store it is diffed against is a union of both
+sides and no local id can be absent from it. `ImportReplaceTests` asserts that emptiness across
+the whole merge fixture set.
+
+**Why: two parts of the source of truth contradict each other, and neither is wrong.** §3.3 says
+events are never edited or deleted, and CLAUDE.md promotes that to non-negotiable #3 with "no
+exceptions". §10.1 requires Replace to wipe the local store first, which necessarily removes
+`Event` rows. The contradiction is in the document, not in any implementation of it, so the fix is
+to state the exception where a reader of §3.3 will find it (v1.19) rather than to quietly write a
+deletion into an append-only store and let the next agent discover it as a defect.
+
+**Structural rather than documentary.** A comment saying "only Replace calls this" is the kind of
+exception D-088 records becoming the next task's bug. (D-112 later widened what Replace deletes:
+it wipes the whole store rather than only `plan.deletions`, for reasons the merge helpers could not
+express. The confinement argument is unchanged — both deletion paths are reachable only from a
+`.replace` plan.) Instead the deletion phase reads a plan
+field, and the only way to populate that field is to have built the plan in `.replace`. Merge
+mode is non-destructive **by construction**, which is also the form §10.1's "non-destructive by
+default" needed to become testable — it was prose until this task.
+
+**Order matters: children before parents**, the mirror of the write order. The one real SwiftData
+relationship is `TaskItem.sourceRefs` ⟷ `SourceRef.task` under the default nullify rule, so
+deleting a task first writes every one of its refs on the way past — rows that are themselves
+about to be deleted. D-102's referential closure is what guarantees the deletion set is itself
+closed: a surviving ref's task survives, so a deleted task's refs are always in the set too.
+
+**Rows, not the store directory.** `StenoStore.storeDirectory`'s comment anticipated this task
+removing that directory. It does not, and cannot: the app holds an open `ModelContainer` over
+those files, and §10.4 requires the import to apply in a single transaction — deleting files
+underneath a live container is neither. The directory remains the unit of deletion for §8's
+"delete my data", which is a different operation with no transaction to honour.
+
+**Falsified by** making the deletion phase a no-op, which turns six tests red across three files.
+
+---
+
+### D-107 — Replace skips the local store's shape validation, because that is what it is for
+
+**2026-09-14** · M2.5-03 · **Status:** accepted
+
+`ImportService.plan` runs `StoreMerge.validateShape(of: local)` in `.merge` only. A `.replace`
+plan is computed against a local store whose shape was never checked.
+
+**Why:** §10.1 has Replace exist "for restoring a known-good snapshot". Refusing to build the plan
+because *this Mac's* store is malformed would disable the recovery operation in precisely the
+situation it was built for — the user whose store has a dangling row is the user reaching for
+Replace. The local store is not an input to a replace merge: `base` is an empty `MergedStore()`,
+so nothing the local store contains can reach what gets written.
+
+It is still **read**, because the diff and the staleness check both need it, and
+`ImportPlan.diff` indexes it with `uniquingKeysWith:` rather than `uniqueKeysWithValues:` — so a
+locally duplicated id produces slightly approximate counts instead of trapping the process during
+the one operation that must fail cleanly (§10.4).
+
+**Deleting a duplicated id removes every physical row carrying it.** The first version of this
+entry claimed that and the code did not do it: `delete` went through the same
+`[UUID: Model]` dictionary, so of two rows sharing an id it deleted one and kept the other — and
+Replace's whole contract is that the store afterwards *is* the file. Caught in review of PR #30,
+against this paragraph. `delete` now filters the fetched array by id instead.
+
+**What is still not guaranteed**, stated rather than implied: a duplicated id that also appears
+*in the file* is not in the deletion set at all, so `applyX` updates one row and the other
+survives with stale values. Making that case converge means deleting rows the preview never
+counted, which trades one §10.4 guarantee for another. Replace recovers a store with orphaned or
+surplus rows; it does not de-duplicate one. If that becomes a real failure rather than a
+hypothetical, it is its own task.
+
+A store so damaged that a *fetch* throws is still out of reach, and deliberately: that is the
+`storeDirectory`-deletion case, not an import.
+
+**Falsified by** removing the mode check, which turns `replaceSkipsLocalShapeValidation` red; and by restoring the dictionary lookup in `delete`, which turns `replaceRemovesEveryDuplicateRow` red.
+
+---
+
+### D-108 — The preview renders from one place, shared with M2.5-04's CLI
+
+**2026-09-14** · M2.5-03 · **Status:** accepted
+
+`ImportPreviewSummary` turns an `ImportPlan` into §10.4's lines, and lives in `StenoKit` rather
+than in `ImportPreviewSheet`.
+
+**Why:** GUI verification is unavailable to agents, so a renderer inside the sheet is a renderer
+nobody can test — and §10.4's shape is quoted in the requirement, which is exactly the kind of
+text that drifts silently because nothing breaks when it does. It is golden-tested instead.
+M2.5-04 has to print the same preview to stdout, and a second renderer there would be two
+descriptions of one plan, free to disagree in precisely the direction the acceptance criterion
+forbids ("a preview that under-reports is worse than no preview").
+
+The counts are never recomputed here; they come from the plan, which derives them in the same
+walk that produces the write set. Two details the tests pin: the status parenthetical renders
+only when `plan.statusChanged` is non-empty — a task updated because its *title* changed on the
+other machine would otherwise be described as a status change, a false statement about the user's
+own data — and deletions render **first** in `.replace`, because burying them under the additions
+is the same mistake as a default-focused destructive button.
+
+---
+
+### D-109 — File panels are a protocol whose default opens nothing
+
+**2026-09-14** · M2.5-03 · **Status:** accepted
+
+`FilePanels` has three implementations: `AppKitFilePanels` (real, constructed only in
+`MainWindowView.init`), `UnavailableFilePanels` (the default everywhere else), and the test
+bundle's stub.
+
+**Why the default is the inert one:** the test bundle is unhosted and runs with no window server
+(D-010). A test that reached a real `NSOpenPanel` would **hang** the suite rather than fail it,
+which stops CI with no message — a far worse failure than a red assertion. A test asserts that a
+default-constructed `MainWindowModel` holds `UnavailableFilePanels`, so the property survives
+someone changing the default argument.
+
+`UnavailableFilePanels` logs and records `didRefuse` rather than silently returning `nil`: a
+wiring mistake in the app would otherwise be indistinguishable from the user pressing Cancel — a
+menu item that does nothing, forever, with nothing to see.
+
+`runModal()` rather than `beginSheetModal(for:)`, because a sheeted panel needs an `NSWindow` to
+hang from, which would mean plumbing a window reference into a view model whose whole purpose is
+not to know about views (D-019).
+
+---
+
+### D-110 — The pre-Replace backup is enforced at the service boundary, by a receipt
+
+**2026-09-14** · M2.5-03 · **Status:** accepted
+
+`ImportService.apply(_:backup:)` refuses a `.replace` plan unless it is handed a `BackupReceipt`,
+and `BackupReceipt`'s initializer is `fileprivate` to `BackupWriter.swift` — so the only way to
+obtain one is to have actually written a backup.
+
+**Why: the guard was in the wrong layer.** §10.1 makes the backup mandatory for Replace, but it
+lived in `MainWindowModel.applyImport()` — one of two planned callers. `ImportService.apply` would
+wipe a store for anyone else, and M2.5-04's `steno import --replace` is precisely such a caller,
+already named in §10.5. A safety property enforced in a surface rather than in the engine is one
+the next surface forgets, which is the failure D-095 records for §10.3's credential rule.
+
+A receipt rather than a `Bool` or a URL: both of those can be fabricated by a caller in a hurry,
+and the whole point is that the type cannot be produced without the side effect having happened.
+It carries the URL because the success notice needs it.
+
+**`.merge` is unaffected** — the parameter defaults to `nil`, so every M2.5-02 call site is
+untouched, and a merge is refused nothing. A merge cannot delete, so demanding a backup of it
+would be ceremony with no safety, and `mergeNeedsNoBackup` pins that.
+
+**Falsified by** disabling the guard, which turns `replaceWithoutABackupIsRefused` red.
+
+---
+
+### D-111 — The preview counts physical rows, not ids
+
+**2026-09-14** · M2.5-03 · **Status:** accepted · refines D-107
+
+`ImportPlan.deletedRows` carries a per-type count of the **rows** a deletion removes, and
+`ImportPreviewSummary` renders that rather than `deletions.<type>.count`.
+
+**Why:** the two disagree exactly when the local store is malformed. `deletions` holds one entry
+per doomed *id* because `ImportPlan.diff` indexes the local snapshot by id; `delete` removes every
+row carrying a doomed id, after the duplicate-row fix earlier in the same review round. So a store
+with two rows under one id had the preview announce "1 task will be deleted" over work that
+destroyed two — under-reporting, which M2.5-03's first acceptance criterion calls worse than no
+preview at all.
+
+Reachable only through Replace, since `validateShape` refuses a duplicate on the merge path — but
+Replace is the destructive one, and it is also the path deliberately opened to malformed stores by
+D-107. The count is taken over the snapshot array rather than the dictionary, because the
+dictionary is the thing that collapses the duplicates.
+
+**Falsified by** counting `doomed.count` instead, which turns `theDeletionCountIsPhysicalRows` red.
+
+---
+
+### D-112 — Replace wipes and reinstalls; it does not update rows in place
+
+**2026-09-14** · M2.5-03 · **Status:** accepted · supersedes part of D-106
+
+`ImportService.apply` branches on `plan.mode`. `.merge` keeps the row-by-row helpers in
+`ImportService+Merge.swift`; `.replace` calls `deleteEverything` and then `installFresh`, inserting
+every record in the file as a new row.
+
+**Why: the merge helpers cannot express Replace, and quietly did not.** For a row present on both
+sides their existing-row branch only flips `isRedacted` / `isUndone` or refreshes a `SourceRef`
+cache. That is correct for a merge, because an id collision there is *guaranteed* to mean identical
+content — `mergeEvents` refuses two different events sharing an id as `.inconsistentRecord`.
+**Replace merges against an empty base, so that check never runs.** A file whose event body, report
+body, or ref identifier differed from the local row's therefore left the local value in place: the
+store after a Replace was not the file, which is the one thing Replace promises. §10.2 explicitly
+invites hand-editing an export before importing it, so this is a reachable path, not a UUID-collision
+curiosity. Raised in review of PR #30.
+
+Overwriting the fields in place was rejected: `Event` exposes no mutator for its body and must not
+gain one (§3.3, non-negotiable #3). Removing the row and inserting a fresh one installs the file's
+version without adding a mutation path the merge could later reach — and it is also literally what
+§10.1 says Replace does, "wipes the local store first".
+
+**`installFresh` looks nothing up**, deliberately. A fetch there would run against a context whose
+deletions are staged but unsaved, and SwiftData does not promise what such a fetch returns; a row
+that came back would send the record down the update path and reinstate the defect. The `taskID →
+TaskItem` index is built from what was just inserted, which is also what keeps `SourceRef.task`
+wired (D-016).
+
+The cost is that Replace rewrites rows it could have left alone, so an untouched row's timestamps
+come back at wire rather than full precision. That is correct for Replace: the file is the truth,
+and every value it carries is already at wire precision.
+
+**Falsified by** routing `.replace` back through the merge helpers, which turns
+`replaceOverwritesSharedRows` red.
+
+---
+
 ## Open — decided by the task that owns them
 
 Each of these is a real choice the spec leaves open. The owning task decides it, records it in

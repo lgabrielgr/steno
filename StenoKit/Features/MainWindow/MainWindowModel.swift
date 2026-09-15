@@ -26,6 +26,19 @@ public final class MainWindowModel: MainWindowActions {
     /// this from outside the module.
     public internal(set) var lastError: String?
 
+    /// Something worth telling the user that is **not** a failure — where an
+    /// export was written, mostly.
+    ///
+    /// Its own property rather than a reading of `lastError`, for
+    /// `StandupDraftModel.notice`'s reason: one says the operation failed and
+    /// retrying is safe, the other says it succeeded. A single field cannot
+    /// carry both, and rendering a success in the error banner's colours would
+    /// be actively misleading about an operation that just wrote a file.
+    ///
+    /// `internal(set)` for `lastError`'s reason — `MainWindowModel+Portability`
+    /// sets it.
+    public internal(set) var lastNotice: String?
+
     public var selection: ProjectSelection = .all {
         didSet { if selection != oldValue { reload() } }
     }
@@ -80,6 +93,10 @@ public final class MainWindowModel: MainWindowActions {
     /// becomes available after `self` does.
     public let standupDraft: StandupDraftModel
 
+    /// §10.4's preview. A `let` built in `init` for `noteComposer`'s reason: it
+    /// holds no reference back to this model.
+    public let importPreview = ImportPreviewModel()
+
     /// The report the selected project could undo right now (FR-4.1), or `nil`.
     ///
     /// **Cached rather than fetched on demand**, because `canUndoStandup` is
@@ -110,6 +127,21 @@ public final class MainWindowModel: MainWindowActions {
     /// preferences (§9.4).
     let settings: AppSettings
 
+    /// §10.5's save and open panels. **Defaults to the unavailable
+    /// implementation**, so the headless bundle cannot open a modal panel and
+    /// hang the suite — only `StenoApp` passes the AppKit one. See `FilePanels`.
+    let panels: any FilePanels
+
+    /// Builds the writer that takes §10.1's mandatory pre-Replace backup.
+    ///
+    /// A factory rather than a stored `BackupWriter`: its initializer throws
+    /// (resolving Application Support can fail), and a model that refused to
+    /// exist because a backup directory could not be resolved would take the
+    /// whole main window down over a feature the user may never reach.
+    /// Injected so tests can point it at a temp directory and make its write
+    /// fail on demand.
+    let makeBackupWriter: @MainActor (ModelContext) throws -> BackupWriter
+
     /// Kept alive so the observation lives exactly as long as this model. See
     /// `WriteObservation` for why the token is not a plain stored property.
     private var writeObservation: WriteObservation?
@@ -126,12 +158,18 @@ public final class MainWindowModel: MainWindowActions {
         now: @escaping () -> Date = Date.init,
         save: @escaping (ModelContext) throws -> Void = { try $0.save() },
         copy: @escaping @MainActor (String) -> Bool = StandupClipboard.write,
-        settings: AppSettings = AppSettings()
+        settings: AppSettings = AppSettings(),
+        panels: any FilePanels = UnavailableFilePanels(),
+        makeBackupWriter: @escaping @MainActor (ModelContext) throws -> BackupWriter = {
+            try BackupWriter(context: $0)
+        }
     ) {
         self.context = context
         self.now = now
         self.save = save
         self.settings = settings
+        self.panels = panels
+        self.makeBackupWriter = makeBackupWriter
         self.noteComposer = NoteComposerModel(
             service: NoteService(context: context, now: now, save: save), now: now)
         self.standupDraft = StandupDraftModel(
@@ -341,57 +379,5 @@ public final class MainWindowModel: MainWindowActions {
 
     public func dismissError() {
         lastError = nil
-    }
-
-    // MARK: - Saving
-
-    /// Apply a mutation, save it, and reload — rolling back if the save fails.
-    ///
-    /// **The rollback is load-bearing.** Without it a failed save leaves the
-    /// object sitting in the context, the reload finds it, and the window
-    /// displays a task that is not on disk. For a capture tool, silently
-    /// accepting a write that evaporates is worse than refusing it, because
-    /// the loss surfaces at the next stand-up (D-018, §1.1).
-    ///
-    /// `what` is an infinitive phrase — it is interpolated into both the log
-    /// line and the user-facing message.
-    ///
-    /// Returns whether the save succeeded, so callers can make follow-up state
-    /// changes conditional on it — `rollback()` restores the store, not the UI.
-    @discardableResult
-    func perform(_ what: String, _ mutation: () -> Void) -> Bool {
-        mutation()
-        var saved = true
-        do {
-            try save(context)
-            lastError = nil
-        } catch {
-            context.rollback()
-            // One interpolated literal: OSLogMessage has no `+` operator.
-            Log.app.error(
-                "could not \(what, privacy: .public): \(String(describing: error), privacy: .public)"
-            )
-            lastError = "Could not \(what). Your change was not saved."
-            saved = false
-        }
-        reload()
-
-        // Project writes are the one write kind with no service behind them —
-        // they go straight through this method — so this is their post site,
-        // and D-031's "posted at the write" now covers all four kinds rather
-        // than three. Without it a cache of projects held anywhere else goes
-        // stale: FR-6's default-project picker kept offering a project the user
-        // had just archived, and the menu bar popover kept listing its tasks.
-        //
-        // Only on success, for the reason `MainWindowModel+Status` gives about
-        // no-op transitions: a save that failed was rolled back, and telling
-        // every surface to refetch would announce a write that did not happen.
-        //
-        // After `reload()`, so this model is consistent by the time the others
-        // read. Its own observer then reloads a second time — the same
-        // idempotent double-reload `+Status` documents, over a dataset D18
-        // caps.
-        if saved { NotificationCenter.default.post(name: .stenoDidWrite, object: nil) }
-        return saved
     }
 }

@@ -25,6 +25,50 @@ struct MainWindowCommands: Commands {
                 .disabled(actions == nil)
         }
 
+        // §10.5's GUI surface: "File → Export… / Import…, with the standard
+        // save/open panels."
+        //
+        // **Each item reveals the main window first.** The app outlives its
+        // window — the menu-bar icon keeps it alive (FR-1.2) — and the preview
+        // is a sheet, so a user living in the popover would otherwise pick a
+        // file and watch nothing happen. `reveal()` handles the closed,
+        // minimized and other-Space cases alike.
+        CommandGroup(after: .newItem) {
+            Divider()
+
+            Button("Export…") {
+                MainWindowReveal.reveal()
+                actions?.exportStore()
+            }
+            .keyboardShortcut("e")
+            .disabled(actions?.canExchangeData != true)
+
+            Button("Import…") {
+                MainWindowReveal.reveal()
+                actions?.importStore()
+            }
+            .keyboardShortcut("i")
+            .disabled(actions?.canExchangeData != true)
+
+            Divider()
+
+            // **Its own item below a divider, never a mode inside Import.**
+            // §10.1: Replace "exists for restoring a known-good snapshot, not
+            // for routine transfer", and the acceptance criterion is that
+            // merge stays the default and Replace is never the path of least
+            // resistance. A user who chose Import… cannot arrive at a wipe from
+            // there, because there is no control on that sheet that leads here.
+            //
+            // **No key equivalent, deliberately.** Every destructive-by-design
+            // action in this app is reachable only by pointing at it; the
+            // trailing ellipsis promises the confirmation that follows.
+            Button("Replace All Data from File…") {
+                MainWindowReveal.reveal()
+                actions?.replaceStoreFromFile()
+            }
+            .disabled(actions?.canExchangeData != true)
+        }
+
         // FR-3's "cycle status" and the deliberate way into BLOCKED (D-034).
         // Its own menu rather than an addition to File: M1-06's "Add Note"
         // belongs beside these, and neither is a File operation.

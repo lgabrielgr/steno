@@ -25,6 +25,14 @@ public enum ActiveSheet: Identifiable, Hashable, Sendable {
     /// of that identity here would be one the two could disagree about.
     case standupDraft
 
+    /// §10.4's import preview (M2.5-03).
+    ///
+    /// Carries neither the plan nor the mode, for `standupDraft`'s reason:
+    /// both live in `ImportPreviewModel`, and a second copy of them here would
+    /// be one the two could disagree about — in a sheet whose entire purpose is
+    /// to describe accurately what is about to happen.
+    case importPreview
+
     public var id: Self { self }
 }
 
@@ -78,4 +86,26 @@ public protocol MainWindowActions: AnyObject {
     /// FR-4.1: reverse the selected project's most recent Copy, by redaction.
     /// The sheet has its own button; this is the path that outlives it.
     func undoLastStandup()
+
+    /// §10.5's File menu items gate on this.
+    ///
+    /// **`activeSheet == nil`, so no modal can be opened over another one.**
+    /// The store-failed case is already covered elsewhere: `StenoApp` builds no
+    /// `MainWindowView` when the container fails, so the menu's
+    /// `@FocusedValue` is nil and every item is disabled. What this actually
+    /// prevents is ⌘E or ⌘I opening a file panel on top of an open sheet —
+    /// including on top of the import preview itself, where it would replace
+    /// the plan the user is in the middle of reading.
+    var canExchangeData: Bool { get }
+
+    /// §10.5: write the whole store to a file the user chooses. Reads only.
+    func exportStore()
+
+    /// §10.4: read a file and show what merging it would change. Writes
+    /// nothing until the user confirms.
+    func importStore()
+
+    /// §10.1's Replace, behind its own menu item so it can never be reached
+    /// from the Import flow.
+    func replaceStoreFromFile()
 }

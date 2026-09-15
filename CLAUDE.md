@@ -32,9 +32,13 @@ Each is stated fully in REQUIREMENTS.md; these are the pointers.
 2. **Verify, don't assert.** `make build && make test && make lint` must all pass before you
    open a PR (§9.5 step 4, §13). "This should compile" is not acceptable — §9 exists so there
    is no excuse.
-3. **The event log is append-only, with no exceptions.** Never mutate or delete an `Event` row;
-   the only permitted write to an existing event is flipping `isRedacted`. Every feature that
-   seems to need mutation actually needs a new event or a redaction (§3.3, §13).
+3. **The event log is append-only.** Never mutate or delete an `Event` row; the only permitted
+   write to an existing event is flipping `isRedacted`. Every feature that seems to need mutation
+   actually needs a new event or a redaction (§3.3, §13). **There is exactly one sanctioned
+   exception, and you are not it:** §10.1's Replace mode wipes the store before installing a file,
+   behind typed confirmation and a mandatory backup. It is confined to `ImportPlan.deletions`,
+   which a merge cannot populate — see D-106 and REQUIREMENTS.md §3.3 (v1.19). Do not add a
+   second deletion path, and do not cite Replace as precedent for one.
 4. **Never break capture latency.** Any change to the quick-add path is performance-sensitive
    and must be measured, not assumed. If capture exceeds ~3 seconds or blocks on project
    selection, the user reverts to paper and the product dies (§1.1, §13).
