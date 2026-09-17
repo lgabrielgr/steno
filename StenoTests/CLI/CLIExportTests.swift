@@ -107,6 +107,11 @@ import Testing
 
         let result = try harness.run(["export", "--output", destination.path])
         #expect(result.code == 1)
+        // **The sentence, not just the path.** Without the directory check the
+        // atomic write fails anyway and its errno message also contains the
+        // path — so asserting the path alone passed with the check deleted.
+        // Found by mutation, not by review.
+        #expect(result.stderr.contains("There is no directory at"))
         #expect(result.stderr.contains(harness.path("nowhere").path))
         #expect(FileManager.default.fileExists(atPath: destination.path) == false)
     }
