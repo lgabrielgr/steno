@@ -20,12 +20,44 @@ struct MainWindowView: View {
     @Environment(\.openWindow) private var openWindow
 
     var body: some View {
-        NavigationSplitView {
-            SidebarView(model: model)
-        } content: {
-            TaskListView(model: model)
-        } detail: {
-            TaskDetailView(model: model, taskID: model.selectedTaskID)
+        // **A `VStack`, not `.safeAreaInset(edge: .top)`.** The inset is
+        // applied to the window's *top safe area*, which on a
+        // `NavigationSplitView` is the region the title bar and each column's
+        // own header already occupy — so the banner drew over "Projects" and
+        // "IN-PROGRESS" rather than above them, and the translucent tint let
+        // both show through underneath it. A stacked row reserves its own
+        // height, which is what "an inline row" was always meant to be.
+        VStack(spacing: 0) {
+            // An inline row, not an alert: a modal interruption during capture
+            // is the behaviour §1.1 treats as a defect.
+            if let message = model.lastError {
+                banner(
+                    icon: "exclamationmark.triangle.fill",
+                    tint: .yellow.opacity(0.25),
+                    text: message,
+                    dismiss: model.dismissError)
+            }
+
+            // §10.5's export has an outcome worth stating — where the file
+            // went — and it is not a failure. Its own row rather than reusing
+            // the error banner above, for `MainWindowModel.lastNotice`'s
+            // reason: rendering a success in the error colours would misreport
+            // an operation that just wrote a file.
+            if let notice = model.lastNotice {
+                banner(
+                    icon: "checkmark.circle.fill",
+                    tint: .green.opacity(0.18),
+                    text: notice,
+                    dismiss: model.dismissNotice)
+            }
+
+            NavigationSplitView {
+                SidebarView(model: model)
+            } content: {
+                TaskListView(model: model)
+            } detail: {
+                TaskDetailView(model: model, taskID: model.selectedTaskID)
+            }
         }
         .frame(minWidth: 900, minHeight: 520)
         // Both halves of what `MainWindowReveal` needs: a way to find this
@@ -37,38 +69,6 @@ struct MainWindowView: View {
             MainWindowReveal.reopen = { openWindow(id: MainWindowReveal.sceneID) }
         }
         .focusedSceneValue(\.mainWindowActions, model)
-        .safeAreaInset(edge: .top) {
-            // An inline row, not an alert: a modal interruption during capture
-            // is the behaviour §1.1 treats as a defect.
-            if let message = model.lastError {
-                HStack(spacing: 8) {
-                    Image(systemName: "exclamationmark.triangle.fill")
-                    Text(message)
-                    Spacer()
-                    Button("Dismiss") { model.dismissError() }
-                }
-                .padding(8)
-                .background(.yellow.opacity(0.25))
-            }
-
-            // §10.5's export has an outcome worth stating — where the file
-            // went — and it is not a failure. Its own row rather than reusing
-            // the error banner above, for `MainWindowModel.lastNotice`'s
-            // reason: rendering a success in the error colours would misreport
-            // an operation that just wrote a file. Selectable, so the path can
-            // be copied.
-            if let notice = model.lastNotice {
-                HStack(spacing: 8) {
-                    Image(systemName: "checkmark.circle.fill")
-                    Text(notice)
-                        .textSelection(.enabled)
-                    Spacer()
-                    Button("Dismiss") { model.dismissNotice() }
-                }
-                .padding(8)
-                .background(.green.opacity(0.18))
-            }
-        }
         .sheet(item: $model.activeSheet) { sheet in
             switch sheet {
             case .newProject:
@@ -124,5 +124,38 @@ struct MainWindowView: View {
                 }
             }
         }
+    }
+
+    /// One inline row — icon, message, Dismiss — and the rule under it.
+    ///
+    /// **The tint is layered over an opaque window background, not over the
+    /// content.** Both banners are deliberately translucent so the two kinds of
+    /// news read differently at a glance, but a translucent row drawn straight
+    /// onto the split view let the column headers show through it. Painting the
+    /// window background first keeps the tint and loses the bleed.
+    ///
+    /// Text is selectable in both: the notice carries a path worth copying, and
+    /// an error message is worth pasting into a bug report.
+    @ViewBuilder
+    private func banner(
+        icon: String, tint: Color, text: String, dismiss: @escaping () -> Void
+    ) -> some View {
+        HStack(spacing: 8) {
+            Image(systemName: icon)
+            Text(text)
+                .textSelection(.enabled)
+            Spacer()
+            Button("Dismiss", action: dismiss)
+        }
+        .padding(8)
+        .frame(maxWidth: .infinity)
+        .background {
+            Color(nsColor: .windowBackgroundColor)
+                .overlay(tint)
+        }
+        // The window has no title-bar separator of its own while a banner is
+        // showing, so without this the row and the columns below it run
+        // together into one block of colour.
+        Divider()
     }
 }
