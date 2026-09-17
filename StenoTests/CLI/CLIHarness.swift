@@ -35,6 +35,21 @@ final class CLIHarness {
     /// What `CLIInstanceCheck` would answer. Flipped by the tests that care.
     var appIsRunning = false
 
+    /// Scripted answers, consumed one per call, falling back to `appIsRunning`
+    /// when exhausted.
+    ///
+    /// Exists for one property: the import path checks the running app more than
+    /// once, and the check that matters is the **last** one, immediately before
+    /// the transaction. A single boolean cannot tell those apart — it makes
+    /// every check look equally load-bearing — so removing the last one survived
+    /// mutation until this existed.
+    var appIsRunningAnswers: [Bool] = []
+
+    private func nextInstanceAnswer() -> Bool {
+        guard !appIsRunningAnswers.isEmpty else { return appIsRunning }
+        return appIsRunningAnswers.removeFirst()
+    }
+
     /// Injected so "the backup could not be written" is testable without
     /// contriving a read-only filesystem — `BackupWriter`'s own reason.
     var backupWrite: ((Data, URL) throws -> Void)?
@@ -84,7 +99,7 @@ final class CLIHarness {
             // Passed rather than defaulted for D-010's reason: the test bundle
             // is unhosted, so `Bundle.main` here is the xctest runner.
             exportedBy: "steno/test (macOS)",
-            isAnotherInstanceRunning: { self.appIsRunning },
+            isAnotherInstanceRunning: { self.nextInstanceAnswer() },
             makeBackupWriter: { context in
                 try BackupWriter(
                     context: context,

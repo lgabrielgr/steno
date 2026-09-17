@@ -213,6 +213,33 @@ import Testing
         withExtendedLifetime(held) {}
     }
 
+    /// **The check that matters is the last one.** Steno can be launched after
+    /// `CLIEntry`'s check and after `importFile`'s, and a GUI holding rows from
+    /// before the import would then save them back over it. Asking again
+    /// immediately before the transaction narrows the window to the write
+    /// itself — it does not close it, and D-118 says so. Raised in review of
+    /// PR #31.
+    @Test("an app launched mid-import is caught before the transaction")
+    func appLaunchedBetweenPlanAndApply() throws {
+        let source = try CLIHarness()
+        try seed(source)
+        let file = source.path("out.json")
+        #expect(try source.run(["export", "--output", file.path]).code == 0)
+
+        let target = try CLIHarness()
+        let before = try target.wholeStore()
+        // Not running when the command starts; running by the time it would
+        // write. One boolean cannot express that, which is why the harness
+        // scripts the answers.
+        target.appIsRunningAnswers = [false, true]
+
+        let result = try target.run(["import", "--file", file.path])
+
+        #expect(result.code == 1)
+        #expect(result.stderr == CLIInstanceCheck.refusalMessage)
+        #expect(try target.wholeStore() == before)
+    }
+
     /// §10.2's mandatory version gate, reaching stderr as the same sentence the
     /// GUI banner shows.
     @Test("an unreadable schema version is refused")
