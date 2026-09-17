@@ -149,10 +149,16 @@ struct MainWindowView: View {
         }
         .padding(8)
         .frame(maxWidth: .infinity)
-        .background {
-            Color(nsColor: .windowBackgroundColor)
-                .overlay(tint)
-        }
+        // **`ignoresSafeAreaEdges: []` is the whole point of these two lines.**
+        // A background view extends into adjacent safe areas by default — the
+        // parameter defaults to `.all` — and this row sits at the top of a
+        // window whose content view runs under the title bar. So the tint
+        // filled the title bar too, colouring the traffic lights and the window
+        // title along with the row. Two calls rather than one layered view
+        // because only the `ShapeStyle` overload takes the parameter; the
+        // window background goes on last so it lands *behind* the tint.
+        .background(tint, ignoresSafeAreaEdges: [])
+        .background(Color(nsColor: .windowBackgroundColor), ignoresSafeAreaEdges: [])
         // The window has no title-bar separator of its own while a banner is
         // showing, so without this the row and the columns below it run
         // together into one block of colour.
