@@ -87,6 +87,59 @@ import Testing
         #expect(document.projects.contains { $0.name == "Added once" })
     }
 
+    /// **An update must be as visible as an insert.** Both readings used to go
+    /// through one `ModelContext`, and a fetch there returns the row already
+    /// held rather than re-reading the persisted value — so a *changed* record
+    /// compared equal to itself and the check saw only insertions. Raised in
+    /// review of PR #31; the same behaviour the test harness documents.
+    @Test("a record changed between readings is seen")
+    func updateBetweenReadingsIsSeen() throws {
+        let fixture = try ExportFixture()
+        let maximal = try fixture.maximal()
+
+        var reads = 0
+        let encoder = ExportEncoder(
+            context: fixture.context,
+            includesCachedExternalData: true,
+            now: { ExportFixture.origin },
+            exportedBy: "steno/test (macOS)",
+            afterRead: {
+                reads += 1
+                maximal.task.rename(to: "renamed \(reads)", at: ExportFixture.at(Double(reads)))
+                try? fixture.context.save()
+            })
+
+        #expect(throws: ExportError.storeChangedWhileReading) { try encoder.snapshot() }
+        #expect(reads > 0)
+    }
+
+    /// A deletion, for the same reason: a context holding the row can keep
+    /// answering with it.
+    @Test("a record deleted between readings is seen")
+    func deleteBetweenReadingsIsSeen() throws {
+        let fixture = try ExportFixture()
+        let maximal = try fixture.maximal()
+
+        var deleted = false
+        let encoder = ExportEncoder(
+            context: fixture.context,
+            includesCachedExternalData: true,
+            now: { ExportFixture.origin },
+            exportedBy: "steno/test (macOS)",
+            afterRead: {
+                guard !deleted else { return }
+                deleted = true
+                fixture.context.delete(maximal.event)
+                try? fixture.context.save()
+            })
+
+        let document = try encoder.snapshot()
+        #expect(deleted)
+        // Rode out the single change and returned the settled reading, which no
+        // longer carries the event.
+        #expect(document.events.isEmpty)
+    }
+
     /// `==` cannot answer "same records": `exportedAt` comes from the clock
     /// once per document, so two readings of an unchanged store are never equal
     /// — which would make the comparison above always disagree and refuse every

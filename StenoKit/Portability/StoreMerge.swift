@@ -34,12 +34,12 @@ enum StoreMerge {
         // convergence rather than about the order a dictionary happened to
         // enumerate in.
         let merged = MergedStore(
-            projects: projects.sorted(by: ExportOrdering.precedes),
+            projects: ExportOrdering.sortedProjects(projects),
             tasks: ExportOrdering.sortedByWireInstant(
                 tasks, instant: { $0.createdAt }, id: { $0.id }),
             events: ExportOrdering.sortedByWireInstant(
                 events, instant: { $0.timestamp }, id: { $0.id }),
-            sourceRefs: refs.sorted(by: ExportOrdering.precedes),
+            sourceRefs: ExportOrdering.sortedRefs(refs),
             reports: ExportOrdering.sortedByWireInstant(
                 reports, instant: { $0.generatedAt }, id: { $0.id }))
 

@@ -96,18 +96,32 @@ public struct ExportEncoder {
     private static let stableReadAttempts = 2
 
     /// One reading of the store, which may or may not be a coherent one.
+    ///
+    /// **Each reading gets a `ModelContext` of its own, and the comparison is
+    /// worthless without it.** A fetch on a context that already holds a row
+    /// returns the row it holds rather than re-reading the persisted value — so
+    /// two readings through one context agree about an *updated* or *deleted*
+    /// record by construction, and the stability check would have seen only
+    /// insertions. Raised in review of PR #31.
+    ///
+    /// The consequence, stated rather than discovered later: this reads
+    /// **persisted** state, so unsaved changes in the caller's context are not
+    /// exported. That is the right answer for a file — an unsaved change is not
+    /// part of the store yet — and it matches `ImportService.plan`, which
+    /// refuses to run at all against a context with pending changes.
     private func read() throws -> ExportDocument {
-        let projects = try context.fetch(FetchDescriptor<Project>())
-            .map(ExportedProject.init).sorted(by: ExportOrdering.precedes)
+        let context = ModelContext(self.context.container)
+        let projects = ExportOrdering.sortedProjects(
+            try context.fetch(FetchDescriptor<Project>()).map(ExportedProject.init))
         let tasks = ExportOrdering.sortedByWireInstant(
             try context.fetch(FetchDescriptor<TaskItem>()).map(ExportedTask.init),
             instant: { $0.createdAt }, id: { $0.id })
         let events = ExportOrdering.sortedByWireInstant(
             try context.fetch(FetchDescriptor<Event>()).map(ExportedEvent.init),
             instant: { $0.timestamp }, id: { $0.id })
-        let refs = try context.fetch(FetchDescriptor<SourceRef>())
-            .map { ExportedSourceRef($0, includingCachedData: includesCachedExternalData) }
-            .sorted(by: ExportOrdering.precedes)
+        let refs = ExportOrdering.sortedRefs(
+            try context.fetch(FetchDescriptor<SourceRef>())
+                .map { ExportedSourceRef($0, includingCachedData: includesCachedExternalData) })
         let reports = ExportOrdering.sortedByWireInstant(
             try context.fetch(FetchDescriptor<StandupReport>()).map(ExportedReport.init),
             instant: { $0.generatedAt }, id: { $0.id })
