@@ -166,6 +166,13 @@ import Testing
         #expect(result.code == 0)
         #expect(result.stdout.contains("Nothing to import.") == false)
         #expect(try target.context.fetch(FetchDescriptor<TaskItem>()).count == 1)
+        // **The preview has to say the row goes away.** Letting Replace proceed
+        // was only half of it: the extra row is not doomed and is not a write, so
+        // §10.4's summary said only "= 1 task already present, kept as the file
+        // has it" while `apply` deleted a physical row. A destructive preview
+        // that under-reports destruction is the one kind this product must not
+        // ship. Raised in the second review round of PR #31.
+        #expect(result.stdout.contains("1 task will be deleted"))
     }
 
     /// The preview names the destruction before it happens, on stdout, in the
