@@ -52,6 +52,21 @@ import Testing
     }
 
     /// One run of the real binary in a scratch directory of its own.
+    ///
+    /// **Both pipes are drained concurrently, and the child is killed on a
+    /// deadline.** The obvious sequential shape — read stdout to EOF, read
+    /// stderr to EOF, then wait — hangs the whole suite on the exact regression
+    /// this file exists to catch: a shim that fell through to SwiftUI enters a
+    /// run loop, never closes stdout, and `readDataToEndOfFile()` waits forever.
+    /// A child that fills the stderr pipe buffer while stdout is being drained
+    /// deadlocks the same way. Either turns a red test into a hung CI job, which
+    /// is strictly worse than the bug. Raised in review of PR #31.
+    ///
+    /// Ten seconds is deliberately generous: these runs take well under one on
+    /// a warm machine, and the deadline exists to convert a hang into a failure,
+    /// not to measure performance on a loaded runner.
+    private static let deadline: TimeInterval = 10
+
     private static func run(_ arguments: [String], in directory: URL) throws -> ProcessResult {
         let process = Process()
         process.executableURL = try binary()
@@ -63,22 +78,40 @@ import Testing
         let err = Pipe()
         process.standardOutput = out
         process.standardError = err
+
+        // Each pipe gets its own thread, so neither can block the other. The
+        // box is the only shared state and every touch of it is under the lock.
+        let collected = OutputBox()
+        let drained = DispatchGroup()
+        for (pipe, isStandardOut) in [(out, true), (err, false)] {
+            drained.enter()
+            DispatchQueue.global().async {
+                let data = pipe.fileHandleForReading.readDataToEndOfFile()
+                collected.store(data, isStandardOut: isStandardOut)
+                drained.leave()
+            }
+        }
+
         try process.run()
-        // Read before `waitUntilExit`: a pipe whose buffer fills blocks the
-        // child, and a child that blocks never exits — the classic deadlock in
-        // this shape of test.
-        let outData = out.fileHandleForReading.readDataToEndOfFile()
-        let errData = err.fileHandleForReading.readDataToEndOfFile()
-        process.waitUntilExit()
-        // `String(bytes:encoding:)`, not `String(decoding:as:)`: SwiftLint's
-        // `optional_data_string_conversion` rejects the latter under --strict.
-        // The `?? ""` is unreachable for output this binary produces, and an
-        // empty string is also the right answer for a stream that produced
-        // nothing decodable.
+        if !process.waitUntilExit(before: Date().addingTimeInterval(deadline)) {
+            process.terminate()
+            // SIGTERM is enough for a process sitting in a run loop; the wait
+            // below then completes, and the recorded issue is what a reader
+            // needs — the test failed rather than the job hanging.
+            Issue.record(
+                """
+                steno \(arguments.joined(separator: " ")) did not exit within \
+                \(Int(deadline))s and was killed. A subcommand that does not exit is the \
+                headless criterion failing: the shim fell through to SwiftUI's run loop.
+                """)
+        }
+        // Safe now either way: the child is dead, so both pipes see EOF.
+        drained.wait()
+
         return ProcessResult(
             code: process.terminationStatus,
-            out: String(bytes: outData, encoding: .utf8) ?? "",
-            err: String(bytes: errData, encoding: .utf8) ?? "")
+            out: collected.standardOut,
+            err: collected.standardError)
     }
 
     /// A deliberately minimal environment, **not** the test runner's own.
@@ -169,6 +202,51 @@ import Testing
             in: directory)
         #expect(result.code == 1)
         #expect(result.err.contains("Could not read"))
+    }
+}
+
+extension Process {
+    /// `waitUntilExit()` with a deadline. `false` means it was still running.
+    ///
+    /// `Foundation` has no timed wait, and `waitUntilExit` cannot be cancelled —
+    /// hence the poll. 20 ms keeps a normal run's overhead under a tick while
+    /// making a hung child cost ten seconds rather than the job.
+    fileprivate func waitUntilExit(before deadline: Date) -> Bool {
+        while isRunning && Date() < deadline {
+            usleep(20_000)
+        }
+        return !isRunning
+    }
+}
+
+/// The two streams, written from two threads and read from a third.
+///
+/// A locked class rather than two `var`s captured by the closures: Swift 6
+/// rejects the capture outright, and it would be a data race if it did not.
+private final class OutputBox: @unchecked Sendable {
+    private let lock = NSLock()
+    private var out = Data()
+    private var err = Data()
+
+    func store(_ data: Data, isStandardOut: Bool) {
+        lock.lock()
+        defer { lock.unlock() }
+        if isStandardOut { out.append(data) } else { err.append(data) }
+    }
+
+    /// `String(bytes:encoding:)`, not `String(decoding:as:)`: SwiftLint's
+    /// `optional_data_string_conversion` rejects the latter under --strict. The
+    /// `?? ""` is unreachable for output this binary produces.
+    var standardOut: String {
+        lock.lock()
+        defer { lock.unlock() }
+        return String(bytes: out, encoding: .utf8) ?? ""
+    }
+
+    var standardError: String {
+        lock.lock()
+        defer { lock.unlock() }
+        return String(bytes: err, encoding: .utf8) ?? ""
     }
 }
 

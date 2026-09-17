@@ -10,12 +10,20 @@ extension CLIRunner {
     /// running the command — which is why there is no confirmation step here and
     /// why `--replace` is the explicit gesture §10.1 asks for.
     func importFile(_ url: URL, mode: ImportMode) -> Int32 {
-        // **Before the file is read**, so a refused import has touched nothing
-        // at all — not the store, not the filesystem.
+        // **Before the file is read, and before any row is touched.**
+        //
+        // This is the *second* place the guard runs: `CLIEntry` checks it before
+        // opening the container, because `StenoStore.live` creates the store
+        // directory and the store file, so a refusal that happened only here had
+        // already written to disk — and the comment that used to sit on this
+        // line claimed otherwise. Raised in review of PR #31.
+        //
+        // It stays here as well, for callers that build a `CLIRunner` directly.
+        // A guard that lives at one of two entrances is a guard the next surface
+        // forgets — the same reasoning that moved Replace's backup into
+        // `ImportService.apply` (D-110).
         guard !isAnotherInstanceRunning() else {
-            err(
-                "Steno is running, and importing underneath it would be overwritten by the "
-                    + "app's next save. Quit Steno and run this again. Nothing was imported.")
+            err(CLIInstanceCheck.refusalMessage)
             return ExitCode.failure
         }
 

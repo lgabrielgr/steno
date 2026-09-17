@@ -90,6 +90,21 @@ extension CLIRunner {
         // sends them looking in the wrong place. Creating the directory instead
         // was rejected: `--output` is a destination, not an instruction to
         // build a tree, and a typo'd path would silently produce one.
+        // **Never over the store this process has open.** `--output` is taken
+        // verbatim, so `--output ~/Library/Application\ Support/Steno/Steno.store`
+        // encoded successfully and then atomically replaced the SQLite file with
+        // JSON — destroying the data the export exists to protect, and saying
+        // "Exported to …" while it did. The `-wal` and `-shm` siblings are
+        // refused too: `StenoStore.storeDirectory` calls the three files the
+        // unit of deletion, and losing the write-ahead log strands the store
+        // just as effectively. Raised in review of PR #31.
+        guard !protectedPaths.contains(destination.standardizedFileURL.path) else {
+            throw ExportDestinationError(
+                message:
+                    "\(destination.path) is Steno's own store. Exporting over it would "
+                    + "destroy your data, so nothing was exported.")
+        }
+
         let parent = destination.deletingLastPathComponent()
         var parentIsDirectory: ObjCBool = false
         guard
@@ -100,6 +115,31 @@ extension CLIRunner {
                 message: "There is no directory at \(parent.path), so nothing was exported.")
         }
         return destination
+    }
+}
+
+extension CLIRunner {
+    /// The files an export must never be written over: the open store and its
+    /// two SwiftData siblings.
+    ///
+    /// Read from the container's own configurations rather than from
+    /// `StenoStore.defaultURL`, so the `STENO_STORE_PATH` seam is covered by the
+    /// same guard — a test store is no less destroyable than the real one.
+    ///
+    /// `-wal` and `-shm` are appended to the *filename*, not added as path
+    /// extensions: the files are `Steno.store-wal`, not `Steno.store.wal`.
+    fileprivate var protectedPaths: Set<String> {
+        var paths: Set<String> = []
+        for configuration in context.container.configurations {
+            let url = configuration.url.standardizedFileURL
+            paths.insert(url.path)
+            let directory = url.deletingLastPathComponent()
+            for suffix in ["-wal", "-shm"] {
+                paths.insert(
+                    directory.appendingPathComponent(url.lastPathComponent + suffix).path)
+            }
+        }
+        return paths
     }
 }
 

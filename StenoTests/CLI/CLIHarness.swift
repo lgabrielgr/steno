@@ -6,8 +6,10 @@ import SwiftData
 /// A `steno` invocation under test: the store, the injected world, and
 /// everything the process wrote.
 ///
-/// **Nothing here reaches the real machine.** The store is in-memory, the
-/// working directory and backup directory are per-test temp directories, and
+/// **Nothing here reaches the real machine.** The store is in-memory — or, for
+/// the tests that need a store path, a SQLite file inside this harness's own
+/// scratch directory — the working directory and backup directory are both
+/// per-test temp directories, and
 /// both output sinks are arrays. A CLI test that wrote to the terminal would
 /// interleave with the xctest runner's own output (§9.4), and one that wrote to
 /// `~/Library/Application Support` would touch the developer's data.
@@ -37,18 +39,29 @@ final class CLIHarness {
     /// contriving a read-only filesystem — `BackupWriter`'s own reason.
     var backupWrite: ((Data, URL) throws -> Void)?
 
+    /// Where the store lives, for the tests that need to name it. `nil` for the
+    /// in-memory default.
+    let storeURL: URL?
+
     private(set) var out: [String] = []
     private(set) var err: [String] = []
 
-    init() throws {
-        container = try StenoStore.inMemory()
-        context = ModelContext(container)
+    /// - Parameter fileBacked: opens a real SQLite store inside this harness's
+    ///   scratch directory instead of an in-memory one. Only the tests that need
+    ///   a store *path* — the guard against exporting over it — pass `true`; an
+    ///   in-memory container reports `/dev/null` as its url, which would make
+    ///   that assertion pass for the wrong reason.
+    init(fileBacked: Bool = false) throws {
         let root = FileManager.default.temporaryDirectory
             .appendingPathComponent("steno-cli-tests-\(UUID().uuidString)", isDirectory: true)
         workingDirectory = root.appendingPathComponent("cwd", isDirectory: true)
         backupDirectory = root.appendingPathComponent("backups", isDirectory: true)
         try FileManager.default.createDirectory(
             at: workingDirectory, withIntermediateDirectories: true)
+
+        storeURL = fileBacked ? workingDirectory.appendingPathComponent("Steno.store") : nil
+        container = try fileBacked ? StenoStore.live(at: storeURL) : StenoStore.inMemory()
+        context = ModelContext(container)
     }
 
     /// Run one command line, exactly as `CLIEntry` would after parsing.

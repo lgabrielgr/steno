@@ -53,10 +53,13 @@ public enum CLIEntry {
     ///   - makeRunner: injected for the same reason the runner injects its own
     ///     collaborators — a test that let this build a real `CLIRunner` would
     ///     reach the developer's Application Support for a backup directory.
+    ///   - isAnotherInstanceRunning: checked **before** the container is opened.
+    ///     See the guard below.
     @MainActor
     public static func run(
         _ arguments: [String],
         environment: [String: String] = ProcessInfo.processInfo.environment,
+        isAnotherInstanceRunning: () -> Bool = CLIInstanceCheck.anotherInstanceIsRunning,
         makeRunner: (ModelContainer) -> CLIRunner = { CLIRunner(container: $0) },
         err: (String) -> Void = CLIOutput.standardError
     ) -> Int32 {
@@ -69,6 +72,18 @@ public enum CLIEntry {
         } catch {
             err("steno: \(error.localizedDescription)\n\n\(CLIUsage.text)")
             return CLIRunner.ExitCode.usage
+        }
+
+        // **Before the store is opened, not after.** `StenoStore.live` creates
+        // the store directory and, on a fresh path, the store itself — so a
+        // refusal raised further in had already written to disk, and could fail
+        // on *opening* the store before it ever got to report the refusal the
+        // user needed to see. Only `import` is gated: export is a pure read
+        // (D-085) and must keep working while the app is open, which M2.5-05
+        // depends on. Raised in review of PR #31.
+        if case .importFile = command, isAnotherInstanceRunning() {
+            err(CLIInstanceCheck.refusalMessage)
+            return CLIRunner.ExitCode.failure
         }
 
         let container: ModelContainer

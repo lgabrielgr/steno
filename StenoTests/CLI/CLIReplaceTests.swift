@@ -124,6 +124,50 @@ import Testing
         #expect(after.projects.count == 2)
     }
 
+    /// **A damaged store is the situation Replace exists for, and it used to
+    /// no-op there.**
+    ///
+    /// `id` carries no `@Attribute(.unique)`, so a store can hold two physical
+    /// rows under one id, and `.replace` is the one mode that reaches `plan`
+    /// without `StoreMerge.validateShape` refusing such a store first (D-106).
+    /// For a duplicated row whose id *is* in the file with identical content,
+    /// every id-level signal reads empty — `writes`, `deletions`, and
+    /// `deletedRows`, which counts doomed ids and so cannot see it either — and
+    /// the whole operation returned success having installed nothing. Raised in
+    /// review of PR #31.
+    @Test("--replace collapses a duplicated row the file describes once")
+    func replaceCollapsesDuplicateRows() throws {
+        let source = try CLIHarness()
+        try seed(source, title: "Shared", project: "Payments")
+        let file = try exportFile(from: source)
+
+        // **The target must be identical to the file apart from the duplicate.**
+        // Seeding it independently would give it rows the file lacks, which land
+        // in `deletions` — and a non-empty `deletions` makes the plan non-empty
+        // for a reason that has nothing to do with the defect. Importing the
+        // file first is what produces a store where every id already agrees.
+        let target = try CLIHarness()
+        #expect(try target.run(["import", "--file", file.path]).code == 0)
+        let installed = try #require(
+            try target.context.fetch(FetchDescriptor<TaskItem>()).first)
+
+        // A second physical row under the id the file already carries. Inserted
+        // directly: no service in this app can produce one, which is precisely
+        // why only a damaged store reaches this path.
+        target.context.insert(
+            TaskItem(
+                id: installed.id, title: installed.title, projectID: installed.projectID,
+                createdAt: installed.createdAt))
+        try target.context.save()
+        #expect(try target.context.fetch(FetchDescriptor<TaskItem>()).count == 2)
+
+        let result = try target.run(["import", "--file", file.path, "--replace"])
+
+        #expect(result.code == 0)
+        #expect(result.stdout.contains("Nothing to import.") == false)
+        #expect(try target.context.fetch(FetchDescriptor<TaskItem>()).count == 1)
+    }
+
     /// The preview names the destruction before it happens, on stdout, in the
     /// same words the sheet uses.
     @Test("the replace preview says what will be deleted")

@@ -35,6 +35,16 @@ public enum CLIInstanceCheck {
     /// Measured, not assumed: see the task's verification notes. A
     /// terminal-launched process that never creates `NSApplication` does not
     /// appear in this list, and the GUI app does.
+    /// What the user is told when the guard fires.
+    ///
+    /// Here rather than at either call site: the check now runs **twice** — in
+    /// `CLIEntry` before the store is opened, and in `CLIRunner.importFile` for
+    /// callers that reach the runner directly — and two copies of a refusal are
+    /// two sentences free to drift apart.
+    public static let refusalMessage =
+        "Steno is running, and importing underneath it would be overwritten by the app's "
+        + "next save. Quit Steno and run this again. Nothing was imported."
+
     public static func anotherInstanceIsRunning() -> Bool {
         let ours = ProcessInfo.processInfo.processIdentifier
         return

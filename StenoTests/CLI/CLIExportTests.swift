@@ -135,6 +135,35 @@ import Testing
                 .includesCachedExternalData)
     }
 
+    /// **The failure this one exists to prevent destroys the store.**
+    /// `--output` is taken verbatim, so naming the live SQLite file encoded
+    /// successfully and then atomically replaced the database with JSON — with a
+    /// success message on stdout. Raised in review of PR #31.
+    ///
+    /// A file-backed harness, deliberately: an in-memory container reports
+    /// `/dev/null` as its url, so this would pass against a path no user has.
+    @Test(
+        "exporting over the live store is refused",
+        arguments: ["", "-wal", "-shm"])
+    func refusesToOverwriteTheStore(_ suffix: String) throws {
+        let harness = try CLIHarness(fileBacked: true)
+        try seed(harness)
+        let store = try #require(harness.storeURL)
+        let target = store.deletingLastPathComponent()
+            .appendingPathComponent(store.lastPathComponent + suffix)
+        let before = try? Data(contentsOf: target)
+
+        let result = try harness.run(["export", "--output", target.path])
+
+        #expect(result.code == 1)
+        #expect(
+            result.stderr.contains("Steno\u{2019}s own store")
+                || result.stderr.contains("own store"))
+        // The bytes are what matters: a refusal that still wrote would leave a
+        // JSON document where the database was.
+        #expect((try? Data(contentsOf: target)) == before)
+    }
+
     /// Export is a pure read (D-085), so it does not care whether the app has
     /// the store open. The asymmetry matters: M2.5-05 auto-exports from a
     /// machine where Steno is by definition running.

@@ -208,8 +208,12 @@ test: preflight generate ## Unit tests — headless, network denied
 # of least resistance, and `make import FILE=x REPLACE=1` is the easiest thing in
 # this repo to typo into a wiped store. The only route is
 # `steno import --file x --replace`, typed in full.
+# Both expansions are quoted: an unquoted $(FILE) splits a path containing
+# spaces into several arguments before the CLI ever sees it, so
+# `make export FILE="~/My Exports/x.json"` wrote to a file called `~/My`.
+# Raised in review of PR #31.
 export: build ## Export the whole store (FILE=path optional)
-	$(BIN) export $(if $(FILE),--output $(FILE))
+	"$(BIN)" export $(if $(FILE),--output "$(FILE)")
 
 # The `test -n` guard, rather than letting the binary complain: an unset Make
 # variable expands to nothing, so `make import` would otherwise run
@@ -217,7 +221,7 @@ export: build ## Export the whole store (FILE=path optional)
 # typed. Exit 2 matches the CLI's own usage code.
 import: build ## Merge an export into the store (FILE=path required)
 	@test -n "$(FILE)" || { echo "usage: make import FILE=path/to/export.json"; exit 2; }
-	$(BIN) import --file $(FILE)
+	"$(BIN)" import --file "$(FILE)"
 
 # The swiftlint check lives here rather than in `preflight`, which gates
 # build/run/release — none of which should start requiring a linter.

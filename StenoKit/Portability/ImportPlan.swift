@@ -156,7 +156,36 @@ public struct ImportPlan: Equatable, Sendable {
     /// one preview that most needs showing would be suppressed.
     public var isEmpty: Bool {
         projects.isNoOp && tasks.isNoOp && events.isNoOp && sourceRefs.isNoOp && reports.isNoOp
-            && deletions.isEmpty
+            && deletions.isEmpty && !replaceWouldCollapseDuplicates
+    }
+
+    /// Does a `.replace` still have work to do even though every id agrees?
+    ///
+    /// **Id-level emptiness is not row-level emptiness, and only Replace can
+    /// tell the difference.** `id` carries no `@Attribute(.unique)`, so a
+    /// damaged store can hold two physical rows under one id — and `.replace` is
+    /// the one mode that reaches `plan` without `StoreMerge.validateShape`
+    /// refusing such a store first (D-106), because refusing it would disable
+    /// recovery in exactly the situation Replace exists for.
+    ///
+    /// For such a row whose id *is* in the file with identical content: `writes`
+    /// is empty (it is `unchanged`), `deletions` is empty (the id survives), and
+    /// `deletedRows` is 0 — it counts rows under *doomed* ids, so it cannot see
+    /// this one either. `isEmpty` was therefore true, `apply` returned without
+    /// writing, and the duplicate survived while Replace reported success and
+    /// promises the store *is* the file. Raised in review of PR #31.
+    ///
+    /// Comparing totals is enough because `.replace` installs the file whole:
+    /// any disagreement between what the store physically holds and what the
+    /// file describes is work. A merge is unaffected — it never removes a row,
+    /// so its totals legitimately differ.
+    private var replaceWouldCollapseDuplicates: Bool {
+        guard mode == .replace else { return false }
+        return source.projects.count != merged.projects.count
+            || source.tasks.count != merged.tasks.count
+            || source.events.count != merged.events.count
+            || source.sourceRefs.count != merged.sourceRefs.count
+            || source.reports.count != merged.reports.count
     }
 }
 

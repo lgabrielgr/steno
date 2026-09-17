@@ -81,12 +81,31 @@ public enum CLIParser {
     /// `URL(fileURLWithPath: "")`, which resolves to the working directory
     /// itself — so an export would silently land on the dated filename rather
     /// than reporting that the path was empty.
+    ///
+    /// **A dash-prefixed value is refused too**, and that one is not
+    /// hypothetical: `steno import --file --replace` read a file literally named
+    /// `--replace` *in merge mode*, and `steno export --output --include-cached`
+    /// silently swallowed the flag it was meant to set. Both are a missing value
+    /// wearing the next flag's clothes, and both failed in a direction the user
+    /// could not see. Raised in review of PR #31.
+    ///
+    /// The cost is that a path genuinely beginning with `-` needs `./-name`.
+    /// That is the conventional trade, and this tool takes exactly two paths.
     private static func value(
         after flag: String, in flags: [String], at index: inout Int
     ) throws -> String {
         let next = index + 1
         guard next < flags.count, !flags[next].isEmpty else {
             throw CLIUsageError("steno: \(flag) needs a path.\n\n\(CLIUsage.text)")
+        }
+        guard !flags[next].hasPrefix("-") else {
+            throw CLIUsageError(
+                """
+                steno: \(flag) needs a path, and "\(flags[next])" looks like a flag. \
+                For a path that really starts with a dash, write ./\(flags[next]).
+
+                \(CLIUsage.text)
+                """)
         }
         index = next
         return flags[next]

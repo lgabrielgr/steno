@@ -137,6 +137,22 @@ import Testing
         #expect(error.message.contains("unexpected argument"))
     }
 
+    /// **A missing value wearing the next flag's clothes.** `--file --replace`
+    /// read a file literally named `--replace`, in merge mode; `--output
+    /// --include-cached` swallowed the flag it was meant to set. Both failed
+    /// where the user could not see it. Raised in review of PR #31.
+    @Test(
+        "a flag given another flag as its value is refused",
+        arguments: [
+            ["import", "--file", "--replace"],
+            ["export", "--output", "--include-cached"],
+            ["export", "--output", "-"],
+        ])
+    func flagAsValue(_ arguments: [String]) throws {
+        let error = try #require(throws: CLIUsageError.self) { try parse(arguments) }
+        #expect(error.message.contains("looks like a flag"))
+    }
+
     @Test("an unknown flag is refused")
     func unknownFlag() throws {
         let error = try #require(throws: CLIUsageError.self) {
