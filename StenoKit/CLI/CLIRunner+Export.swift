@@ -33,6 +33,12 @@ extension CLIRunner {
                 now: now,
                 exportedBy: exportedBy
             ).encode()
+        } catch let error as ExportError {
+            // Its own sentence: "could not read its own store" would send
+            // someone whose store is merely *busy* looking for corruption.
+            Log.app.error("cli export abandoned: \(error.message, privacy: .public)")
+            err(error.message)
+            return ExitCode.failure
         } catch {
             Log.app.error(
                 "cli export could not be built: \(String(describing: error), privacy: .public)")

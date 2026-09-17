@@ -38,6 +38,11 @@ extension MainWindowModel {
                 context: context,
                 includesCachedExternalData: destination.includesCachedExternalData
             ).encode()
+        } catch let error as ExportError {
+            Log.app.error("export abandoned: \(error.message, privacy: .public)")
+            lastNotice = nil
+            lastError = error.message
+            return
         } catch {
             Log.app.error(
                 "export could not be built: \(String(describing: error), privacy: .public)")
