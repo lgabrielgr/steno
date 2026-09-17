@@ -91,11 +91,18 @@ import Testing
     /// through one `ModelContext`, and a fetch there returns the row already
     /// held rather than re-reading the persisted value — so a *changed* record
     /// compared equal to itself and the check saw only insertions. Raised in
-    /// review of PR #31; the same behaviour the test harness documents.
-    @Test("a record changed between readings is seen")
+    /// review of PR #31.
+    ///
+    /// **The write goes through a second context, and that is the whole test.**
+    /// Mutating the object the fixture already holds makes the change visible
+    /// however many contexts the encoder uses — the first version of this test
+    /// did exactly that and passed with the fix reverted. A separate context
+    /// standing in for the other process is what makes the stale-row behaviour
+    /// reachable.
+    @Test("a record changed by another context between readings is seen")
     func updateBetweenReadingsIsSeen() throws {
         let fixture = try ExportFixture()
-        let maximal = try fixture.maximal()
+        try fixture.maximal()
 
         var reads = 0
         let encoder = ExportEncoder(
@@ -105,20 +112,24 @@ import Testing
             exportedBy: "steno/test (macOS)",
             afterRead: {
                 reads += 1
-                maximal.task.rename(to: "renamed \(reads)", at: ExportFixture.at(Double(reads)))
-                try? fixture.context.save()
+                let other = ModelContext(fixture.container)
+                guard let task = try? other.fetch(FetchDescriptor<TaskItem>()).first else {
+                    return
+                }
+                task.rename(to: "renamed \(reads)", at: ExportFixture.at(Double(reads)))
+                try? other.save()
             })
 
         #expect(throws: ExportError.storeChangedWhileReading) { try encoder.snapshot() }
         #expect(reads > 0)
     }
 
-    /// A deletion, for the same reason: a context holding the row can keep
-    /// answering with it.
-    @Test("a record deleted between readings is seen")
+    /// A deletion by another context, for the same reason: a context holding the
+    /// row can keep answering with it.
+    @Test("a record deleted by another context between readings is seen")
     func deleteBetweenReadingsIsSeen() throws {
         let fixture = try ExportFixture()
-        let maximal = try fixture.maximal()
+        try fixture.maximal()
 
         var deleted = false
         let encoder = ExportEncoder(
@@ -129,8 +140,10 @@ import Testing
             afterRead: {
                 guard !deleted else { return }
                 deleted = true
-                fixture.context.delete(maximal.event)
-                try? fixture.context.save()
+                let other = ModelContext(fixture.container)
+                guard let event = try? other.fetch(FetchDescriptor<Event>()).first else { return }
+                other.delete(event)
+                try? other.save()
             })
 
         let document = try encoder.snapshot()
