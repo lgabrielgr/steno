@@ -41,6 +41,15 @@ public struct CLIRunner {
     let isAnotherInstanceRunning: @MainActor () -> Bool
     let makeBackupWriter: @MainActor (ModelContext) throws -> BackupWriter
     let workingDirectory: URL
+
+    /// This runner's store **file**, or `nil` for an in-memory one.
+    ///
+    /// Only the import path uses it, to take `CLIWriteLock` beside the store.
+    /// An in-memory container reports `/dev/null`, whose directory is `/` — so
+    /// locking there would be both meaningless and antisocial, and `nil` turns
+    /// the lock into a no-op for the tests that use one.
+    let storeFileURL: URL?
+
     let out: @MainActor (String) -> Void
     let err: @MainActor (String) -> Void
 
@@ -78,6 +87,8 @@ public struct CLIRunner {
         // property does not retain its container, and nothing in a CLI process
         // holds the container for the lifetime an App's stored property would.
         self.context = ModelContext(container)
+        let url = container.configurations.first?.url
+        self.storeFileURL = url?.path == "/dev/null" ? nil : url
         self.now = now
         self.exportedBy = exportedBy
         self.isAnotherInstanceRunning = isAnotherInstanceRunning

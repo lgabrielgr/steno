@@ -98,7 +98,7 @@ extension CLIRunner {
         // refused too: `StenoStore.storeDirectory` calls the three files the
         // unit of deletion, and losing the write-ahead log strands the store
         // just as effectively. Raised in review of PR #31.
-        guard !protectedPaths.contains(destination.standardizedFileURL.path) else {
+        guard !isStoreFile(destination) else {
             throw ExportDestinationError(
                 message:
                     "\(destination.path) is Steno's own store. Exporting over it would "
@@ -119,8 +119,37 @@ extension CLIRunner {
 }
 
 extension CLIRunner {
-    /// The files an export must never be written over: the open store and its
-    /// two SwiftData siblings.
+    /// Would writing here overwrite the open store or one of its two SwiftData
+    /// siblings?
+    ///
+    /// **Filesystem identity first, path text only as a fallback.** Comparing
+    /// `standardizedFileURL.path` as a string was wrong on the volume macOS
+    /// actually ships: HFS+ and APFS are case-**insensitive** by default, so
+    /// `--output steno.store` names the same database as `Steno.store` and
+    /// walked straight past a case-sensitive `Set<String>` lookup. Raised in
+    /// review of PR #31.
+    ///
+    /// `fileResourceIdentifierKey` is the right instrument — it answers "same
+    /// file?" across case folding, symlinks, hard links and `..` — but it is
+    /// only available for a file that **exists**. The store always does, having
+    /// just been opened; its `-wal` and `-shm` siblings may not, and a
+    /// destination that does not exist yet cannot be compared that way either.
+    /// Case-insensitive path comparison covers those, which is the safe
+    /// direction: it can only ever refuse *more*, and the thing it might refuse
+    /// is a file differing from the store's name by case alone.
+    fileprivate func isStoreFile(_ destination: URL) -> Bool {
+        let candidate = destination.standardizedFileURL
+        for url in protectedURLs {
+            if let left = fileIdentifier(of: candidate), let right = fileIdentifier(of: url) {
+                if left.isEqual(right) { return true }
+            } else if candidate.path.compare(url.path, options: .caseInsensitive) == .orderedSame {
+                return true
+            }
+        }
+        return false
+    }
+
+    /// The open store and its two siblings.
     ///
     /// Read from the container's own configurations rather than from
     /// `StenoStore.defaultURL`, so the `STENO_STORE_PATH` seam is covered by the
@@ -128,18 +157,20 @@ extension CLIRunner {
     ///
     /// `-wal` and `-shm` are appended to the *filename*, not added as path
     /// extensions: the files are `Steno.store-wal`, not `Steno.store.wal`.
-    fileprivate var protectedPaths: Set<String> {
-        var paths: Set<String> = []
-        for configuration in context.container.configurations {
+    private var protectedURLs: [URL] {
+        context.container.configurations.flatMap { configuration -> [URL] in
             let url = configuration.url.standardizedFileURL
-            paths.insert(url.path)
             let directory = url.deletingLastPathComponent()
-            for suffix in ["-wal", "-shm"] {
-                paths.insert(
-                    directory.appendingPathComponent(url.lastPathComponent + suffix).path)
-            }
+            return [url]
+                + ["-wal", "-shm"].map {
+                    directory.appendingPathComponent(url.lastPathComponent + $0)
+                }
         }
-        return paths
+    }
+
+    /// The volume's own identity for this file, or `nil` if it does not exist.
+    private func fileIdentifier(of url: URL) -> (any NSObjectProtocol)? {
+        try? url.resourceValues(forKeys: [.fileResourceIdentifierKey]).fileResourceIdentifier
     }
 }
 

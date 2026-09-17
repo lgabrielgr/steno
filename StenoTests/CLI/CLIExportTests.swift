@@ -164,6 +164,40 @@ import Testing
         #expect((try? Data(contentsOf: target)) == before)
     }
 
+    /// **Case folding is not a detail on this platform.** APFS and HFS+ are
+    /// case-insensitive by default, so `steno.store` *is* `Steno.store` — and a
+    /// case-sensitive path comparison walked straight past the guard above,
+    /// letting the atomic write replace the live database with JSON. Raised in
+    /// review of PR #31.
+    ///
+    /// Skipped on a case-sensitive volume, where the two names are genuinely
+    /// different files and there is nothing to assert. That is a real skip, not
+    /// a dodge: the condition is the volume's, and it is checked rather than
+    /// assumed.
+    @Test("exporting over a differently-cased store path is refused")
+    func refusesCaseVariantOfTheStore() throws {
+        let harness = try CLIHarness(fileBacked: true)
+        try seed(harness)
+        let store = try #require(harness.storeURL)
+        let variant = store.deletingLastPathComponent()
+            .appendingPathComponent(store.lastPathComponent.lowercased())
+        try #require(variant.lastPathComponent != store.lastPathComponent)
+
+        // Whether this volume folds case is the volume's property, checked
+        // rather than assumed. On a case-sensitive one the two names are
+        // genuinely different files and there is nothing here to assert.
+        guard FileManager.default.contentsEqual(atPath: variant.path, andPath: store.path) else {
+            return
+        }
+
+        let before = try Data(contentsOf: store)
+        let result = try harness.run(["export", "--output", variant.path])
+
+        #expect(result.code == 1)
+        #expect(result.stderr.contains("own store"))
+        #expect(try Data(contentsOf: store) == before)
+    }
+
     /// Export is a pure read (D-085), so it does not care whether the app has
     /// the store open. The asymmetry matters: M2.5-05 auto-exports from a
     /// machine where Steno is by definition running.

@@ -149,12 +149,65 @@ import Testing
         let bytes = try Data(contentsOf: whole)
 
         let target = try CLIHarness()
+        try seed(target)
+        let before = try target.wholeStore()
         let file = target.path("truncated.json")
         try bytes.prefix(bytes.count / 2).write(to: file)
 
         let result = try target.run(["import", "--file", file.path])
         #expect(result.code == 1)
         #expect(result.stderr.contains("isn't a readable Steno export"))
+        // **The store, not just the message.** Asserting only the refusal would
+        // pass even if the command had partly mutated the store before
+        // rejecting the file, which is precisely what §10.6 forbids — and it is
+        // the assertion `malformedFile` already makes. Raised in review of
+        // PR #31.
+        #expect(try target.wholeStore() == before)
+    }
+
+    /// **Two CLI writers cannot interleave.** `CLIInstanceCheck` only sees the
+    /// GUI — a terminal-launched `steno import` never creates `NSApplication`,
+    /// so two of them pass that guard together, both plan against the same
+    /// snapshot, both pass `ImportService`'s compare-then-write staleness check,
+    /// and both save. Raised in review of PR #31.
+    ///
+    /// `flock` lives on the open file description, so a second acquisition
+    /// fails from within this process exactly as it would from another one —
+    /// which is what makes this testable without spawning anything.
+    @Test("a second CLI writer is refused while the first holds the lock")
+    func writeLockRefusesASecondWriter() throws {
+        let harness = try CLIHarness(fileBacked: true)
+        try seed(harness)
+        let before = try harness.wholeStore()
+        let file = harness.path("in.json")
+        #expect(try harness.run(["export", "--output", file.path]).code == 0)
+        let store = try #require(harness.storeURL)
+
+        try whileLocked(store) {
+            let result = try harness.run(["import", "--file", file.path])
+            #expect(result.code == 1)
+            #expect(result.stderr == CLIWriteLock.busyMessage)
+            #expect(try harness.wholeStore() == before)
+        }
+
+        // **Released with the scope, and this half is what makes the other half
+        // falsifiable.** Without it the assertions above would pass just as well
+        // against a lock that never opens for anyone.
+        let second = try harness.run(["import", "--file", file.path])
+        #expect(second.code == 0)
+        #expect(second.stderr.isEmpty)
+    }
+
+    /// Runs `body` with the CLI write lock held by this test.
+    ///
+    /// The lock releases in `deinit`, so "release it" has to be a scope
+    /// boundary rather than a call — hence a function rather than two statements
+    /// in the test. `withExtendedLifetime` stops the optimiser from dropping it
+    /// early, which would make the refusal above depend on timing.
+    private func whileLocked(_ store: URL, _ body: () throws -> Void) throws {
+        let held = try #require(CLIWriteLock(besideStoreAt: store))
+        try body()
+        withExtendedLifetime(held) {}
     }
 
     /// §10.2's mandatory version gate, reaching stderr as the same sentence the

@@ -27,6 +27,26 @@ extension CLIRunner {
             return ExitCode.failure
         }
 
+        // **Held for the whole of plan-then-apply.** `ImportService` compares
+        // the store against the plan and then writes, with nothing in between,
+        // so two CLI writers that both passed the guard above could each see a
+        // fresh store and each commit. `CLIInstanceCheck` cannot see them:
+        // neither creates `NSApplication`, so neither registers with
+        // LaunchServices. Raised in review of PR #31.
+        //
+        // `nil` only for an in-memory store, which no second process can reach.
+        var lock: CLIWriteLock?
+        if let store = storeFileURL {
+            guard let acquired = CLIWriteLock(besideStoreAt: store) else {
+                err(CLIWriteLock.busyMessage)
+                return ExitCode.failure
+            }
+            lock = acquired
+        }
+        // Silences "never used"; the lock's whole job is to exist until this
+        // function returns, at which point `deinit` releases it.
+        defer { lock = nil }
+
         let data: Data
         do {
             data = try Data(contentsOf: url)
