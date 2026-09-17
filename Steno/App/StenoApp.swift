@@ -3,7 +3,11 @@ import StenoKit
 import SwiftData
 import SwiftUI
 
-@main
+/// **`@main` lives on `StenoMain`, not here.** The app binary also runs §10.5's
+/// `steno export` / `steno import` subcommands, and a subcommand must not start
+/// `NSApplication` — which SwiftUI's generated `main` does before any of our
+/// code gets control. `StenoMain` calls `StenoApp.main()` for an ordinary
+/// launch; nothing else about this type changed.
 struct StenoApp: App {
     /// Built once, here, rather than by `.modelContainer(for:)` — which traps
     /// on failure. See `StoreFailureView` for why this is a `Result`.
