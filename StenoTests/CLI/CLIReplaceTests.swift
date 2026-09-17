@@ -209,7 +209,11 @@ import Testing
 
         // **And says so, on stderr, on a run that exited 0.** The user's way
         // back is impaired; silence would let them believe otherwise.
-        #expect(result.stderr.contains("could not make a backup it would be able to restore"))
+        // **The wording must match what happened.** It said "nothing was
+        // replaced" while everything had been — the message described a refusal
+        // that was implemented and then reverted. Raised in review of PR #31.
+        #expect(result.stderr.contains("Your data was replaced"))
+        #expect(result.stderr.contains("nothing was replaced") == false)
         #expect(result.stderr.contains("share the id"))
 
         // The backup exists and holds the pre-wipe rows — it is the user's
@@ -222,6 +226,35 @@ import Testing
             String(bytes: bytes, encoding: .utf8)?
                 .contains("a different title under the same id") == true)
         #expect(throws: ImportError.self) { try ImportReader.read(bytes) }
+    }
+
+    /// **An orphan is as unrestorable as a duplicate, and `ImportReader` alone
+    /// cannot see it.** That reader deliberately skips referential closure — a
+    /// hand-trimmed file may rely on parents already on the target Mac — so a
+    /// store with a task whose project is missing produced no warning, and the
+    /// backup was still refused by `ImportService.plan` with
+    /// `danglingReference`, after Replace had wiped the original. Raised in
+    /// review of PR #31.
+    @Test("a backup with an orphaned row is named too, not just a duplicated id")
+    func warnsWhenTheBackupHasAnOrphan() throws {
+        let source = try CLIHarness()
+        try seed(source, title: "Shared", project: "Payments")
+        let file = try exportFile(from: source)
+
+        let target = try CLIHarness()
+        #expect(try target.run(["import", "--file", file.path]).code == 0)
+        // A task pointing at a project that is not in the store.
+        target.context.insert(
+            TaskItem(
+                id: UUID(), title: "orphan", projectID: UUID(),
+                createdAt: CLIHarness.now.addingTimeInterval(20)))
+        try target.context.save()
+
+        let result = try target.run(["import", "--file", file.path, "--replace"])
+
+        #expect(result.code == 0)
+        #expect(result.stderr.contains("Your data was replaced"))
+        #expect(result.stderr.contains("cannot be imported as it stands"))
     }
 
     /// The preview names the destruction before it happens, on stdout, in the

@@ -3061,6 +3061,20 @@ is not injected), does not exist for an in-memory store, and would change the ar
 an export — a redesign of a shipped feature, arriving at the seventh round of review on a task
 about a CLI. Worth its own task if Replace-on-damaged-store ever stops being hypothetical.
 
+**The readback runs `StoreMerge.validateShape`, not `ImportReader.read` alone.** The reader
+deliberately skips referential closure — a hand-trimmed file may rely on parents already present
+on the target Mac — so a store with an orphaned row produced no warning and the backup was still
+refused by `ImportService.plan`, after Replace had wiped the original. The check has to be the one
+an import actually applies.
+
+**Known limitation: hard-linked store paths still take two locks.** `CLIWriteLock` canonicalizes
+symlinks, which matters because macOS ships `/tmp` as one — but two hard links to a store file are
+two directory entries with no shared parent, so a lock beside each names a different file. Closing
+it means keying the lock by filesystem identity in a fixed directory, which is a different design
+and buys nothing against any plausible use: hard-linking a SQLite store to a second path is a
+deliberate act with no reason to exist in this product. Declined at the eighth review round of
+PR #31 and written down rather than left silent.
+
 **Falsified by** `CLIReplaceTests.warnsWhenTheBackupWouldNotRestore`, which asserts the replace
 proceeds, the warning reaches stderr on a run that exits 0, and the backup holds the pre-wipe rows
 while `ImportReader` still refuses it.

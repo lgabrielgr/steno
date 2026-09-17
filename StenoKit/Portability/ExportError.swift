@@ -37,9 +37,14 @@ public enum ExportError: Error, Equatable, Sendable {
             to finish, and try again.
             """
         case .backupNotRestorable(let detail):
+            // **This fires *after* the replace has succeeded.** The wording
+            // below described the refusal that was implemented first and then
+            // reverted (D-119), and survived the change — telling the user
+            // nothing had been replaced at the exact moment everything had.
+            // Raised in review of PR #31.
             """
-            Steno could not make a backup it would be able to restore, so \
-            nothing was replaced. Your data has not been changed. \(detail)
+            Your data was replaced. The backup Steno wrote first cannot be \
+            imported as it stands, so restoring it needs a hand edit: \(detail)
             """
         }
     }

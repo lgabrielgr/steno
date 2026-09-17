@@ -156,9 +156,18 @@ public struct BackupWriter {
         //
         // The warning rides on the receipt so both surfaces report it. Silence
         // here would let someone believe they had a working way back.
+        // **The check has to be the one an import actually applies.**
+        // `ImportReader.read` validates the envelope, unique ids, the cached-ref
+        // pair and report windows — but deliberately *not* referential closure,
+        // because a hand-trimmed file may rely on parents already present on the
+        // target Mac. A damaged store with an orphaned task therefore produced
+        // no warning here and was still refused by `ImportService.plan` with
+        // `danglingReference` — after Replace had wiped the original.
+        // `StoreMerge.validateShape` is what `plan` runs, so it is what this
+        // must run. Raised in review of PR #31.
         var warning: String?
         do {
-            _ = try ImportReader.read(data)
+            try StoreMerge.validateShape(of: MergedStore(try ImportReader.read(data)))
         } catch let error as ImportError {
             warning = ExportError.backupNotRestorable(detail: error.detail).message
             Log.app.error("backup is not directly restorable: \(error.detail, privacy: .public)")
