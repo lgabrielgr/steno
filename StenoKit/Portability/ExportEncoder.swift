@@ -23,17 +23,24 @@ public struct ExportEncoder {
     private let includesCachedExternalData: Bool
     private let now: () -> Date
     private let exportedBy: String
+    private let afterRead: () -> Void
 
+    /// - Parameter afterRead: runs between the two readings `snapshot()` takes.
+    ///   The only way to exercise the unstable-store path: a real concurrent
+    ///   writer cannot be arranged in a headless single-process test (§9.4), and
+    ///   a path that cannot be reached by a test is a path nobody has run.
     public init(
         context: ModelContext,
         includesCachedExternalData: Bool = false,
         now: @escaping () -> Date = Date.init,
-        exportedBy: String = ExportDocument.userAgent()
+        exportedBy: String = ExportDocument.userAgent(),
+        afterRead: @escaping () -> Void = {}
     ) {
         self.context = context
         self.includesCachedExternalData = includesCachedExternalData
         self.now = now
         self.exportedBy = exportedBy
+        self.afterRead = afterRead
     }
 
     /// The store as a typed document, ordered per `ExportOrdering`.
@@ -48,18 +55,81 @@ public struct ExportEncoder {
     /// store is not a failure: it yields five empty arrays, which matters
     /// because M2.5-05 auto-exports on quit and defaults ON, so the first
     /// export on a new machine is likely this one.
+    /// **Read twice, and only return a reading that repeated.**
+    ///
+    /// The five fetches below are five separate reads of the store, with no
+    /// transaction around them. A writer committing between two of them yields a
+    /// document whose parts come from different generations — tasks whose
+    /// project was fetched before it existed, events whose task was not. Nothing
+    /// is lost on this Mac; the *file* is incoherent, and it fails much later as
+    /// `ImportError.danglingReference` on the machine trying to restore from it.
+    /// With sync cancelled (§10, D1) that file may be the only copy, and
+    /// M2.5-05's auto-export writes unattended while the app is running, which is
+    /// exactly when a concurrent writer exists. Raised in review of PR #31.
+    ///
+    /// **It compares two readings rather than validating one.** The obvious
+    /// alternative — run `StoreMerge.validateShape` over the document and refuse
+    /// if it fails — would refuse to export a store that was *already* malformed,
+    /// and `BackupWriter` goes through this method: Replace could then no longer
+    /// back up the damaged store it exists to recover from (D-106, D-110), and
+    /// §10's "a row this type declines to write is user data with no second copy"
+    /// would be violated by the safety check itself. Two equal readings mean the
+    /// store held still; they say nothing about whether it is healthy, which is
+    /// correct — that is not this type's business.
+    ///
+    /// The cost is a second pass over the store per export. Export is
+    /// user-initiated or runs on quit; it is not on §1.1's capture path.
     public func snapshot() throws -> ExportDocument {
-        let projects = try context.fetch(FetchDescriptor<Project>())
-            .map(ExportedProject.init).sorted(by: ExportOrdering.precedes)
+        var previous = try read()
+        for _ in 0..<Self.stableReadAttempts {
+            afterRead()
+            let current = try read()
+            if current.holdsSameRecords(as: previous) { return current }
+            previous = current
+        }
+        throw ExportError.storeChangedWhileReading
+    }
+
+    /// Two retries after the first comparison. A store under continuous write
+    /// never settles and must fail rather than spin; a single passing writer
+    /// costs one extra pass.
+    private static let stableReadAttempts = 2
+
+    /// One reading of the store, which may or may not be a coherent one.
+    ///
+    /// **Each reading gets a `ModelContext` of its own, and the comparison is
+    /// worthless without it.** A fetch on a context that already holds a row
+    /// returns the row it holds rather than re-reading the persisted value — so
+    /// two readings through one context can agree about an *updated* or
+    /// *deleted* record and the stability check would see only insertions.
+    /// Raised in review of PR #31.
+    ///
+    /// **Measured, and narrower than it first appeared:** SwiftData does
+    /// propagate another *in-process* context's save to a sibling, so this fix
+    /// changes nothing for a writer inside this process — `ExportStableReadTests`
+    /// stays green with it reverted. It guards the case that actually motivates
+    /// the whole stability check: a writer in another **process**, which §9.4
+    /// keeps out of the test bundle. Defensive, and honest about being
+    /// unfalsifiable here.
+    ///
+    /// The consequence, stated rather than discovered later: this reads
+    /// **persisted** state, so unsaved changes in the caller's context are not
+    /// exported. That is the right answer for a file — an unsaved change is not
+    /// part of the store yet — and it matches `ImportService.plan`, which
+    /// refuses to run at all against a context with pending changes.
+    private func read() throws -> ExportDocument {
+        let context = ModelContext(self.context.container)
+        let projects = ExportOrdering.sortedProjects(
+            try context.fetch(FetchDescriptor<Project>()).map(ExportedProject.init))
         let tasks = ExportOrdering.sortedByWireInstant(
             try context.fetch(FetchDescriptor<TaskItem>()).map(ExportedTask.init),
             instant: { $0.createdAt }, id: { $0.id })
         let events = ExportOrdering.sortedByWireInstant(
             try context.fetch(FetchDescriptor<Event>()).map(ExportedEvent.init),
             instant: { $0.timestamp }, id: { $0.id })
-        let refs = try context.fetch(FetchDescriptor<SourceRef>())
-            .map { ExportedSourceRef($0, includingCachedData: includesCachedExternalData) }
-            .sorted(by: ExportOrdering.precedes)
+        let refs = ExportOrdering.sortedRefs(
+            try context.fetch(FetchDescriptor<SourceRef>())
+                .map { ExportedSourceRef($0, includingCachedData: includesCachedExternalData) })
         let reports = ExportOrdering.sortedByWireInstant(
             try context.fetch(FetchDescriptor<StandupReport>()).map(ExportedReport.init),
             instant: { $0.generatedAt }, id: { $0.id })

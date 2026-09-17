@@ -44,6 +44,52 @@ make run                                    # build and launch
 make                                        # list every target
 ```
 
+## Export and import from the command line
+
+The whole store goes in and out as one JSON file (§10). The same engine is
+behind `File ▸ Export…` and these commands — a difference between the two is a
+bug, not a feature.
+
+```bash
+make export                     # steno-export-YYYY-MM-DD.json, here
+make export FILE=~/Dropbox      # the dated name, inside that folder
+make export FILE=~/backup.json  # exactly that path, overwritten
+make import FILE=~/backup.json  # merge it in (never deletes)
+```
+
+Both wrap subcommands on the app binary, which you can call directly for the
+flags the make targets do not expose:
+
+```bash
+.build/Build/Products/Debug/Steno.app/Contents/MacOS/Steno export --include-cached
+.build/Build/Products/Debug/Steno.app/Contents/MacOS/Steno import --file x.json --replace
+```
+
+Exit codes are `0` success, `1` the operation failed, `2` the command line was
+wrong; failures print to stderr.
+
+**Quit Steno before importing.** `steno import` refuses while the app is
+running, and that guard is doing real work: nothing tells a running app that its
+store moved, so it would go on holding the rows it read at launch and write them
+back over the import on its next save. `steno export` is a pure read and runs
+either way.
+
+Leave it quit until the import finishes. The check is made three times — last of
+all immediately before the write — but launching Steno *during* an import can
+still let the app save stale rows over it. Two `steno` commands cannot collide
+with each other; they take a lock beside the store. The app does not take that
+lock, deliberately: doing so would put an interprocess lock on every save the app
+makes, quick capture included. See D-118.
+
+**`--replace` cannot be undone**, which is why no make target exposes it. It
+wipes the local store and installs the file, after writing a backup to
+`~/Library/Application Support/Steno/Backups`; if that backup cannot be written,
+nothing is replaced. Merge — the default — never deletes anything.
+
+Double-clicking the app never lands in CLI mode: a subcommand is recognised only
+when the first argument does not begin with `-`, and every argument macOS passes
+on launch does.
+
 ## Tests, lint, and formatting
 
 ```bash

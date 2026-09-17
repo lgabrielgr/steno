@@ -19,7 +19,7 @@ XCCONFIG := Local.xcconfig
 TOOLS    := xcodegen xcbeautify swiftlint
 
 .DEFAULT_GOAL := help
-.PHONY: help bootstrap preflight clean generate build run release test lint format
+.PHONY: help bootstrap preflight clean generate build run release test lint format export import
 
 help: ## Show this help
 	@echo "Steno — make targets:"
@@ -191,6 +191,44 @@ test: preflight generate ## Unit tests — headless, network denied
 	$(XCB) -configuration Debug $(DEST) build-for-testing | xcbeautify
 	sandbox-exec -f $(SANDBOX) \
 	  $(XCB) -configuration Debug $(DEST) test-without-building | xcbeautify
+
+# §10.5's CLI surface: `steno export` / `steno import` on the app binary, wrapped
+# so the round trip is scriptable from the same place everything else in this
+# repo is run (§9.2).
+#
+# Both depend on `build`, so neither can run a stale binary — the failure mode
+# otherwise is an export written by yesterday's encoder, which is silent.
+#
+# `FILE` is optional for export and required for import, which is the one place
+# this deviates from §10.5's `make export FILE=...`: the export filename is
+# derived from the date (§10.2), so requiring a path would make the common case
+# the awkward one.
+#
+# **Replace is deliberately absent.** §10.1 says Replace must never be the path
+# of least resistance, and `make import FILE=x REPLACE=1` is the easiest thing in
+# this repo to typo into a wiped store. The only route is
+# `steno import --file x --replace`, typed in full.
+# **FILE is exported to the recipe's shell, never interpolated into it.**
+# `$(FILE)` is substituted by Make into the recipe *source*, so quoting it was
+# not enough: a path containing a quote, `$()` or a backtick closes the quote
+# and the rest runs as shell. Demonstrated before fixing —
+# `make -n export FILE='a"; echo PWNED; echo "'` emitted `echo PWNED` as its own
+# command. Exporting the variable and writing `"$$FILE"` puts the value in the
+# environment, where the shell expands it as one word and no metacharacter is
+# ever parsed. It also fixes the original space-splitting bug this comment used
+# to be about. Both raised in review of PR #31.
+export FILE
+
+export: build ## Export the whole store (FILE=path optional)
+	@if [ -n "$$FILE" ]; then "$(BIN)" export --output "$$FILE"; else "$(BIN)" export; fi
+
+# The `test -n` guard, rather than letting the binary complain: an unset Make
+# variable expands to nothing, so `make import` would otherwise run
+# `steno import --file` and report a missing path for a flag the user never
+# typed. Exit 2 matches the CLI's own usage code.
+import: build ## Merge an export into the store (FILE=path required)
+	@test -n "$$FILE" || { echo "usage: make import FILE=path/to/export.json"; exit 2; }
+	@"$(BIN)" import --file "$$FILE"
 
 # The swiftlint check lives here rather than in `preflight`, which gates
 # build/run/release — none of which should start requiring a linter.

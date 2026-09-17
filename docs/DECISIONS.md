@@ -2855,6 +2855,232 @@ and every value it carries is already at wire precision.
 
 ---
 
+### D-113 — A bare first argument is what makes the binary a CLI
+
+**2026-09-17** · M2.5-04 · **Status:** accepted
+
+`StenoMain.main()` treats an invocation as `steno export` / `steno import` when `argv[1]` exists
+and does not begin with `-`; anything else calls `StenoApp.main()`. `@main` moved off `StenoApp`
+onto a six-line `StenoMain` enum to make that branch possible.
+
+**Why: it makes "a double-click never lands in CLI mode" structural rather than hopeful.** Every
+argument LaunchServices passes is dash-prefixed — the legacy `-psn_0_…` process serial number, and
+`-NSDocumentRevisionsDebugMode YES` when Xcode launches the app — so no launch path short of
+`open -a Steno --args export` can produce a bare first word, and that one is deliberate. The rule
+also decides what a typo does: `steno exprot` has a bare first word, so it is a CLI invocation with
+an unrecognised subcommand and gets usage on stderr with exit 2. Falling through to the GUI there
+would be worse — a scripted export that silently opens a window and hangs the script on a run loop
+that never returns.
+
+Branching inside `StenoApp.init` was not an option: SwiftUI's generated `main` starts
+`NSApplication` before any of our code runs, so a subcommand would already have required a window
+server by the time it could refuse to open a window. A second executable target was rejected
+because §10.5 says "on the app binary", and it would double the signing configuration §9.3 pins.
+
+**Falsified by** `CLIArgvRuleTests`, which pins all four cases as a property of
+`CLIEntry.isCommandLineInvocation`.
+
+---
+
+### D-114 — `STENO_STORE_PATH` redirects the CLI's store, and only the CLI's
+
+**2026-09-17** · M2.5-04 · **Status:** accepted
+
+`CLIEntry.run` opens `StenoStore.live(at:)` with the URL named by `STENO_STORE_PATH`, falling back
+to `defaultURL` when the variable is unset *or empty*. The GUI path ignores the variable entirely.
+
+**Why: the subprocess test needs the real binary and must not touch the real store.** M2.5-04's
+"does not open a window or require a GUI session" is only observable by running the shipped binary,
+and a test that opened `~/Library/Application Support/Steno` is not one anybody can run twice. An
+environment variable rather than a `--store` flag, because the task asks to keep the flag surface
+small — and confining it to the CLI path is what stops a variable inherited from a shell from
+silently redirecting the user's own data.
+
+Empty is treated as unset because `STENO_STORE_PATH= steno export` is how a shell clears a
+variable, and `URL(fileURLWithPath: "")` resolves to the working directory — a store somewhere
+nobody asked for. This is a test seam, documented as one; it is not a supported way to run Steno.
+
+**Falsified by** `CLIEntryTests.storePathFallsBack` and `CLIBinaryTests.honoursTheStoreSeam`.
+
+---
+
+### D-115 — `steno import` refuses while the app is running; `steno export` does not
+
+**2026-09-17** · M2.5-04 · **Status:** accepted
+
+`CLIInstanceCheck.anotherInstanceIsRunning` asks `NSRunningApplication` for processes under
+`com.lgabrielgr.steno`, excluding our own pid. `importFile` refuses when it answers true, before
+reading the file. `export` never asks.
+
+**Why: a CLI import behind an open app is silently reverted.** There is no cross-process change
+notification in this product — `.stenoDidWrite` is a `NotificationCenter` post inside one process
+(D-019), and SwiftData tells the GUI nothing when its store moves underneath it. The app goes on
+holding live model instances from before the merge, and its next save writes them back over the
+imported rows. The user sees the import succeed and the data quietly revert.
+
+Export carries no such hazard: it is a pure read (D-085). The asymmetry is load-bearing rather than
+cautious — M2.5-05 auto-exports from a machine where Steno is by definition running, so refusing
+both would break the next task.
+
+**Measured, not assumed.** The design flagged this as the one part that could ship as a guard that
+never fires. Against the built binary: with the app closed the import proceeds; with the app open
+it is refused and the export still succeeds; and the CLI process does not see *itself*, because a
+terminal-launched process that never creates `NSApplication` does not register with LaunchServices
+— the pid filter covers the case where a future macOS changes that.
+
+**Falsified by** `CLIImportTests.refusedWhileAppIsRunning` together with
+`reachesTheFileWhenClosed`, which is the pair that makes the guard falsifiable rather than a
+tautology about one boolean.
+
+---
+
+### D-116 — `--output` overwrites, and a directory means "the dated name inside it"
+
+**2026-09-17** · M2.5-04 · **Status:** accepted · closes the collision question `ExportFilename` defers
+
+`CLIRunner.resolveDestination` resolves no `--output` to §10.2's dated filename in the working
+directory, an `--output` naming an existing directory to that filename inside it, and anything else
+to the path as given — written with `.atomic`, overwriting.
+
+**Why: a scripted daily export to one folder has to be re-runnable.** `ExportFilename`'s own
+documentation hands collisions to this task. Refusing on collision would push the problem onto
+M2.5-05's retention and make a second export on the same day an error; a `--force` flag would add a
+third flag to a surface the task asks to keep small and make every script carry it. Nothing is lost
+that the store does not still hold, because export is a pure read. The exposure — a mistyped
+`--output` clobbering an unrelated file — is the price of conventional `-o` behaviour.
+
+The directory case exists for M2.5-05, which points a folder at a sync drive; without it,
+`--output ~/Dropbox/steno` would try to write a file over a directory and fail with an errno nobody
+can act on. A **missing** parent directory is refused rather than created: `--output` is a
+destination, not an instruction to build a tree.
+
+**Falsified by** `CLIExportTests.directoryDestination`, `.overwrites`, and
+`.missingParentDirectory` — the last of which asserts the refusal's *sentence*, because mutation
+testing showed that asserting the path alone passed with the guard deleted (the failing atomic
+write names the same path).
+
+---
+
+### D-117 — Replace is reachable from the binary, never from a make target
+
+**2026-09-17** · M2.5-04 · **Status:** accepted
+
+`make export FILE=…` and `make import FILE=…` wrap the two subcommands. `make import` merges and
+has no Replace switch; `steno import --file x --replace` is the only route.
+
+**Why: §10.1 says Replace must never be the path of least resistance.** `make import FILE=x
+REPLACE=1` is the easiest thing in this repo to typo into a wiped store, and a make target is
+exactly the kind of thing people re-run from shell history. The CLI keeps no typed confirmation —
+M2.5-04 puts interactive prompts out of scope, and `--replace` typed in full is itself the explicit
+gesture — so the make layer is where the remaining friction has to live.
+
+`FILE` is optional for `export` and required for `import`, which deviates from §10.5's literal
+`make export FILE=...`: the export filename is derived from the date, so requiring a path would
+make the common case the awkward one. Flagged in the PR body rather than amended.
+
+---
+
+### D-118 — One CLI writer at a time; the GUI is warned, not locked
+
+**2026-09-17** · M2.5-04 · **Status:** accepted · extends D-115 · **residual race accepted by the
+user**, 2026-09-17, on review of PR #31
+
+`CLIWriteLock` takes a non-blocking `flock` on `.steno-cli.lock` beside the store, held across the
+whole of `plan`-then-`apply`. `CLIInstanceCheck` is checked three times on the import path — in
+`CLIEntry` before the container is opened, at the top of `CLIRunner.importFile`, and again
+immediately before the transaction.
+
+**Why a lock at all.** D-115's guard only sees the GUI. A terminal-launched `steno import` never
+creates `NSApplication`, so it does not register with LaunchServices and two of them pass that
+guard together — then both plan against the same snapshot, both pass `ImportService`'s
+compare-then-write staleness check, and both save. Two concurrent `--replace` runs would leave
+whichever finished last. Raised in review of PR #31.
+
+`flock` rather than a pid file: the lock lives on the open file description, so the kernel drops
+it when the process dies and there is no stale lock to reap. Non-blocking rather than queueing, so
+a second invocation refuses in the same shape as the running-app guard instead of hanging a
+script. Beside the store rather than at a fixed path, so two CLIs pointed at different stores (the
+`STENO_STORE_PATH` seam) do not block each other. The lock file is in `protectedURLs`, because
+`--output` onto that pathname would atomically replace it and leave the holder on an orphaned
+inode while the next process locks the replacement — a lock that has silently stopped being one.
+
+**What this deliberately does not close.** The running-app check is time-of-check: Steno can be
+launched *after* the last check passes and still save stale rows over an import in flight. The
+third check narrows that window to the transaction itself; it does not remove it.
+
+**Closing it properly would mean making the GUI take the same lock, and that is not this task's
+decision to make.** Every save the app performs would acquire an interprocess lock — including
+quick capture, where §1.1 makes latency a P0 functional requirement and CLAUDE.md's
+non-negotiable #4 forbids changing that path without measuring it. That is an app-wide change
+with a performance budget attached, and it belongs to whoever owns that budget, not to a task
+whose subject is a CLI surface. The honest position is a narrowed window, a documented residual
+race, and a README line telling the user to quit Steno first.
+
+The residual race needs the user to launch Steno during the seconds an import is applying. §10.5
+already assumes single-user, one-machine-at-a-time usage.
+
+**This was put to the user rather than assumed, and accepted.** The alternative — GUI writes
+taking `CLIWriteLock` — carries a capture-latency cost that §1.1 makes a P0 concern, so it was
+not an implementer's call to make silently. If the answer ever changes, it is a task of its own
+with a measurement attached, not an amendment to this entry.
+
+**Falsified by** nothing automated on the GUI side — by construction, since the suite cannot run
+`NSApplication` (§9.4). `CLIImportTests.writeLockRefusesASecondWriter` covers the CLI-to-CLI half.
+
+---
+
+### D-119 — A backup that will not import is written and named, not withheld
+
+**2026-09-17** · M2.5-04 · **Status:** accepted · extends D-110
+
+`BackupWriter.write` reads its own output back through `ImportReader`. When that fails it still
+writes the file and returns a `BackupReceipt` carrying a `warning`, which `steno import --replace`
+prints to stderr and the File menu puts in the window's banner — on an operation that otherwise
+succeeded.
+
+**Why this case exists at all.** D-117's sibling fix let `.replace` proceed on a store holding
+duplicate ids, because that is the damage Replace exists to repair (D-106 skips shape validation
+in this mode for the same reason). `ExportEncoder` serializes every physical row, so the mandatory
+pre-wipe backup of such a store carries the duplicates, and `ImportReader.validateShape` refuses
+it. Raised in review of PR #31.
+
+**Refusing the Replace was implemented first and reverted.** It makes Replace permanently unable
+to repair a duplicated store — the recovery the whole arrangement exists to protect — and two
+existing tests said so immediately. Withholding the destructive operation sounds safe and is not:
+it leaves the user with a store they cannot fix and no route forward.
+
+**The backup is not worthless, which is what makes warning the right answer.** It holds every row
+that was about to be deleted, and §10.2 chose JSON precisely so a person can inspect and edit one.
+Restoring it needs a hand edit to the duplicated id first. The failure mode being closed is
+*silence*: a user who believes they have a working way back and discovers otherwise at the moment
+they need it.
+
+**The better answer, not taken here.** A raw copy of the three SwiftData files would be restorable
+whatever the store contains. It needs a seam `BackupWriter` does not have (`FileManager.copyItem`
+is not injected), does not exist for an in-memory store, and would change the artifact §10.1 calls
+an export — a redesign of a shipped feature, arriving at the seventh round of review on a task
+about a CLI. Worth its own task if Replace-on-damaged-store ever stops being hypothetical.
+
+**The readback runs `StoreMerge.validateShape`, not `ImportReader.read` alone.** The reader
+deliberately skips referential closure — a hand-trimmed file may rely on parents already present
+on the target Mac — so a store with an orphaned row produced no warning and the backup was still
+refused by `ImportService.plan`, after Replace had wiped the original. The check has to be the one
+an import actually applies.
+
+**Known limitation: hard-linked store paths still take two locks.** `CLIWriteLock` canonicalizes
+symlinks, which matters because macOS ships `/tmp` as one — but two hard links to a store file are
+two directory entries with no shared parent, so a lock beside each names a different file. Closing
+it means keying the lock by filesystem identity in a fixed directory, which is a different design
+and buys nothing against any plausible use: hard-linking a SQLite store to a second path is a
+deliberate act with no reason to exist in this product. Declined at the eighth review round of
+PR #31 and written down rather than left silent.
+
+**Falsified by** `CLIReplaceTests.warnsWhenTheBackupWouldNotRestore`, which asserts the replace
+proceeds, the warning reaches stderr on a run that exits 0, and the backup holds the pre-wipe rows
+while `ImportReader` still refuses it.
+
+---
+
 ## Open — decided by the task that owns them
 
 Each of these is a real choice the spec leaves open. The owning task decides it, records it in

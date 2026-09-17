@@ -34,6 +34,17 @@ public struct ExportDocument: Codable, Equatable, Sendable {
 }
 
 extension ExportDocument {
+    /// Same records, ignoring `exportedAt`.
+    ///
+    /// `==` cannot answer this: `exportedAt` is read from the clock once per
+    /// document, so two readings of an unchanged store are never equal. Only the
+    /// five arrays describe the store; the envelope describes the export.
+    func holdsSameRecords(as other: ExportDocument) -> Bool {
+        projects == other.projects && tasks == other.tasks && events == other.events
+            && sourceRefs == other.sourceRefs && reports == other.reports
+            && includesCachedExternalData == other.includesCachedExternalData
+    }
+
     /// ISO-8601 at millisecond precision — `2026-08-10T09:14:02.481Z`.
     ///
     /// §10.2's example showed whole seconds before this task amended it, which

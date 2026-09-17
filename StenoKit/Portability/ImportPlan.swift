@@ -151,13 +151,17 @@ public struct ImportPlan: Equatable, Sendable {
     /// §10.6's idempotency criterion stated as one property, and M2.5-03's cue
     /// to say "nothing to import" rather than show an empty preview.
     ///
-    /// **Deletions count.** A Replace whose file happens to contain every local
-    /// record but fewer of them would otherwise read as nothing to do, and the
-    /// one preview that most needs showing would be suppressed.
+    /// **Deletions count, and they are counted in rows.** A Replace whose file
+    /// happens to contain every local record but fewer of them would otherwise
+    /// read as nothing to do, and the one preview that most needs showing would
+    /// be suppressed. `deletedRows` rather than `deletions` is what catches the
+    /// duplicate-row case below, where no *id* is doomed but a physical row
+    /// still goes away.
     public var isEmpty: Bool {
         projects.isNoOp && tasks.isNoOp && events.isNoOp && sourceRefs.isNoOp && reports.isNoOp
-            && deletions.isEmpty
+            && deletions.isEmpty && deletedRows == .none
     }
+
 }
 
 extension ImportPlan {
@@ -180,11 +184,21 @@ extension ImportPlan {
         let localStatus = Dictionary(
             local.tasks.map { ($0.id, $0.status) }, uniquingKeysWith: { first, _ in first })
 
-        let projects = Self.diff(local: local.projects, merged: merged.projects)
-        let tasks = Self.diff(local: local.tasks, merged: merged.tasks)
-        let events = Self.diff(local: local.events, merged: merged.events)
-        let refs = Self.diff(local: local.sourceRefs, merged: merged.sourceRefs)
-        let reports = Self.diff(local: local.reports, merged: merged.reports)
+        // **Only `.replace` collapses duplicates**, because only `.replace`
+        // removes rows. A merge leaves a duplicated row exactly where it is, so
+        // counting it as doomed there would promise a deletion that never
+        // happens — and §3.3 makes that promise one this product cannot keep.
+        let collapsing = mode == .replace
+        let projects = Self.diff(
+            local: local.projects, merged: merged.projects, collapsingDuplicates: collapsing)
+        let tasks = Self.diff(
+            local: local.tasks, merged: merged.tasks, collapsingDuplicates: collapsing)
+        let events = Self.diff(
+            local: local.events, merged: merged.events, collapsingDuplicates: collapsing)
+        let refs = Self.diff(
+            local: local.sourceRefs, merged: merged.sourceRefs, collapsingDuplicates: collapsing)
+        let reports = Self.diff(
+            local: local.reports, merged: merged.reports, collapsingDuplicates: collapsing)
 
         self.init(
             mode: mode,
@@ -227,8 +241,33 @@ extension ImportPlan {
 
     /// Counts, write set and deletion set from one walk, so they cannot
     /// disagree.
+    /// - Parameter collapsingDuplicates: count the local rows that share an id
+    ///   with a survivor as deleted. True for `.replace` only — see the call
+    ///   site, and the note on `deletedRows` below.
+    /// Physical rows a Replace removes: every row under a doomed id, plus the
+    /// **surplus** rows sharing an id with a survivor.
+    ///
+    /// Splitting the two is not fussiness — adding a flat `local.count -
+    /// localByID.count` double-counts a duplicated row whose id is *also*
+    /// doomed, which D-111's own test caught the moment it was tried: three
+    /// rows became four. A doomed id's rows are already counted by the filter,
+    /// so only duplicates among the survivors are left to add.
+    private static func deletedRowCount<Element: ExportRecord>(
+        local: [Element], localByID: [UUID: Element], doomed: Set<UUID>,
+        collapsingDuplicates: Bool
+    ) -> Int {
+        let doomedRows = local.filter { doomed.contains($0.id) }.count
+        guard collapsingDuplicates else { return doomedRows }
+        let survivingRows = local.count - doomedRows
+        let survivingIDs = localByID.count - doomed.count
+        return doomedRows + (survivingRows - survivingIDs)
+    }
+
+    /// - Parameter collapsingDuplicates: count the local rows that share an id
+    ///   with a survivor as deleted. True for `.replace` only — see the call
+    ///   site, and the note on `deletedRows` below.
     private static func diff<Element: ExportRecord>(
-        local: [Element], merged: [Element]
+        local: [Element], merged: [Element], collapsingDuplicates: Bool
     ) -> Diff {
         // `uniquingKeysWith` rather than `uniqueKeysWithValues`: this side comes
         // from our own snapshot so duplicates should be impossible, and trapping
@@ -265,7 +304,22 @@ extension ImportPlan {
             deletions: doomed,
             // Counted over `local`, not over `localByID` — the dictionary is
             // exactly what collapses the duplicates this number exists to see.
-            deletedRows: local.filter { doomed.contains($0.id) }.count)
+            //
+            // **Plus the surplus rows a Replace destroys without dooming their
+            // id.** `id` carries no `@Attribute(.unique)`, so a damaged store
+            // can hold two physical rows under one id, and `.replace` is the one
+            // mode that reaches here without `StoreMerge.validateShape` refusing
+            // such a store first (D-106) — refusing it would disable recovery in
+            // exactly the situation Replace exists for. The extra row is not
+            // doomed (its id survives in the file) and is not a write (the
+            // survivor is `unchanged`), so before this it appeared in no count
+            // at all: the plan read as empty, and once that was fixed the
+            // preview still said only "= 1 task already present" while `apply`
+            // deleted a row. §10.4's preview has to describe what happens.
+            // Raised twice in review of PR #31.
+            deletedRows: deletedRowCount(
+                local: local, localByID: localByID, doomed: doomed,
+                collapsingDuplicates: collapsingDuplicates))
     }
 }
 

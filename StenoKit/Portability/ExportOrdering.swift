@@ -36,6 +36,16 @@ enum ExportOrdering {
             < (rhs.sortOrder, rhs.name, rhs.id.uuidString)
     }
 
+    /// `precedes`, with any remaining tie broken by content.
+    static func sortedProjects(_ items: [ExportedProject]) -> [ExportedProject] {
+        totallyOrdered(items, by: precedes, contentKey: { contentKey($0) })
+    }
+
+    /// `precedes`, with any remaining tie broken by content.
+    static func sortedRefs(_ items: [ExportedSourceRef]) -> [ExportedSourceRef] {
+        totallyOrdered(items, by: precedes, contentKey: { contentKey($0) })
+    }
+
     /// Order `items` by the timestamp **as the file carries it**, then by id.
     ///
     /// **The sort key is the emitted string, not the in-memory `Date`.** Two
@@ -57,21 +67,91 @@ enum ExportOrdering {
     /// Fixed-width UTC ISO-8601 sorts lexicographically as it does
     /// chronologically, and the key is computed once per record rather than
     /// once per comparison.
-    static func sortedByWireInstant<Element>(
+    static func sortedByWireInstant<Element: Encodable>(
         _ items: [Element],
         instant: (Element) -> Date,
         id: (Element) -> UUID
     ) -> [Element] {
-        items
-            .map {
-                (
-                    key: ExportDocument.wireString(instant($0)),
-                    tieBreak: id($0).uuidString,
-                    value: $0
-                )
+        let keyed = items.map {
+            (
+                key: ExportDocument.wireString(instant($0)),
+                tieBreak: id($0).uuidString,
+                value: $0
+            )
+        }
+        return totallyOrdered(
+            keyed,
+            by: { ($0.key, $0.tieBreak) < ($1.key, $1.tieBreak) },
+            contentKey: { contentKey($0.value) }
+        ).map(\.value)
+    }
+
+    /// Sort, then order whatever the comparator still calls equal by encoded
+    /// content.
+    ///
+    /// **Every comparator above can tie, and only a malformed store reaches
+    /// that.** `id` carries no `@Attribute(.unique)`, so two physical rows can
+    /// share one id — and `.replace` reads such a store on purpose, because
+    /// refusing would disable the recovery it exists for (D-106). Two rows with
+    /// the same id and the same wire instant tie on every component, and
+    /// `sorted(by:)` is not stable, so their relative order is unspecified.
+    ///
+    /// Two things broke on that. §10.2 promises two exports of an unchanged
+    /// store are byte-identical, which is what makes M2.5-05's history a history
+    /// rather than churn — and `ExportEncoder`'s stability check compares two
+    /// readings, so an order that varies between them reports
+    /// `storeChangedWhileReading` on a store nobody is touching. That refusal
+    /// would then block `BackupWriter`, and with it the Replace recovery path.
+    /// Raised in review of PR #31.
+    ///
+    /// The encoded form is the tie-break because it is the only total,
+    /// deterministic function of a record this module already has —
+    /// `ExportDocument.encoder()` sets `.sortedKeys`, so the same value always
+    /// produces the same bytes. It is computed **only inside a run the
+    /// comparator tied**, which in a healthy store is never.
+    private static func totallyOrdered<Element>(
+        _ items: [Element],
+        by precedes: (Element, Element) -> Bool,
+        contentKey: (Element) -> String
+    ) -> [Element] {
+        let sorted = items.sorted(by: precedes)
+        guard sorted.count > 1 else { return sorted }
+
+        var result: [Element] = []
+        result.reserveCapacity(sorted.count)
+        var run: [Element] = [sorted[0]]
+        for item in sorted.dropFirst() {
+            let last = run[run.count - 1]
+            if precedes(last, item) || precedes(item, last) {
+                result.append(contentsOf: byContent(run, contentKey))
+                run = [item]
+            } else {
+                run.append(item)
             }
-            .sorted { ($0.key, $0.tieBreak) < ($1.key, $1.tieBreak) }
+        }
+        result.append(contentsOf: byContent(run, contentKey))
+        return result
+    }
+
+    /// A tied run, ordered by encoded bytes. Single elements pass straight
+    /// through, so the encoder is never reached for a healthy store.
+    private static func byContent<Element>(
+        _ run: [Element], _ contentKey: (Element) -> String
+    ) -> [Element] {
+        guard run.count > 1 else { return run }
+        return run.map { (key: contentKey($0), value: $0) }
+            .sorted { $0.key < $1.key }
             .map(\.value)
+    }
+
+    /// A record's encoded bytes, as a sort key.
+    ///
+    /// A record that fails to encode sorts as the empty string, leaving it
+    /// tied — no worse than before this existed, and unreachable for the five
+    /// `Exported*` types, all of which are `Codable`.
+    private static func contentKey(_ value: some Encodable) -> String {
+        guard let data = try? ExportDocument.encoder().encode(value) else { return "" }
+        return String(bytes: data, encoding: .utf8) ?? ""
     }
 
     /// §3.4's dedup key, which groups a task's refs together.

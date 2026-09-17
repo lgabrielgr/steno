@@ -170,3 +170,57 @@ func tiedTimestampsAreBrokenByID() throws {
     #expect(try forwards.encoder().snapshot().events.map(\.id) == [low, high])
     #expect(try backwards.encoder().snapshot().events.map(\.id) == [low, high])
 }
+
+/// Duplicate rows must not make the order — or the file — vary between runs.
+///
+/// **Only a malformed store reaches this**, and `.replace` reads one on purpose
+/// (D-106). Two rows sharing an id *and* a wire instant tie on every component
+/// of every comparator, and `sorted(by:)` is not stable — so §10.2's promise
+/// that two exports of an unchanged store are byte-identical failed, and
+/// `ExportEncoder`'s stability check reported `storeChangedWhileReading` on a
+/// store nobody was touching, which would then block `BackupWriter` and with it
+/// the Replace recovery path. Raised in review of PR #31.
+@Suite struct ExportOrderingDuplicateTests {
+    private func twins() -> [ExportedEvent] {
+        let id = MergeFixture.id(1)
+        let task = MergeFixture.id(2)
+        return [
+            ExportedEvent(
+                id: id, taskID: task, timestamp: MergeFixture.origin, kind: .note,
+                body: "zebra", payload: nil, isRedacted: false),
+            ExportedEvent(
+                id: id, taskID: task, timestamp: MergeFixture.origin, kind: .note,
+                body: "aardvark", payload: nil, isRedacted: false),
+        ]
+    }
+
+    @Test("two rows sharing an id and an instant get a deterministic order")
+    func duplicatesOrderDeterministically() {
+        let sorted = { (items: [ExportedEvent]) in
+            ExportOrdering.sortedByWireInstant(
+                items, instant: { $0.timestamp }, id: { $0.id })
+        }
+        let forwards = sorted(twins())
+        let backwards = sorted(twins().reversed())
+
+        // **Input order reversed, output order identical.** Running the same
+        // input twice would prove nothing — an unstable sort is free to agree
+        // with itself.
+        #expect(forwards.map(\.body) == backwards.map(\.body))
+        #expect(forwards.map(\.body) == ["aardvark", "zebra"])
+    }
+
+    @Test("a tied pair of projects orders deterministically too")
+    func duplicateProjectsOrderDeterministically() {
+        let id = MergeFixture.id(3)
+        let pair = [
+            MergeFixture.project(3, name: "Same"),
+            MergeFixture.project(3, name: "Same", colorHex: "#FFFFFF"),
+        ]
+        #expect(pair[0].id == id && pair[1].id == id)
+
+        let forwards = ExportOrdering.sortedProjects(pair)
+        let backwards = ExportOrdering.sortedProjects(pair.reversed())
+        #expect(forwards.map(\.colorHex) == backwards.map(\.colorHex))
+    }
+}
