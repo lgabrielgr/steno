@@ -2855,6 +2855,131 @@ and every value it carries is already at wire precision.
 
 ---
 
+### D-113 — A bare first argument is what makes the binary a CLI
+
+**2026-09-17** · M2.5-04 · **Status:** accepted
+
+`StenoMain.main()` treats an invocation as `steno export` / `steno import` when `argv[1]` exists
+and does not begin with `-`; anything else calls `StenoApp.main()`. `@main` moved off `StenoApp`
+onto a six-line `StenoMain` enum to make that branch possible.
+
+**Why: it makes "a double-click never lands in CLI mode" structural rather than hopeful.** Every
+argument LaunchServices passes is dash-prefixed — the legacy `-psn_0_…` process serial number, and
+`-NSDocumentRevisionsDebugMode YES` when Xcode launches the app — so no launch path short of
+`open -a Steno --args export` can produce a bare first word, and that one is deliberate. The rule
+also decides what a typo does: `steno exprot` has a bare first word, so it is a CLI invocation with
+an unrecognised subcommand and gets usage on stderr with exit 2. Falling through to the GUI there
+would be worse — a scripted export that silently opens a window and hangs the script on a run loop
+that never returns.
+
+Branching inside `StenoApp.init` was not an option: SwiftUI's generated `main` starts
+`NSApplication` before any of our code runs, so a subcommand would already have required a window
+server by the time it could refuse to open a window. A second executable target was rejected
+because §10.5 says "on the app binary", and it would double the signing configuration §9.3 pins.
+
+**Falsified by** `CLIArgvRuleTests`, which pins all four cases as a property of
+`CLIEntry.isCommandLineInvocation`.
+
+---
+
+### D-114 — `STENO_STORE_PATH` redirects the CLI's store, and only the CLI's
+
+**2026-09-17** · M2.5-04 · **Status:** accepted
+
+`CLIEntry.run` opens `StenoStore.live(at:)` with the URL named by `STENO_STORE_PATH`, falling back
+to `defaultURL` when the variable is unset *or empty*. The GUI path ignores the variable entirely.
+
+**Why: the subprocess test needs the real binary and must not touch the real store.** M2.5-04's
+"does not open a window or require a GUI session" is only observable by running the shipped binary,
+and a test that opened `~/Library/Application Support/Steno` is not one anybody can run twice. An
+environment variable rather than a `--store` flag, because the task asks to keep the flag surface
+small — and confining it to the CLI path is what stops a variable inherited from a shell from
+silently redirecting the user's own data.
+
+Empty is treated as unset because `STENO_STORE_PATH= steno export` is how a shell clears a
+variable, and `URL(fileURLWithPath: "")` resolves to the working directory — a store somewhere
+nobody asked for. This is a test seam, documented as one; it is not a supported way to run Steno.
+
+**Falsified by** `CLIEntryTests.storePathFallsBack` and `CLIBinaryTests.honoursTheStoreSeam`.
+
+---
+
+### D-115 — `steno import` refuses while the app is running; `steno export` does not
+
+**2026-09-17** · M2.5-04 · **Status:** accepted
+
+`CLIInstanceCheck.anotherInstanceIsRunning` asks `NSRunningApplication` for processes under
+`com.lgabrielgr.steno`, excluding our own pid. `importFile` refuses when it answers true, before
+reading the file. `export` never asks.
+
+**Why: a CLI import behind an open app is silently reverted.** There is no cross-process change
+notification in this product — `.stenoDidWrite` is a `NotificationCenter` post inside one process
+(D-019), and SwiftData tells the GUI nothing when its store moves underneath it. The app goes on
+holding live model instances from before the merge, and its next save writes them back over the
+imported rows. The user sees the import succeed and the data quietly revert.
+
+Export carries no such hazard: it is a pure read (D-085). The asymmetry is load-bearing rather than
+cautious — M2.5-05 auto-exports from a machine where Steno is by definition running, so refusing
+both would break the next task.
+
+**Measured, not assumed.** The design flagged this as the one part that could ship as a guard that
+never fires. Against the built binary: with the app closed the import proceeds; with the app open
+it is refused and the export still succeeds; and the CLI process does not see *itself*, because a
+terminal-launched process that never creates `NSApplication` does not register with LaunchServices
+— the pid filter covers the case where a future macOS changes that.
+
+**Falsified by** `CLIImportTests.refusedWhileAppIsRunning` together with
+`reachesTheFileWhenClosed`, which is the pair that makes the guard falsifiable rather than a
+tautology about one boolean.
+
+---
+
+### D-116 — `--output` overwrites, and a directory means "the dated name inside it"
+
+**2026-09-17** · M2.5-04 · **Status:** accepted · closes the collision question `ExportFilename` defers
+
+`CLIRunner.resolveDestination` resolves no `--output` to §10.2's dated filename in the working
+directory, an `--output` naming an existing directory to that filename inside it, and anything else
+to the path as given — written with `.atomic`, overwriting.
+
+**Why: a scripted daily export to one folder has to be re-runnable.** `ExportFilename`'s own
+documentation hands collisions to this task. Refusing on collision would push the problem onto
+M2.5-05's retention and make a second export on the same day an error; a `--force` flag would add a
+third flag to a surface the task asks to keep small and make every script carry it. Nothing is lost
+that the store does not still hold, because export is a pure read. The exposure — a mistyped
+`--output` clobbering an unrelated file — is the price of conventional `-o` behaviour.
+
+The directory case exists for M2.5-05, which points a folder at a sync drive; without it,
+`--output ~/Dropbox/steno` would try to write a file over a directory and fail with an errno nobody
+can act on. A **missing** parent directory is refused rather than created: `--output` is a
+destination, not an instruction to build a tree.
+
+**Falsified by** `CLIExportTests.directoryDestination`, `.overwrites`, and
+`.missingParentDirectory` — the last of which asserts the refusal's *sentence*, because mutation
+testing showed that asserting the path alone passed with the guard deleted (the failing atomic
+write names the same path).
+
+---
+
+### D-117 — Replace is reachable from the binary, never from a make target
+
+**2026-09-17** · M2.5-04 · **Status:** accepted
+
+`make export FILE=…` and `make import FILE=…` wrap the two subcommands. `make import` merges and
+has no Replace switch; `steno import --file x --replace` is the only route.
+
+**Why: §10.1 says Replace must never be the path of least resistance.** `make import FILE=x
+REPLACE=1` is the easiest thing in this repo to typo into a wiped store, and a make target is
+exactly the kind of thing people re-run from shell history. The CLI keeps no typed confirmation —
+M2.5-04 puts interactive prompts out of scope, and `--replace` typed in full is itself the explicit
+gesture — so the make layer is where the remaining friction has to live.
+
+`FILE` is optional for `export` and required for `import`, which deviates from §10.5's literal
+`make export FILE=...`: the export filename is derived from the date, so requiring a path would
+make the common case the awkward one. Flagged in the PR body rather than amended.
+
+---
+
 ## Open — decided by the task that owns them
 
 Each of these is a real choice the spec leaves open. The owning task decides it, records it in
