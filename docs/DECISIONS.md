@@ -2980,6 +2980,49 @@ make the common case the awkward one. Flagged in the PR body rather than amended
 
 ---
 
+### D-118 — One CLI writer at a time; the GUI is warned, not locked
+
+**2026-09-17** · M2.5-04 · **Status:** accepted · extends D-115
+
+`CLIWriteLock` takes a non-blocking `flock` on `.steno-cli.lock` beside the store, held across the
+whole of `plan`-then-`apply`. `CLIInstanceCheck` is checked three times on the import path — in
+`CLIEntry` before the container is opened, at the top of `CLIRunner.importFile`, and again
+immediately before the transaction.
+
+**Why a lock at all.** D-115's guard only sees the GUI. A terminal-launched `steno import` never
+creates `NSApplication`, so it does not register with LaunchServices and two of them pass that
+guard together — then both plan against the same snapshot, both pass `ImportService`'s
+compare-then-write staleness check, and both save. Two concurrent `--replace` runs would leave
+whichever finished last. Raised in review of PR #31.
+
+`flock` rather than a pid file: the lock lives on the open file description, so the kernel drops
+it when the process dies and there is no stale lock to reap. Non-blocking rather than queueing, so
+a second invocation refuses in the same shape as the running-app guard instead of hanging a
+script. Beside the store rather than at a fixed path, so two CLIs pointed at different stores (the
+`STENO_STORE_PATH` seam) do not block each other. The lock file is in `protectedURLs`, because
+`--output` onto that pathname would atomically replace it and leave the holder on an orphaned
+inode while the next process locks the replacement — a lock that has silently stopped being one.
+
+**What this deliberately does not close.** The running-app check is time-of-check: Steno can be
+launched *after* the last check passes and still save stale rows over an import in flight. The
+third check narrows that window to the transaction itself; it does not remove it.
+
+**Closing it properly would mean making the GUI take the same lock, and that is not this task's
+decision to make.** Every save the app performs would acquire an interprocess lock — including
+quick capture, where §1.1 makes latency a P0 functional requirement and CLAUDE.md's
+non-negotiable #4 forbids changing that path without measuring it. That is an app-wide change
+with a performance budget attached, and it belongs to whoever owns that budget, not to a task
+whose subject is a CLI surface. The honest position is a narrowed window, a documented residual
+race, and a README line telling the user to quit Steno first.
+
+The residual race needs the user to launch Steno during the seconds an import is applying. §10.5
+already assumes single-user, one-machine-at-a-time usage.
+
+**Falsified by** nothing automated on the GUI side — by construction, since the suite cannot run
+`NSApplication` (§9.4). `CLIImportTests.writeLockRefusesASecondWriter` covers the CLI-to-CLI half.
+
+---
+
 ## Open — decided by the task that owns them
 
 Each of these is a real choice the spec leaves open. The owning task decides it, records it in

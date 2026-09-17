@@ -198,6 +198,25 @@ import Testing
         #expect(try Data(contentsOf: store) == before)
     }
 
+    /// **The lock file is a store file for this purpose.** `CLIWriteLock` holds
+    /// an `flock` on an open file description, so `--output` onto that pathname
+    /// would atomically replace it and leave the holder on an orphaned inode
+    /// while the next process opens and locks the replacement — two writers, and
+    /// the lock has silently stopped being one. Raised in review of PR #31.
+    @Test("exporting over the CLI lock file is refused")
+    func refusesToOverwriteTheLockFile() throws {
+        let harness = try CLIHarness(fileBacked: true)
+        try seed(harness)
+        let store = try #require(harness.storeURL)
+        let lockPath = CLIWriteLock.url(besideStoreAt: store)
+
+        let result = try harness.run(["export", "--output", lockPath.path])
+
+        #expect(result.code == 1)
+        #expect(result.stderr.contains("own store"))
+        #expect(FileManager.default.fileExists(atPath: lockPath.path) == false)
+    }
+
     /// Export is a pure read (D-085), so it does not care whether the app has
     /// the store open. The asymmetry matters: M2.5-05 auto-exports from a
     /// machine where Steno is by definition running.

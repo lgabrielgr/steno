@@ -35,8 +35,7 @@ final class CLIWriteLock {
     ///   caller cannot tell the two apart, and does not need to: both mean "do
     ///   not write now".
     init?(besideStoreAt storeURL: URL) {
-        let path = storeURL.deletingLastPathComponent()
-            .appendingPathComponent(".steno-cli.lock").path
+        let path = Self.url(besideStoreAt: storeURL).path
         let descriptor = open(path, O_CREAT | O_RDWR | O_CLOEXEC, 0o644)
         guard descriptor >= 0 else { return nil }
         guard flock(descriptor, LOCK_EX | LOCK_NB) == 0 else {
@@ -51,6 +50,16 @@ final class CLIWriteLock {
         // description — but unlocking first says so out loud.
         flock(descriptor, LOCK_UN)
         close(descriptor)
+    }
+
+    /// Where the lock file for this store lives.
+    ///
+    /// Exposed because the export guard has to refuse it as a destination:
+    /// replacing this pathname atomically leaves the current holder on the old
+    /// inode while the next process locks the *new* file, so two writers run at
+    /// once — the lock silently stops being one. Raised in review of PR #31.
+    static func url(besideStoreAt storeURL: URL) -> URL {
+        storeURL.deletingLastPathComponent().appendingPathComponent(".steno-cli.lock")
     }
 
     /// What the user is told when the lock is held.

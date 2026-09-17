@@ -157,11 +157,17 @@ extension CLIRunner {
     ///
     /// `-wal` and `-shm` are appended to the *filename*, not added as path
     /// extensions: the files are `Steno.store-wal`, not `Steno.store.wal`.
+    ///
+    /// **`.steno-cli.lock` is in the list too, and it is not a database file.**
+    /// `CLIWriteLock` holds an `flock` on an open file description, so replacing
+    /// that pathname atomically leaves the holder on the orphaned inode while
+    /// the next process opens and locks the replacement — two writers, and the
+    /// lock has quietly stopped being one. Raised in review of PR #31.
     private var protectedURLs: [URL] {
         context.container.configurations.flatMap { configuration -> [URL] in
             let url = configuration.url.standardizedFileURL
             let directory = url.deletingLastPathComponent()
-            return [url]
+            return [url, CLIWriteLock.url(besideStoreAt: url)]
                 + ["-wal", "-shm"].map {
                     directory.appendingPathComponent(url.lastPathComponent + $0)
                 }

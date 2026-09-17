@@ -108,6 +108,25 @@ extension CLIRunner {
     /// wipe. `backupTo:` pins the path, because `plannedURL()` reads the clock
     /// and a second call a second later names a different file.
     private func apply(_ plan: ImportPlan, from url: URL, with service: ImportService) -> Int32 {
+        // **Re-checked here, immediately before the write.** The guard at the
+        // top of `importFile` — and the earlier one in `CLIEntry` — are both
+        // time-of-check: the user can launch Steno *after* either passes, and a
+        // GUI holding rows from before this import would then save them back
+        // over it. Asking again here narrows the window from "open the store,
+        // read the file, plan, apply" down to the transaction itself.
+        //
+        // **It does not close it, and pretending otherwise would be worse than
+        // the race.** Closing it means making the GUI take `CLIWriteLock` too,
+        // which puts an interprocess lock acquisition on every save the app
+        // makes — including quick capture, where §1.1 makes latency a P0
+        // requirement and CLAUDE.md's non-negotiable #4 forbids an unmeasured
+        // change. That is an app-wide decision, not M2.5-04's to take. See
+        // D-118. Raised in review of PR #31.
+        guard !isAnotherInstanceRunning() else {
+            err(CLIInstanceCheck.refusalMessage)
+            return ExitCode.failure
+        }
+
         var writer: BackupWriter?
         var backupURL: URL?
         if plan.mode == .replace {

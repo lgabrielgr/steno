@@ -74,6 +74,13 @@ store moved, so it would go on holding the rows it read at launch and write them
 back over the import on its next save. `steno export` is a pure read and runs
 either way.
 
+Leave it quit until the import finishes. The check is made three times — last of
+all immediately before the write — but launching Steno *during* an import can
+still let the app save stale rows over it. Two `steno` commands cannot collide
+with each other; they take a lock beside the store. The app does not take that
+lock, deliberately: doing so would put an interprocess lock on every save the app
+makes, quick capture included. See D-118.
+
 **`--replace` cannot be undone**, which is why no make target exposes it. It
 wipes the local store and installs the file, after writing a backup to
 `~/Library/Application Support/Steno/Backups`; if that backup cannot be written,
