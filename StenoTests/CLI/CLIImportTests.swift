@@ -151,6 +151,9 @@ import Testing
         let target = try CLIHarness()
         try seed(target)
         let before = try target.wholeStore()
+        // Not a comparison of two empty stores: that would hold no matter what
+        // the import did, which is the shape of an assertion that cannot fail.
+        #expect(before.tasks.count == 1)
         let file = target.path("truncated.json")
         try bytes.prefix(bytes.count / 2).write(to: file)
 
