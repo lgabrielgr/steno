@@ -144,15 +144,42 @@ extension CLIRunner {
     /// direction: it can only ever refuse *more*, and the thing it might refuse
     /// is a file differing from the store's name by case alone.
     fileprivate func isStoreFile(_ destination: URL) -> Bool {
-        let candidate = destination.standardizedFileURL
+        let candidate = resolved(destination)
         for url in protectedURLs {
-            if let left = fileIdentifier(of: candidate), let right = fileIdentifier(of: url) {
+            let known = resolved(url)
+            if let left = fileIdentifier(of: candidate), let right = fileIdentifier(of: known) {
                 if left.isEqual(right) { return true }
-            } else if candidate.path.compare(url.path, options: .caseInsensitive) == .orderedSame {
+            } else if candidate.path.compare(known.path, options: .caseInsensitive)
+                == .orderedSame
+            {
                 return true
             }
         }
         return false
+    }
+
+    /// The path with its **parent's** symlinks resolved, keeping the last
+    /// component as written.
+    ///
+    /// **`resolvingSymlinksInPath()` on the whole URL is not enough**, because
+    /// the case this closes is a file that does not exist yet: when the
+    /// destination and the protected sibling are both absent, neither has a
+    /// resource identifier and the comparison falls back to path text. A parent
+    /// that is a symlink to the store directory — `/tmp/steno` pointing at it,
+    /// with `Steno.store-wal` not yet created — then produces two spellings of
+    /// one location that compare unequal, and the atomic write follows the link
+    /// and replaces the live write-ahead log. Resolving the parent makes both
+    /// sides name the same directory. Raised in review of PR #31.
+    ///
+    /// The last component is deliberately *not* resolved: if it is itself a
+    /// symlink, writing to it follows the link, which is what
+    /// `fileIdentifier(of:)` already compares — and resolving it would be wrong
+    /// for a destination that does not exist.
+    private func resolved(_ url: URL) -> URL {
+        let standardized = url.standardizedFileURL
+        return standardized.deletingLastPathComponent()
+            .resolvingSymlinksInPath()
+            .appendingPathComponent(standardized.lastPathComponent)
     }
 
     /// The open store and its two siblings.

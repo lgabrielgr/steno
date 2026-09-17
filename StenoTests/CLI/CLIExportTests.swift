@@ -217,6 +217,41 @@ import Testing
         #expect(FileManager.default.fileExists(atPath: lockPath.path) == false)
     }
 
+    /// **A symlinked parent plus an absent sibling defeated the guard.** When
+    /// neither the destination nor the protected file exists, neither has a
+    /// resource identifier and the comparison falls back to path text — so
+    /// `/tmp/alias/Steno.store-wal`, where `alias` points at the store
+    /// directory and the WAL has not been created yet, read as a different
+    /// location and the atomic write would have followed the link and replaced
+    /// the live write-ahead log. Raised in review of PR #31.
+    @Test("exporting through a symlinked parent onto an absent sibling is refused")
+    func refusesStoreReachedThroughASymlink() throws {
+        let harness = try CLIHarness(fileBacked: true)
+        try seed(harness)
+        let store = try #require(harness.storeURL)
+        let storeDirectory = store.deletingLastPathComponent()
+
+        // The sibling must genuinely not exist, or the identity check would
+        // catch it and this would pass without testing the fallback at all.
+        let wal =
+            storeDirectory
+            .appendingPathComponent(store.lastPathComponent + "-wal")
+        try? FileManager.default.removeItem(at: wal)
+        try #require(FileManager.default.fileExists(atPath: wal.path) == false)
+
+        let alias = FileManager.default.temporaryDirectory
+            .appendingPathComponent("steno-alias-\(UUID().uuidString)")
+        try FileManager.default.createSymbolicLink(at: alias, withDestinationURL: storeDirectory)
+        defer { try? FileManager.default.removeItem(at: alias) }
+
+        let through = alias.appendingPathComponent(store.lastPathComponent + "-wal")
+        let result = try harness.run(["export", "--output", through.path])
+
+        #expect(result.code == 1)
+        #expect(result.stderr.contains("own store"))
+        #expect(FileManager.default.fileExists(atPath: wal.path) == false)
+    }
+
     /// Export is a pure read (D-085), so it does not care whether the app has
     /// the store open. The asymmetry matters: M2.5-05 auto-exports from a
     /// machine where Steno is by definition running.

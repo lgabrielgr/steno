@@ -208,20 +208,27 @@ test: preflight generate ## Unit tests — headless, network denied
 # of least resistance, and `make import FILE=x REPLACE=1` is the easiest thing in
 # this repo to typo into a wiped store. The only route is
 # `steno import --file x --replace`, typed in full.
-# Both expansions are quoted: an unquoted $(FILE) splits a path containing
-# spaces into several arguments before the CLI ever sees it, so
-# `make export FILE="~/My Exports/x.json"` wrote to a file called `~/My`.
-# Raised in review of PR #31.
+# **FILE is exported to the recipe's shell, never interpolated into it.**
+# `$(FILE)` is substituted by Make into the recipe *source*, so quoting it was
+# not enough: a path containing a quote, `$()` or a backtick closes the quote
+# and the rest runs as shell. Demonstrated before fixing —
+# `make -n export FILE='a"; echo PWNED; echo "'` emitted `echo PWNED` as its own
+# command. Exporting the variable and writing `"$$FILE"` puts the value in the
+# environment, where the shell expands it as one word and no metacharacter is
+# ever parsed. It also fixes the original space-splitting bug this comment used
+# to be about. Both raised in review of PR #31.
+export FILE
+
 export: build ## Export the whole store (FILE=path optional)
-	"$(BIN)" export $(if $(FILE),--output "$(FILE)")
+	@if [ -n "$$FILE" ]; then "$(BIN)" export --output "$$FILE"; else "$(BIN)" export; fi
 
 # The `test -n` guard, rather than letting the binary complain: an unset Make
 # variable expands to nothing, so `make import` would otherwise run
 # `steno import --file` and report a missing path for a flag the user never
 # typed. Exit 2 matches the CLI's own usage code.
 import: build ## Merge an export into the store (FILE=path required)
-	@test -n "$(FILE)" || { echo "usage: make import FILE=path/to/export.json"; exit 2; }
-	"$(BIN)" import --file "$(FILE)"
+	@test -n "$$FILE" || { echo "usage: make import FILE=path/to/export.json"; exit 2; }
+	@"$(BIN)" import --file "$$FILE"
 
 # The swiftlint check lives here rather than in `preflight`, which gates
 # build/run/release — none of which should start requiring a linter.
