@@ -100,9 +100,17 @@ public struct ExportEncoder {
     /// **Each reading gets a `ModelContext` of its own, and the comparison is
     /// worthless without it.** A fetch on a context that already holds a row
     /// returns the row it holds rather than re-reading the persisted value — so
-    /// two readings through one context agree about an *updated* or *deleted*
-    /// record by construction, and the stability check would have seen only
-    /// insertions. Raised in review of PR #31.
+    /// two readings through one context can agree about an *updated* or
+    /// *deleted* record and the stability check would see only insertions.
+    /// Raised in review of PR #31.
+    ///
+    /// **Measured, and narrower than it first appeared:** SwiftData does
+    /// propagate another *in-process* context's save to a sibling, so this fix
+    /// changes nothing for a writer inside this process — `ExportStableReadTests`
+    /// stays green with it reverted. It guards the case that actually motivates
+    /// the whole stability check: a writer in another **process**, which §9.4
+    /// keeps out of the test bundle. Defensive, and honest about being
+    /// unfalsifiable here.
     ///
     /// The consequence, stated rather than discovered later: this reads
     /// **persisted** state, so unsaved changes in the caller's context are not

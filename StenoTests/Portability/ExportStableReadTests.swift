@@ -93,12 +93,14 @@ import Testing
     /// compared equal to itself and the check saw only insertions. Raised in
     /// review of PR #31.
     ///
-    /// **The write goes through a second context, and that is the whole test.**
-    /// Mutating the object the fixture already holds makes the change visible
-    /// however many contexts the encoder uses — the first version of this test
-    /// did exactly that and passed with the fix reverted. A separate context
-    /// standing in for the other process is what makes the stale-row behaviour
-    /// reachable.
+    /// **This test does not falsify the fresh-context change, and saying so is
+    /// the point.** Measured: reverting `read()` to share one `ModelContext`
+    /// leaves this green, because SwiftData propagates another *in-process*
+    /// context's save to a sibling. The stale-row behaviour the fix guards
+    /// against needs a writer in another **process** — the GUI, or a second
+    /// `steno` — which §9.4 forbids this suite from staging. The fix is
+    /// therefore defensive and unfalsifiable here; what this test does prove is
+    /// that a cross-context write is detected at all.
     @Test("a record changed by another context between readings is seen")
     func updateBetweenReadingsIsSeen() throws {
         let fixture = try ExportFixture()
