@@ -240,6 +240,35 @@ import Testing
         #expect(try target.wholeStore() == before)
     }
 
+    /// **Two spellings of one store must take one lock.** The lock path was
+    /// derived from the store path as written, so `/tmp/x/Steno.store` and its
+    /// resolved `/private/tmp/x/Steno.store` — the same file, since `/tmp` is a
+    /// symlink on macOS — locked different files and both ran. Raised in review
+    /// of PR #31.
+    @Test("a store reached by two spellings takes one lock")
+    func lockPathIsCanonical() throws {
+        let harness = try CLIHarness(fileBacked: true)
+        let store = try #require(harness.storeURL)
+
+        let alias = FileManager.default.temporaryDirectory
+            .appendingPathComponent("steno-lock-alias-\(UUID().uuidString)")
+        try FileManager.default.createSymbolicLink(
+            at: alias, withDestinationURL: store.deletingLastPathComponent())
+        defer { try? FileManager.default.removeItem(at: alias) }
+        let through = alias.appendingPathComponent(store.lastPathComponent)
+        #expect(through.path != store.path)
+
+        #expect(
+            CLIWriteLock.url(besideStoreAt: through)
+                == CLIWriteLock.url(besideStoreAt: store))
+
+        // And the lock actually excludes across the two spellings, which is the
+        // property the path equality above only implies.
+        let held = try #require(CLIWriteLock(besideStoreAt: store))
+        #expect(CLIWriteLock(besideStoreAt: through) == nil)
+        withExtendedLifetime(held) {}
+    }
+
     /// §10.2's mandatory version gate, reaching stderr as the same sentence the
     /// GUI banner shows.
     @Test("an unreadable schema version is refused")

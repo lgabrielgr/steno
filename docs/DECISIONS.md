@@ -3029,6 +3029,44 @@ with a measurement attached, not an amendment to this entry.
 
 ---
 
+### D-119 — A backup that will not import is written and named, not withheld
+
+**2026-09-17** · M2.5-04 · **Status:** accepted · extends D-110
+
+`BackupWriter.write` reads its own output back through `ImportReader`. When that fails it still
+writes the file and returns a `BackupReceipt` carrying a `warning`, which `steno import --replace`
+prints to stderr and the File menu puts in the window's banner — on an operation that otherwise
+succeeded.
+
+**Why this case exists at all.** D-117's sibling fix let `.replace` proceed on a store holding
+duplicate ids, because that is the damage Replace exists to repair (D-106 skips shape validation
+in this mode for the same reason). `ExportEncoder` serializes every physical row, so the mandatory
+pre-wipe backup of such a store carries the duplicates, and `ImportReader.validateShape` refuses
+it. Raised in review of PR #31.
+
+**Refusing the Replace was implemented first and reverted.** It makes Replace permanently unable
+to repair a duplicated store — the recovery the whole arrangement exists to protect — and two
+existing tests said so immediately. Withholding the destructive operation sounds safe and is not:
+it leaves the user with a store they cannot fix and no route forward.
+
+**The backup is not worthless, which is what makes warning the right answer.** It holds every row
+that was about to be deleted, and §10.2 chose JSON precisely so a person can inspect and edit one.
+Restoring it needs a hand edit to the duplicated id first. The failure mode being closed is
+*silence*: a user who believes they have a working way back and discovers otherwise at the moment
+they need it.
+
+**The better answer, not taken here.** A raw copy of the three SwiftData files would be restorable
+whatever the store contains. It needs a seam `BackupWriter` does not have (`FileManager.copyItem`
+is not injected), does not exist for an in-memory store, and would change the artifact §10.1 calls
+an export — a redesign of a shipped feature, arriving at the seventh round of review on a task
+about a CLI. Worth its own task if Replace-on-damaged-store ever stops being hypothetical.
+
+**Falsified by** `CLIReplaceTests.warnsWhenTheBackupWouldNotRestore`, which asserts the replace
+proceeds, the warning reaches stderr on a run that exits 0, and the backup holds the pre-wipe rows
+while `ImportReader` still refuses it.
+
+---
+
 ## Open — decided by the task that owns them
 
 Each of these is a real choice the spec leaves open. The owning task decides it, records it in

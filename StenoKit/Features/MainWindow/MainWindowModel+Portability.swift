@@ -197,6 +197,14 @@ extension MainWindowModel {
         }
 
         importPreview.succeeded(backupURL: receipt?.url)
+        // A backup that will not import as it stands is not a failure of the
+        // import — it succeeded — but it is the one thing the user would
+        // otherwise wrongly believe they have. The banner is where they will
+        // see it once the sheet closes.
+        if let warning = receipt?.warning {
+            lastNotice = nil
+            lastError = warning
+        }
         // `apply` posts `.stenoDidWrite`, which this window's own observer turns
         // into a `reload()`, and then this line reloads again. Known and
         // harmless — `reload()` is idempotent — and the same shape

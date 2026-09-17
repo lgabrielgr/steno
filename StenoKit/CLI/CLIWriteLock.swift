@@ -58,8 +58,20 @@ final class CLIWriteLock {
     /// replacing this pathname atomically leaves the current holder on the old
     /// inode while the next process locks the *new* file, so two writers run at
     /// once — the lock silently stops being one. Raised in review of PR #31.
+    /// **The store path is canonicalized first, and that is the whole point.**
+    /// The lock is only a lock if two processes naming the same store agree on
+    /// where it lives — and on macOS they routinely do not: `/tmp` is a symlink
+    /// to `/private/tmp`, so `STENO_STORE_PATH=/tmp/x/Steno.store` and the
+    /// resolved spelling would have taken locks at two different paths and both
+    /// run, reinstating the race this type exists to close. Raised in review of
+    /// PR #31.
+    ///
+    /// `resolvingSymlinksInPath()` resolves the final component too, which is
+    /// right here: the store file exists by the time anything asks for a lock.
     static func url(besideStoreAt storeURL: URL) -> URL {
-        storeURL.deletingLastPathComponent().appendingPathComponent(".steno-cli.lock")
+        storeURL.resolvingSymlinksInPath()
+            .deletingLastPathComponent()
+            .appendingPathComponent(".steno-cli.lock")
     }
 
     /// What the user is told when the lock is held.

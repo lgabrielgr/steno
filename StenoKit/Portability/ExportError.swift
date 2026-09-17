@@ -2,10 +2,6 @@ import Foundation
 
 /// Why an export could not be produced.
 ///
-/// One case, and deliberately not a mirror of `ImportError`: export reads and
-/// never writes (D-085), so the only failures are "the store could not be read"
-/// — which surfaces as the underlying error — and this one.
-///
 /// `message` lives here for `ImportError.message`'s reason: the File menu's
 /// banner and `steno export`'s stderr must say the same thing about the same
 /// failure.
@@ -21,6 +17,17 @@ public enum ExportError: Error, Equatable, Sendable {
     /// With sync cancelled (§10, D1) that file may be the only copy.
     case storeChangedWhileReading
 
+    /// The bytes produced for a pre-Replace backup cannot be read back.
+    ///
+    /// **A backup that cannot be restored is not a backup**, and §10.1 makes
+    /// this one mandatory precisely because Replace is the product's only
+    /// destructive operation. Reachable since `.replace` began proceeding on a
+    /// store holding duplicate ids (PR #31): `ExportEncoder` serializes every
+    /// physical row, so the backup carries the duplicates and `ImportReader`
+    /// refuses it on the way back in. Wiping the store behind such a file would
+    /// leave the user with neither their data nor a way back.
+    case backupNotRestorable(detail: String)
+
     public var message: String {
         switch self {
         case .storeChangedWhileReading:
@@ -29,6 +36,21 @@ public enum ExportError: Error, Equatable, Sendable {
             nothing was exported. Quit Steno, or wait for whatever is writing \
             to finish, and try again.
             """
+        case .backupNotRestorable(let detail):
+            """
+            Steno could not make a backup it would be able to restore, so \
+            nothing was replaced. Your data has not been changed. \(detail)
+            """
         }
     }
+}
+
+extension ExportError: LocalizedError {
+    /// So `localizedDescription` says what `message` says.
+    ///
+    /// Both call sites for Replace's backup failure report the caught error's
+    /// `localizedDescription`; without this they would print
+    /// `The operation couldn’t be completed. (StenoKit.ExportError error 1.)`
+    /// at the moment the user most needs to know what happened.
+    public var errorDescription: String? { message }
 }

@@ -149,6 +149,13 @@ extension CLIRunner {
             let receipt = try service.apply(plan, backupWith: writer, backupTo: backupURL)
             if let receipt {
                 out("Backup written to \(receipt.url.path)")
+                // **stderr, on a run that exits 0.** The operation succeeded;
+                // the user's way *back* is the thing that is impaired, and a
+                // line on stdout would sit under a success message where a
+                // script's error check never looks.
+                if let warning = receipt.warning {
+                    err(warning)
+                }
             }
             out("Imported \(url.lastPathComponent).")
             return ExitCode.success

@@ -15,7 +15,20 @@ import SwiftData
 public struct BackupReceipt: Equatable, Sendable {
     public let url: URL
 
-    fileprivate init(url: URL) { self.url = url }
+    /// Set when the backup was written but **cannot be imported as it stands**.
+    ///
+    /// The one reachable cause: `.replace` proceeds on a store holding duplicate
+    /// ids (PR #31), `ExportEncoder` serializes every physical row, and
+    /// `ImportReader` refuses such a file. The backup is still the user's data
+    /// and still human-readable — §10.2 chose JSON so a person could inspect and
+    /// edit one — but restoring it needs that edit first, and saying nothing
+    /// would let them believe they had a working way back.
+    public let warning: String?
+
+    fileprivate init(url: URL, warning: String? = nil) {
+        self.url = url
+        self.warning = warning
+    }
 }
 
 /// §10.1's "must auto-export a backup beforehand", for Replace.
@@ -125,10 +138,36 @@ public struct BackupWriter {
             now: now,
             exportedBy: userAgent
         ).encode()
+        // **Read it back, and say so when it will not import.**
+        //
+        // `.replace` proceeds on a store holding duplicate ids (PR #31),
+        // `ExportEncoder` serializes every physical row, and `ImportReader`
+        // refuses such a file — so the mandatory pre-wipe backup of a damaged
+        // store is not directly restorable, which is precisely the store Replace
+        // exists to recover from.
+        //
+        // **Refusing was tried and is wrong.** It makes Replace permanently
+        // unable to repair a duplicated store, which is the recovery D-106
+        // deliberately keeps available by skipping shape validation in this
+        // mode; two existing tests went red saying exactly that. The backup is
+        // still the user's whole store and still human-readable — §10.2 chose
+        // JSON so a person could inspect and edit one — so the honest answer is
+        // to write it and name the defect, not to withhold the operation.
+        //
+        // The warning rides on the receipt so both surfaces report it. Silence
+        // here would let someone believe they had a working way back.
+        var warning: String?
+        do {
+            _ = try ImportReader.read(data)
+        } catch let error as ImportError {
+            warning = ExportError.backupNotRestorable(detail: error.detail).message
+            Log.app.error("backup is not directly restorable: \(error.detail, privacy: .public)")
+        }
+
         try FileManager.default.createDirectory(
             at: directory, withIntermediateDirectories: true)
         try write(data, url)
         Log.app.info("replace backup written to \(url.path, privacy: .public)")
-        return BackupReceipt(url: url)
+        return BackupReceipt(url: url, warning: warning)
     }
 }

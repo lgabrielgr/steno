@@ -175,6 +175,55 @@ import Testing
         #expect(result.stdout.contains("1 task will be deleted"))
     }
 
+    /// **A damaged store must not be wiped behind a backup nobody can
+    /// restore.** Letting `.replace` proceed on duplicate ids created exactly
+    /// that: `ExportEncoder` serializes every physical row, so the backup
+    /// carries the duplicates and `ImportReader` refuses it on the way back in.
+    /// Raised in review of PR #31, as a consequence of the fix two rounds
+    /// earlier.
+    @Test("a Replace whose backup will not import says so, and still proceeds")
+    func warnsWhenTheBackupWouldNotRestore() throws {
+        let source = try CLIHarness()
+        try seed(source, title: "Shared", project: "Payments")
+        let file = try exportFile(from: source)
+
+        let target = try CLIHarness()
+        #expect(try target.run(["import", "--file", file.path]).code == 0)
+        let installed = try #require(
+            try target.context.fetch(FetchDescriptor<TaskItem>()).first)
+        target.context.insert(
+            TaskItem(
+                id: installed.id, title: "a different title under the same id",
+                projectID: installed.projectID, createdAt: installed.createdAt))
+        try target.context.save()
+        let before = try target.context.fetch(FetchDescriptor<TaskItem>()).count
+        #expect(before == 2)
+
+        let result = try target.run(["import", "--file", file.path, "--replace"])
+
+        // **Proceeds.** Refusing here was tried and reverted: it would make
+        // Replace permanently unable to repair a duplicated store, which is the
+        // recovery D-106 keeps available on purpose.
+        #expect(result.code == 0)
+        #expect(try target.context.fetch(FetchDescriptor<TaskItem>()).count == 1)
+
+        // **And says so, on stderr, on a run that exited 0.** The user's way
+        // back is impaired; silence would let them believe otherwise.
+        #expect(result.stderr.contains("could not make a backup it would be able to restore"))
+        #expect(result.stderr.contains("share the id"))
+
+        // The backup exists and holds the pre-wipe rows — it is the user's
+        // data, needing one hand edit before `ImportReader` will take it, which
+        // is the property §10.2 chose JSON for.
+        let backup = target.backupDirectory
+            .appendingPathComponent(BackupWriter.filename(for: CLIHarness.now))
+        let bytes = try Data(contentsOf: backup)
+        #expect(
+            String(bytes: bytes, encoding: .utf8)?
+                .contains("a different title under the same id") == true)
+        #expect(throws: ImportError.self) { try ImportReader.read(bytes) }
+    }
+
     /// The preview names the destruction before it happens, on stdout, in the
     /// same words the sheet uses.
     @Test("the replace preview says what will be deleted")
