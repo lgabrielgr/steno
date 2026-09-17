@@ -2982,7 +2982,8 @@ make the common case the awkward one. Flagged in the PR body rather than amended
 
 ### D-118 — One CLI writer at a time; the GUI is warned, not locked
 
-**2026-09-17** · M2.5-04 · **Status:** accepted · extends D-115
+**2026-09-17** · M2.5-04 · **Status:** accepted · extends D-115 · **residual race accepted by the
+user**, 2026-09-17, on review of PR #31
 
 `CLIWriteLock` takes a non-blocking `flock` on `.steno-cli.lock` beside the store, held across the
 whole of `plan`-then-`apply`. `CLIInstanceCheck` is checked three times on the import path — in
@@ -3017,6 +3018,11 @@ race, and a README line telling the user to quit Steno first.
 
 The residual race needs the user to launch Steno during the seconds an import is applying. §10.5
 already assumes single-user, one-machine-at-a-time usage.
+
+**This was put to the user rather than assumed, and accepted.** The alternative — GUI writes
+taking `CLIWriteLock` — carries a capture-latency cost that §1.1 makes a P0 concern, so it was
+not an implementer's call to make silently. If the answer ever changes, it is a task of its own
+with a measurement attached, not an amendment to this entry.
 
 **Falsified by** nothing automated on the GUI side — by construction, since the suite cannot run
 `NSApplication` (§9.4). `CLIImportTests.writeLockRefusesASecondWriter` covers the CLI-to-CLI half.
