@@ -47,6 +47,16 @@ public final class MenuBarModel {
     /// just asked to show. See `readError` for the property this replaced.
     public private(set) var writeError: String?
 
+    /// §10.5's unattended-export failure, or `nil`.
+    ///
+    /// **This surface is the one that works with no window open**, which is
+    /// most of why it is where the failure has to appear: a backup that failed
+    /// at quit is reported at the next launch, and the user may not open the
+    /// main window for days. Read from the persisted status rather than from an
+    /// in-process hand-off, so a failure that happened in a *previous* process
+    /// still shows.
+    public private(set) var autoExportProblem: String?
+
     /// How many times the popover has been prepared for display.
     ///
     /// The view keys the capture field on this so that each open gives the
@@ -74,6 +84,15 @@ public final class MenuBarModel {
     /// `WriteObservation` for why the token is not a plain stored property.
     private var writeObservation: WriteObservation?
 
+    /// The auto-export observation, kept for the same reason. Separate from
+    /// `writeObservation` because it listens to a different notification: one
+    /// is about the store, the other about a file beside it.
+    private var autoExportObservation: WriteObservation?
+
+    /// Read on demand rather than mirrored, so this model holds one copy of
+    /// the setting rather than a stale snapshot of it.
+    private let settings: AppSettings
+
     /// `now` and `save` are injected for the reasons `MainWindowModel` gives:
     /// timestamps assertable without waiting, and a save that can be made to
     /// fail, which a real `ModelContext` cannot.
@@ -98,6 +117,8 @@ public final class MenuBarModel {
         self.now = now
         self.save = save
         self.failFetch = failFetch
+        self.settings = settings
+        self.autoExportProblem = settings.autoExportStatus.problem
         self.field = CaptureFieldModel(
             service: CaptureService(context: context, now: now, save: save),
             projects: { box.projects },
@@ -125,6 +146,26 @@ public final class MenuBarModel {
             ) { [weak self] _ in
                 MainActor.assumeIsolated { self?.reload() }
             })
+
+        // A second registration rather than a second thing `reload()` does: an
+        // auto-export changes no rows, and making it trigger three fetches
+        // would put a store read on a path that never needed one.
+        autoExportObservation = WriteObservation(
+            NotificationCenter.default.addObserver(
+                forName: .stenoAutoExportDidChange, object: nil, queue: nil
+            ) { [weak self] _ in
+                MainActor.assumeIsolated { self?.refreshAutoExportProblem() }
+            })
+    }
+
+    /// Re-read the persisted auto-export status.
+    ///
+    /// **No dismissal gesture.** The main window's banner can be dismissed for
+    /// the session; this row cannot, because the popover is the surface a user
+    /// with no window open actually sees, and §10.5 makes a silently missing
+    /// backup the one unacceptable outcome. It clears when an export succeeds.
+    public func refreshAutoExportProblem() {
+        autoExportProblem = settings.autoExportStatus.problem
     }
 
     /// Called on every open.
@@ -146,6 +187,7 @@ public final class MenuBarModel {
     public func prepareForShow() {
         showCount += 1
         writeError = nil
+        refreshAutoExportProblem()
         reload()
         field.refreshChip()
     }
