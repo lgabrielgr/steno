@@ -81,8 +81,21 @@ public final class AutoExportWindowModel {
     /// **A folder inside Steno's own store is refused here, while the user is
     /// looking at it** (D-125), rather than at the next quit through a banner
     /// they cannot act on without finding this control again.
+    ///
+    /// **Unlike `DataSettingsModel.chooseFolder()`, this does not export to
+    /// verify the choice.** The asymmetry is deliberate: `finishOnboarding()`
+    /// runs a `.manual` export immediately after this returns, on the sheet's
+    /// "Done", so exporting here too would write the same file twice on a
+    /// fresh install. The verification `DataSettingsModel` does inline
+    /// happens here via that follow-on call instead.
     public func chooseFolder() {
-        guard let chosen = panels.chooseExportFolder(startingAt: folder) else { return }
+        guard let chosen = panels.chooseExportFolder(startingAt: folder) else {
+            // A cancel changes no folder, but it must not leave a refusal from
+            // an earlier attempt sitting next to a folder that was never
+            // touched.
+            folderProblem = nil
+            return
+        }
         if let refusal = service.problem(withFolder: chosen) {
             folderProblem = refusal
             return

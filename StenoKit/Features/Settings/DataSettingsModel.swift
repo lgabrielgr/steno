@@ -73,8 +73,20 @@ public final class DataSettingsModel {
     /// cannot be written to should say so now, while the user is in the pane
     /// that chose it, rather than at the next quit.
     public func chooseFolder() {
-        guard let chosen = panels.chooseExportFolder(startingAt: folder) else { return }
-        if let refusal = service?.problem(withFolder: chosen) {
+        guard let chosen = panels.chooseExportFolder(startingAt: folder) else {
+            // A cancel changes no folder, but it must not leave a refusal from
+            // an *earlier* attempt sitting next to a folder that was never
+            // touched.
+            folderProblem = nil
+            return
+        }
+        // `service == nil` only when the store failed to open (D-018); there
+        // is then nothing to validate against, so the folder is stored
+        // unvalidated. That is a stated decision, not `?.` silently treating
+        // "no service" as "no refusal" — `run`'s own `problem(withFolder:)`
+        // call re-guards before every write, so a bad folder let through here
+        // is still caught there.
+        if let service, let refusal = service.problem(withFolder: chosen) {
             folderProblem = refusal
             return
         }

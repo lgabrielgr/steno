@@ -62,6 +62,59 @@ func choosingAFolderVerifiesIt() throws {
     #expect(fixture.recorder.written.first?.path.hasPrefix(chosen.path) == true)
 }
 
+/// Important finding, final review of M2.5-05: `statusObservation` is the
+/// pane's live channel for a failure recorded by *another* trigger — the
+/// hourly tick or the quit hook — while the pane sits open. Nothing else in
+/// this file proves it works: the other four tests reach `refresh()` only
+/// through `exportNow()`, or never post at all, so deleting the registration
+/// left every one of them green. Mirrors
+/// `AutoExportWindowModelTests.theBannerUpdatesOnNotification` and
+/// `MenuBarAutoExportTests.thePopoverPicksUpALaterFailure`, which prove the
+/// same property for the window banner and the popover.
+///
+/// **Confirmed by mutation**: with `statusObservation`'s registration deleted
+/// from `DataSettingsModel.init`, this test alone goes red while the other
+/// four in this file stay green — see the PR body / fix report.
+@Test("the pane's status updates when an export fails in the background")
+@MainActor
+func theStatusUpdatesOnNotification() throws {
+    let fixture = try autoExportFixture()
+    let model = DataSettingsModel(settings: fixture.settings, service: fixture.service())
+    fixture.recorder.writeFailure = AutoExportFailure(detail: "no space left on device")
+
+    // A different `AutoExportService` instance, over the same settings and
+    // recorder — the shape of a failure recorded by the hourly tick or the
+    // quit hook while this pane is open, not by this model's own
+    // `exportNow()`.
+    fixture.service().run(trigger: .quit)
+
+    #expect(model.status.lastFailure != nil)
+}
+
+/// Carried finding, final review of M2.5-05: a refusal from an earlier
+/// attempt must not outlive a later cancel that touched no folder.
+@Test("cancelling the folder panel clears a previously-set refusal")
+@MainActor
+func cancellingClearsAPriorRefusalInTheDataPane() throws {
+    let fixture = try autoExportFixture()
+    // In-memory containers report `/dev/null` as their configuration's URL
+    // (`StenoStore.inMemory()`), so `/dev/anything` reads as inside the
+    // store's own directory to `StoreFileGuard.isInsideStoreDirectory` and
+    // `service.problem(withFolder:)` refuses it.
+    let refused = URL(fileURLWithPath: "/dev/inside-the-store", isDirectory: true)
+    let panels = StubFilePanels(exportFolder: refused)
+    let model = DataSettingsModel(
+        settings: fixture.settings, panels: panels, service: fixture.service())
+
+    model.chooseFolder()
+    #expect(model.folderProblem != nil)
+
+    panels.exportFolder = nil
+    model.chooseFolder()
+
+    #expect(model.folderProblem == nil)
+}
+
 @Test("a store that failed to open disables the pane and says why")
 @MainActor
 func aFailedStoreDisablesThePane() throws {

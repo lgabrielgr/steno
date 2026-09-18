@@ -132,3 +132,26 @@ func cancellingChangesNothing() throws {
     #expect(model.folder.path == fixture.folder.path)
     #expect(fixture.settings.autoExportFolder.path == fixture.folder.path)
 }
+
+/// Carried finding, final review of M2.5-05: a refusal from an earlier
+/// attempt must not outlive a later cancel that touched no folder.
+@Test("cancelling the folder panel clears a previously-set refusal")
+@MainActor
+func cancellingClearsAPriorRefusal() throws {
+    let fixture = try autoExportFixture()
+    // In-memory containers report `/dev/null` as their configuration's URL
+    // (`StenoStore.inMemory()`), so `/dev/anything` reads as inside the
+    // store's own directory to `StoreFileGuard.isInsideStoreDirectory` and
+    // `service.problem(withFolder:)` refuses it.
+    let refused = URL(fileURLWithPath: "/dev/inside-the-store", isDirectory: true)
+    let panels = StubFilePanels(exportFolder: refused)
+    let model = windowModel(fixture, panels: panels)
+
+    model.chooseFolder()
+    #expect(model.folderProblem != nil)
+
+    panels.exportFolder = nil
+    model.chooseFolder()
+
+    #expect(model.folderProblem == nil)
+}
