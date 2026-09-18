@@ -234,3 +234,70 @@ func everyRunPosts() throws {
 
     #expect(posts == 2)
 }
+
+/// A skipped run must stay quiet. A regression that posted on
+/// `.skipped(.notDue)` would wake all four `.stenoAutoExportDidChange`
+/// observers — `MenuBarModel`, `AutoExportWindowModel`, `DataSettingsModel`
+/// and (transitively) `MainWindowModel` — on every hourly tick, and
+/// `everyRunPosts` above would stay green throughout, since it only ever
+/// counts posts from runs that do write.
+@Test("a skipped run posts nothing")
+@MainActor
+func aSkippedRunPostsNothing() throws {
+    let fixture = try autoExportFixture()
+    fixture.settings.autoExportEnabled = false
+    var posts = 0
+    let token = NotificationCenter.default.addObserver(
+        forName: .stenoAutoExportDidChange, object: nil, queue: nil
+    ) { _ in posts += 1 }
+    defer { NotificationCenter.default.removeObserver(token) }
+
+    let outcome = fixture.service().run(trigger: .quit)
+
+    #expect(outcome == .skipped(.disabled))
+    #expect(posts == 0)
+}
+
+/// **Important 3, final review of M2.5-05.** `encode(at:)` used to build its
+/// `ExportEncoder` with no seam into the two-reading stability check, so
+/// nothing in this bundle could force `ExportError.storeChangedWhileReading`
+/// through `AutoExportService.run` — the `catch let error as ExportError` arm
+/// two lines above the generic fallback was unreachable, and swapping the two
+/// messages (or deleting the typed catch entirely) would have left the suite
+/// green. `AutoExportFixture.service(afterRead:)` closes that gap the same
+/// way `ExportStableReadTests` does for `ExportEncoder` directly.
+///
+/// **Confirmed by mutation**: with the typed catch removed (`catch { ... }`
+/// alone) or with the two failure strings swapped, this test goes red — see
+/// the PR body / fix report for the exact diff exercised.
+@Test("a store that changes during the read is reported with the read-specific message")
+@MainActor
+func aStoreChangeDuringReadIsReportedAndRecorded() throws {
+    let fixture = try autoExportFixture()
+    // Inserts on every gap between the encoder's two readings, so the store
+    // never settles — matching `ExportStableReadTests.changingStoreIsRefused`.
+    var inserted = 0
+    let service = fixture.service(
+        afterRead: {
+            inserted += 1
+            let project = Project(
+                id: UUID(), name: "Added mid-read \(inserted)", colorHex: "#445566",
+                modifiedAt: fixture.stamp)
+            fixture.context.insert(project)
+            try? fixture.context.save()
+        })
+
+    let outcome = service.run(trigger: .quit)
+
+    guard case .failed(let message) = outcome else {
+        Issue.record("a changing store was not reported as a failure: \(outcome)")
+        return
+    }
+    // The read-specific sentence, not the generic "could not read its own
+    // store" fallback — the distinction the two-sentence design draws.
+    #expect(message == ExportError.storeChangedWhileReading.message)
+    #expect(fixture.settings.autoExportStatus.problem == message)
+    // Proof the seam actually fired, and that nothing reached disk.
+    #expect(inserted > 0)
+    #expect(fixture.recorder.written.isEmpty)
+}

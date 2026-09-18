@@ -27,7 +27,7 @@ final class AutoExportRecorder {
     /// never fails the export; this one exists to prove the sweep does not
     /// abandon the rest of the folder over a single undeletable file — the
     /// property `AutoExportService.sweep`'s per-file `do`/`catch` documents.
-    /// A single `Set<URL>` matched on `lastPathComponent` rather than on the
+    /// A single `Set<String>` matched on `lastPathComponent` rather than on the
     /// full `URL`, because the folder in a fixture is a fresh temp directory
     /// each run and only the name is known ahead of time.
     var trashFailures: Set<String> = []
@@ -70,14 +70,22 @@ struct AutoExportFixture {
     let stamp: Date
 
     /// The service under test, over this fixture's injected everything.
-    func service(now: (() -> Date)? = nil) -> AutoExportService {
+    ///
+    /// - Parameter afterRead: forwarded to `AutoExportService.init`, which
+    ///   forwards it to the `ExportEncoder` it builds. Defaults to a no-op so
+    ///   no existing call site has to change; `ExportStableReadTests` drives
+    ///   the same seam on `ExportEncoder` directly.
+    func service(
+        now: (() -> Date)? = nil, afterRead: @escaping () -> Void = {}
+    ) -> AutoExportService {
         AutoExportService(
             context: context,
             settings: settings,
             now: now ?? { stamp },
             exportedBy: "steno/test (macOS)",
             write: { try recorder.write($0, to: $1) },
-            trash: { try recorder.trash($0) }
+            trash: { try recorder.trash($0) },
+            afterRead: afterRead
         )
     }
 }

@@ -70,10 +70,16 @@ public struct AutoExportService {
     private let trash: (URL) throws -> Void
     private let contents: (URL) throws -> [URL]
     private let createDirectory: (URL) throws -> Void
+    private let afterRead: () -> Void
 
     /// `exportedBy` is passed rather than defaulted at the call site for
     /// D-010's reason: the test bundle is unhosted, so `Bundle.main` there is
     /// the xctest runner.
+    ///
+    /// - Parameter afterRead: forwarded to the `ExportEncoder` built inside
+    ///   `encode(at:)`. The only way to exercise the "store changed while
+    ///   reading" arm of `run`'s `catch`: a real concurrent writer cannot be
+    ///   arranged in a headless single-process test (§9.4).
     public init(
         context: ModelContext,
         settings: AppSettings = AppSettings(),
@@ -89,7 +95,8 @@ public struct AutoExportService {
         },
         createDirectory: @escaping (URL) throws -> Void = {
             try FileManager.default.createDirectory(at: $0, withIntermediateDirectories: true)
-        }
+        },
+        afterRead: @escaping () -> Void = {}
     ) {
         self.context = context
         self.settings = settings
@@ -99,6 +106,7 @@ public struct AutoExportService {
         self.trash = trash
         self.contents = contents
         self.createDirectory = createDirectory
+        self.afterRead = afterRead
     }
 
     /// Why this folder cannot be the auto-export folder, or `nil`.
@@ -213,7 +221,8 @@ public struct AutoExportService {
             context: context,
             includesCachedExternalData: true,
             now: { instant },
-            exportedBy: exportedBy
+            exportedBy: exportedBy,
+            afterRead: afterRead
         ).encode()
     }
 
