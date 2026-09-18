@@ -26,6 +26,18 @@ extension Notification.Name {
     /// first one forgotten is a staleness bug that looks like SwiftData being
     /// flaky.
     public static let stenoDidWrite = Notification.Name("com.lgabrielgr.steno.didWrite")
+
+    /// Posted after an auto-export changes `AppSettings.autoExportStatus` —
+    /// by `AutoExportService` and nowhere else.
+    ///
+    /// **Separate from `.stenoDidWrite`, which is about the store.** Nothing
+    /// auto-export does writes a row, and a reader of this notification wants
+    /// to refresh a status line, not refetch a task list. Folding the two
+    /// together would make every capture reload the backup status and every
+    /// backup reload three surfaces' fetches, and would make "why did the
+    /// window reload?" unanswerable.
+    public static let stenoAutoExportDidChange = Notification.Name(
+        "com.lgabrielgr.steno.autoExportDidChange")
 }
 
 /// Holds a `NotificationCenter` token and removes it when its owner is
