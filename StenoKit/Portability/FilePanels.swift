@@ -30,6 +30,14 @@ public protocol FilePanels {
 
     /// `nil` when the user cancelled.
     func chooseImportSource() -> URL?
+
+    /// §10.5's auto-export folder. `nil` when the user cancelled.
+    ///
+    /// A folder, not a file, so it cannot reuse `chooseExportDestination`: a
+    /// save panel returns a path to write *once*, and this returns the
+    /// directory every future export goes into. `startingAt` is the folder in
+    /// force now, so the panel opens where the user already is.
+    func chooseExportFolder(startingAt current: URL) -> URL?
 }
 
 /// The default everywhere except the app: opens nothing, and says so.
@@ -53,6 +61,12 @@ public final class UnavailableFilePanels: FilePanels {
     public func chooseImportSource() -> URL? {
         didRefuse = true
         Log.app.error("file panels are unavailable; import was not offered")
+        return nil
+    }
+
+    public func chooseExportFolder(startingAt current: URL) -> URL? {
+        didRefuse = true
+        Log.app.error("file panels are unavailable; the folder chooser was not offered")
         return nil
     }
 }
@@ -107,6 +121,27 @@ public final class AppKitFilePanels: FilePanels {
         panel.canChooseDirectories = false
         panel.title = "Import Steno Data"
         panel.message = "Choose a Steno export to read."
+        guard panel.runModal() == .OK else { return nil }
+        return panel.url
+    }
+
+    /// **Choosing the folder here is what grants access to it.** The app is
+    /// unsandboxed, so there is no security-scoped bookmark to keep; what the
+    /// panel establishes is the TCC grant for a protected location — a Dropbox,
+    /// iCloud Drive or `~/Documents` folder — and that grant is what makes the
+    /// task's "persists across relaunch" criterion true. See D-120.
+    public func chooseExportFolder(startingAt current: URL) -> URL? {
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = false
+        panel.canChooseDirectories = true
+        panel.allowsMultipleSelection = false
+        panel.canCreateDirectories = true
+        panel.directoryURL = current
+        panel.prompt = "Choose"
+        panel.title = "Choose a Backup Folder"
+        panel.message =
+            "Steno writes a backup here automatically. A Dropbox, Google Drive or iCloud Drive "
+            + "folder keeps a copy off this Mac."
         guard panel.runModal() == .OK else { return nil }
         return panel.url
     }

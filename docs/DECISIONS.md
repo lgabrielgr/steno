@@ -3081,6 +3081,300 @@ while `ImportReader` still refuses it.
 
 ---
 
+### D-120 — Default ON writes to `~/Steno Backups`, chosen to keep TCC off the quit path
+
+**2026-09-18** · M2.5-05 · **Status:** accepted
+
+`AppSettings.autoExportEnabled` defaults `true`, and `autoExportFolder` defaults to
+`~/Steno Backups`, created on demand. Onboarding is about *where*, never *whether* (D-126).
+
+**Why not `~/Documents`, the obvious "safe" default.** `~/Documents`, `~/Desktop` and
+`~/Downloads` are TCC-protected for every app on the system, sandboxed or not — Steno being
+deliberately unsandboxed (`Steno.entitlements`) buys nothing here. The first write into one of
+them raises a system permission prompt, and the trigger likeliest to fire first is quit: a
+permission dialog appearing as the user closes the app is the worst possible introduction to a
+feature whose entire promise is that it works unwatched. The home directory itself carries no
+such protection, so the default path raises no prompt, ever, on any trigger.
+
+**`NSOpenPanel` is the durable grant, not a placeholder for one.** Pointing the folder at
+Dropbox, iCloud Drive or Google Drive — §10.5's actual recommendation, and the reason this
+feature exists as sync's replacement — goes through `FilePanels.chooseExportFolder`. For an
+unsandboxed app, the panel selection *is* what grants durable access; there is no
+security-scoped bookmark to store because there is no sandbox to escape. "Persists across
+relaunch" is satisfied by storing the plain path, not by adopting sandboxed-app machinery this
+app has no use for.
+
+Rejected: **auto-detecting a cloud drive** and defaulting into it. That would have Steno decide,
+unasked, to sync the user's work off the machine. The suggestion belongs in the onboarding
+sentence, where the user reads it before it happens, not in code that guesses.
+
+Rejected: **on-but-unconfigured**, nagging until a folder is chosen. It reproduces the exact
+human failure mode §10.5 calls out — a setting that is on and does nothing — and leaves the
+fresh install, the one most in need of a first backup, with none.
+
+**Falsified by** `theDefaultFolderIsOutsideProtectedLocations` and `aFreshInstallHasAutoExportOn`
+in `AutoExportSettingsTests`.
+
+---
+
+### D-121 — Both triggers ship on; quit is unconditional, daily is measured from the last success
+
+**2026-09-18** · M2.5-05 · **Status:** accepted
+
+Quit rewrites the day's file on every terminate, no dueness check. Daily is consulted at launch
+and hourly, and fires when there has never been a success, ≥24h have passed since the last one,
+or the last success is dated in the future — a clock moved backward must not disable backups
+until it catches up.
+
+**The interval is measured from the last success, never the last attempt.** A folder that goes
+missing therefore retries on the very next tick instead of going quiet for a day: the failure
+stays live and keeps re-announcing itself on the channels D-123 builds, which is the behaviour a
+backup deserves. Measuring from the last attempt would let a broken folder produce one failure
+record and then silence for 24 hours — indistinguishable, from the user's chair, from a folder
+that started working again.
+
+**Force-quit loses nothing**, and the reason matters because it looks like a gap: an export is
+*derived* from the store, which SwiftData has already persisted. A missed quit-export means the
+on-disk file is stale relative to the store, not that data was lost — the daily trigger closes
+that gap on its own schedule. The two triggers exist because each covers the other's blind spot:
+quit misses `kill -9`, daily misses a machine that never survives to the next day boundary.
+
+**The quit hook is `NSApplication.willTerminateNotification`, observed by `AutoExportController`
+inside `StenoKit` — not `AppDelegate.applicationWillTerminate(_:)`.** The delegate method fires
+at the same moment but lives in the app target, which the headless test bundle cannot reach
+(D-010); routing the call there would also give `AppDelegate` — which exists today for one
+unrelated line — a store dependency it has no other reason to hold. The notification gets the
+identical timing for free.
+
+**Quit latency is measured, not asserted.** §13's latency rule is written about capture, but the
+logic transfers: a quit that visibly hangs teaches the user to force-quit, which is the one path
+that skips the export. `AutoExportLatencyTests.testAnExportAtQuitIsNotFelt` measures
+`AutoExportService.run` itself, not the terminate handler wrapping it — D-025 is the standing
+example of a number claimed about the wrong scope and wrong by an order of magnitude. It measures
+around 23 ms mean over ten iterations (RSD 23.6%) on the development machine against a 500 ms
+gate; the gate exists to catch a change of shape — an export that starts walking relationships
+per event, or writing non-atomically — not to police milliseconds. It asserts the **mean**
+rather than the worst of ten, which is D-064's rule for this style of test on CI runners.
+
+Rejected: **a single "export when stale" trigger** with no independent switches. Fewer states,
+but it gives up the ability to turn off the quit path alone if it ever proves the annoying half —
+and of the two, it is the more likely candidate.
+
+Rejected: **skipping the export when the store has not changed.** It saves one write per quit at
+the cost of a new question — "has anything changed?" — whose wrong answer is a silently stale
+backup. The write is cheap; the question is not worth introducing.
+
+**Falsified by** the `theDailyRuleHolds(dueCase:)` table in `AutoExportDueTests`,
+`quitIgnoresDueness` and `manualIgnoresDueness` in `AutoExportServiceTests`, and
+`AutoExportLatencyTests.testAnExportAtQuitIsNotFelt`.
+
+---
+
+### D-122 — Auto-exports include cached external data
+
+**2026-09-18** · M2.5-05 · **Status:** accepted
+
+`AutoExportService` calls `ExportEncoder` with `includesCachedExternalData: true`, hard-coded,
+with no setting to turn it off.
+
+`BackupWriter` already carries the argument for the one other unattended write this product
+makes: a snapshot missing `cachedSummary` and `lastFetchedAt` is not one anyone can restore from,
+because §10.1's merge rule — "nil loses to any value" — would hand those fields straight back
+away on the way in. §10.5 calls auto-export "the backup story as well as the transfer story," so
+the argument is identical, not merely similar.
+
+§10.2 excludes cached data from an *ordinary* export because it is bulky and re-fetchable — true
+of a file someone is about to email themselves, irrelevant to the file that is the only copy of
+their store off the machine. Until M4 there is no cached external data at all, so the decision
+costs nothing today and is already correct on the day it starts costing something.
+
+Rejected: **a toggle in the Data pane.** One more setting, one more combination to test, decided
+today for a question nobody has a basis to answer before the integrations that populate those
+fields exist.
+
+**Falsified by** `theWrittenFileCarriesCachedExternalData` in `AutoExportServiceTests`.
+
+---
+
+### D-123 — A failure is persisted status with three readers, never a system notification
+
+**2026-09-18** · M2.5-05 · **Status:** accepted · extends D-119
+
+One `AutoExportStatus` value, `Codable`-encoded into a single `UserDefaults` key —
+`AppSettings.hotkeyChord`'s shape, and one key rather than several so a success record and a
+failure record can never disagree about which is current.
+
+**Fields are `writtenAt` and `failedAt`, not `at`.** SwiftLint `--strict`'s `identifier_name`
+rule has a three-character floor and treats a violation as fatal; the design's first draft used
+`at` on both nested structs and does not compile.
+
+Written **before** anything could display it — the process may be terminating with no UI left,
+so the record has to outlive the write that produced it and be read fresh at the next launch. An
+absent or undecodable value reads as empty status and is never overwritten blindly, the same
+posture `AppSettings` already takes toward a corrupt stored hotkey chord.
+
+Three readers, deliberately not two:
+
+1. **`MenuBarModel`** — a warning row in the popover, and the status item's icon swaps to a
+   badged one. This is the reader that works with no window open, which is most of why it is the
+   primary one.
+2. **`AutoExportWindowModel.problem`** — its own type, not a property folded onto
+   `MainWindowModel`. A successful import clearing a standing backup failure is exactly the bug
+   that forced `readError` and `writeError` apart on `MenuBarModel`, and "you currently have no
+   backup" is that same kind of fact. (The design sketched this as
+   `MainWindowModel.autoExportProblem`; it shipped as its own model because `MainWindowModel.swift`
+   was already at SwiftLint's 400-line file cap, and the state has a different lifetime anyway — it
+   changes when an export runs, not when the store is written. The separation from `lastError` is
+   the part of the decision that survived unchanged.)
+3. **The Data pane** — the full record, success or failure, path and timestamp.
+
+Cleared only by a successful export. Dismissing the window's banner hides it for the session
+without touching the stored status — the popover row and the Data pane keep reporting the
+failure regardless, which is what makes a dismiss button safe to offer at all.
+
+Rejected: **`UNUserNotificationCenter`.** It needs an authorization prompt, and a user who denies
+it — or mutes the app in Focus settings months later — lands back in the exact silence §10.5
+forbids. It would still need the persisted channel underneath it to survive a quit-time failure,
+at which point it is a second mechanism that can only weaken the guarantee, never strengthen it.
+
+Rejected: **a modal alert at next launch.** Impossible to miss, and an interruption sitting on
+the launch path, which §1.1 protects for capture.
+
+**Falsified by** `successRecordsTheStatus` and `aWriteFailureIsRecorded` in
+`AutoExportServiceTests`; `thePopoverReportsAPersistedFailure`, `reopeningDoesNotClearTheFailure`
+and `aSuccessClearsIt` in `MenuBarAutoExportTests`; and `aPersistedFailureIsShownAtLaunch`,
+`dismissingHidesWithoutClearing` and `aLaterFailureIsShownAgain` in `AutoExportWindowModelTests`.
+
+---
+
+### D-124 — Retention keeps the 14 newest by filename date, and the surplus goes to the Trash
+
+**2026-09-18** · M2.5-05 · **Status:** accepted
+
+`ExportFilename.forDate` is one file per local day, and the write overwrites on collision
+(D-116's answer, reused). Fourteen kept files is therefore about two weeks of daily history.
+
+**Sorted by the date parsed out of the filename, never by modification time.** A cloud drive —
+the folder §10.5 actually recommends pointing this at — restamps mtime whenever it re-downloads a
+file, so an mtime-ordered sweep in a synced folder would delete whichever files the sync engine
+happened to touch least recently rather than whichever are actually oldest. The filename date is
+the durable key and also the only value the format carries — the same reasoning that made sort
+keys serialized values in M2.5-01. `AutoExportSweepTests` sets mtimes to *disagree* with the
+filenames specifically so an mtime-sorting implementation fails instead of passing by accident.
+
+**Only exact `steno-export-YYYY-MM-DD.json` names are candidates.** A manual export saved under
+another name, or anything else a user drops in the folder, is never eligible for deletion —
+`AutoExportRetention.prunable` returns nothing for a name it cannot parse.
+
+**`FileManager.trashItem`, not `removeItem`.** This is a product whose event log is append-only
+because permanent loss is the one thing it refuses to risk; an over-eager retention bug that
+trashes a file is recoverable, one that unlinks it is not. Trashing out of a synced folder still
+propagates the deletion to the cloud, so nothing is bought by unlinking instead.
+
+**A failed trash is logged and nothing more.** The export itself succeeded; routing a stuck sweep
+through the failure channel would put a false alarm on the one channel D-123 needs to stay
+trustworthy. The folder grows by one file and the next run tries again.
+
+Rejected: **a configurable count.** A stepper in the Data pane for a number nobody will change.
+
+**Falsified by** `theSweepIgnoresModificationTime`, `aFailedTrashDoesNotStrandTheRest` and
+`aFailedSweepDoesNotFailTheExport` in `AutoExportSweepTests`, and the exact-name and count cases
+in `AutoExportRetentionTests`.
+
+---
+
+### D-125 — `StoreFileGuard` is extracted from the CLI and shared
+
+**2026-09-18** · M2.5-05 · **Status:** accepted · extends D-116
+
+`CLIRunner+Export`'s `fileprivate isStoreFile` moves, behaviour-preserving, to
+`StenoKit/Portability/StoreFileGuard.swift` as `internal` API. The CLI's own tests move with it
+unmodified — they are what proves the extraction changed nothing.
+
+**Why it has to be shared rather than duplicated.** The original guard exists because
+`--output ~/Library/Application Support/Steno/Steno.store` atomically replaced the live database
+with JSON while printing "Exported to …" — three separate defects found in review of PR #31:
+case-insensitive volumes defeating a case-sensitive path comparison, `fileResourceIdentifierKey`
+being unavailable for a destination that does not exist yet, and a symlinked parent directory
+producing two spellings of one location. Auto-export is a second writer aimed at a user-chosen
+destination, unattended, and it also *deletes* files there — every one of those three defects is
+exactly as reachable from a folder the onboarding sheet or the Data pane hands it. A guard that
+lives on only one of the two paths is a guard the next surface simply forgets to call.
+
+**One addition the CLI never needed: a directory-shaped question.** `--output` always names a
+file, so `isStoreFile` only ever had to ask "is this file the store." Auto-export names a
+*folder* and writes a new dated file into it each day, so asking about today's filename would
+answer "no" while the sweep goes looking for files to delete beside the database itself. This
+task adds `isInsideStoreDirectory`, checked when a folder is **chosen** (refusing the mistake
+while the user is looking at it) and again before **every write** (because the store's location
+is resolved from the open container's configurations, and a folder validated in January is not a
+promise about March).
+
+**Falsified by** `refusesToOverwriteTheStore`, `refusesCaseVariantOfTheStore` and
+`refusesStoreReachedThroughASymlink` in `CLIExportTests` (unchanged, proving the move), and
+`theStoreDirectoryIsRefused`, `aFolderInsideTheStoreIsRefused`, `aSiblingWithASharedPrefixIsAllowed`
+and `aRunIntoTheStoreDirectoryIsRefused` in `AutoExportStoreGuardTests`.
+
+---
+
+### D-126 — Onboarding is one sheet on the machinery that already exists
+
+**2026-09-18** · M2.5-05 · **Status:** accepted
+
+`ActiveSheet.autoExportOnboarding`, presented by `MainWindowModel` on first launch once the store
+has opened and `AppSettings.hasSeenAutoExportOnboarding` is false — the same presentation path
+already used for the import preview, the standup draft and the note composer. No new window, no
+new scene, no onboarding framework.
+
+The sheet states what auto-export already does, shows the folder it is already writing to,
+names Dropbox / Google Drive / iCloud Drive as the folder worth choosing instead, and offers
+**Choose Folder…** and **Done**. There is deliberately no enable checkbox: the feature is already
+on, and offering one would invite the user to re-answer a question §10.5 has already settled.
+
+**`Done` takes the first backup in the foreground**, via `AutoExportWindowModel.finishOnboarding`
+running the `.manual` trigger before dismissing. This was not in the original sketch — building
+the plan against the working tree surfaced it. `~/Steno Backups` needs no TCC prompt, so nothing
+about D-120 required it, but running the export here still makes §10.5's promise true from
+minute one rather than at the first quit, and puts any failure a fresh install can hit — an
+uncreatable folder, a full disk — in front of the one person still holding the context to fix it.
+
+A store that fails to open shows no sheet and writes no onboarding flag, so the sheet appears on
+the next *healthy* launch instead of being permanently consumed by a broken one.
+
+Rejected: **a reusable multi-step onboarding framework**, with auto-export as its first step.
+There is no second step to validate the abstraction against — M3-04 and M4-04 are ordinary
+Settings panes, not onboarding steps — so building one now would be designing for a shape with
+one data point.
+
+**Falsified by** `onboardingIsOwedOnce` and `finishingOnboardingWritesABackup` in
+`AutoExportWindowModelTests`.
+
+---
+
+### D-127 — The Data pane arrives carrying auto-export only
+
+**2026-09-18** · M2.5-05 · **Status:** accepted
+
+`SettingsPane` has carried `// case data — M2.5: export as JSON, purge cached external data`
+since M1-08. This task uncomments it: one enum case, one `title`, one `systemImage`, one arm in
+`SettingsView`'s exhaustive switch, one new view file — the entire extension mechanism M1-08
+built, exercised here for the first time since it was written.
+
+The pane carries the enable toggle, the folder with **Choose Folder…**, the two trigger toggles,
+the last result (success with path and time, or the failure message), and **Export now**.
+
+**FR-6's "export all data as JSON" is not duplicated here** — it is already the File menu's
+Export item, and a second entry point for the same action would be two places to keep in sync for
+no reader's benefit. **FR-6's "purge cached external data" is left unbuilt**, and the enum
+comment narrows to say why rather than continuing to promise it: no cached external data exists
+until M4's integrations populate any, and a button that purges nothing is a button no test could
+ever distinguish from a broken one.
+
+**Falsified by** `theDataPaneReadsTheDefaults`, `togglesWriteThrough`, `backUpNowWrites`,
+`choosingAFolderVerifiesIt` and `aFailedStoreDisablesThePane` in `DataSettingsModelTests`.
+
+---
+
 ## Open — decided by the task that owns them
 
 Each of these is a real choice the spec leaves open. The owning task decides it, records it in
@@ -3097,3 +3391,44 @@ its PR body, and adds an entry above.
 an implementer's: Jira-driven auto-transition (Q(M4)), report history retention (Q(M3)), EM task
 templates (Q(M1)), and whether auto-export is sufficient in practice (Q(M2) — a "no" reopens
 §14). Raise them; do not resolve them.
+
+---
+
+### D-128 — A backup folder that has worked before and vanished is reported, not recreated
+**2026-09-18** · M2.5-05 · **Status:** accepted · extends D-120, D-123
+
+`AutoExportService.run` creates its target folder before writing. That is right exactly once —
+on the run that first uses a folder — and wrong every time after, because the same call turns a
+folder that has *disappeared* into a fresh empty one and reports a successful backup over it.
+
+**Found by hand, not by the suite.** The acceptance criterion says a missing folder must surface
+to the user; the manual check for it was "rename the folder away, then quit". Doing that produced
+an unbroken run of green backups. Nothing was wrong with the test — the behaviour it was checking
+could not happen, because the spec's own error table had specified silent recreation and the code
+implemented it faithfully.
+
+**Why silent recreation is worse than it sounds.** §10.5 recommends pointing the folder at
+Dropbox, Google Drive or iCloud Drive, and the failure that story actually suffers is the folder
+moving, unmounting, or being signed out of. Recreating a plain local directory at that path means
+Steno writes a file nobody is syncing, records a success, and shows the user a green backup
+status — while the off-machine copy they believed in no longer exists. That is precisely the
+silent failure the whole feature exists to prevent, arriving through the one channel D-123 works
+to keep trustworthy.
+
+**The rule:** create when `AutoExportStatus.lastSuccess` does not name a file inside the
+configured folder; report when it does. The status already carries the evidence, so no new state
+is introduced, and the two cases it separates are exactly the two that matter — a folder never
+used yet (a first run, or one the user has just chosen in the panel and not created) versus a
+folder that has been holding backups and is now gone.
+
+**Alternatives.** *Never create except on first run* — simpler to state, but a folder chosen in
+the panel and not yet created would fail until the user made it by hand. *Never create at all* —
+simplest rule, and it makes a fresh install report a failure before it has ever written a backup,
+which undercuts §10.5's default-ON. *Leave it* — keeps the Dropbox-vanished case silent, which is
+the one outcome §10.5 rules out.
+
+**Falsified by** `aVanishedFolderIsReported`, `aFirstRunCreatesTheFolder`, and
+`aNewFolderIsStillCreated`. The third is the one that matters for the rule's shape: a success
+recorded against a *different* folder must not block creating a newly chosen one, and a naive
+"has anything ever succeeded?" check fails it.
+

@@ -27,6 +27,14 @@ struct StenoApp: App {
     /// behind it must not be.
     private let settingsModel: SettingsModel
 
+    /// FR-6's Data pane, built here for the reason above.
+    private let dataSettingsModel: DataSettingsModel
+
+    /// §10.5's auto-export. Held for the whole process because it owns a timer
+    /// and a termination observation — a controller that went out of scope
+    /// would take both with it, and the backup would quietly stop happening.
+    private let autoExport: AutoExportController?
+
     /// Exists to keep the app alive when the last window closes, which is what
     /// makes "the icon is present without the main window open" true.
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
@@ -103,9 +111,26 @@ struct StenoApp: App {
             menuBar = MenuBarController(container: container)
             settingsModel = SettingsModel(
                 hotkey: controller.hotkeyBinding, context: container.mainContext)
+
+            // §10.5. One service, shared by the automatic triggers and the
+            // Data pane's "Back Up Now", so the two cannot disagree about
+            // where a backup goes or what the last one did.
+            let exporter = AutoExportService(context: container.mainContext)
+            dataSettingsModel = DataSettingsModel(
+                // A second `AppKitFilePanels` — `MainWindowView` builds its
+                // own. The type is stateless, and threading one instance
+                // through two scenes would buy nothing (D-109).
+                panels: AppKitFilePanels(), service: exporter)
+            let exportController = AutoExportController(service: exporter)
+            exportController.start()
+            autoExport = exportController
         } else {
             quickCapture = nil
             menuBar = nil
+            // No store means nothing to export. The pane still opens and says
+            // so, which is §13's rule that degradation ships with the feature.
+            dataSettingsModel = DataSettingsModel()
+            autoExport = nil
             // Settings still opens. Launch at login has no store dependency
             // and stays live; the hotkey and default-project controls disable
             // themselves and say why (§13 — degradation ships with the
@@ -146,7 +171,7 @@ struct StenoApp: App {
         // `NSApp.activate`), so the application menu is reachable even with no
         // window open, and M1-04's popover is left as it was built.
         Settings {
-            SettingsView(model: settingsModel)
+            SettingsView(model: settingsModel, dataModel: dataSettingsModel)
         }
     }
 }
