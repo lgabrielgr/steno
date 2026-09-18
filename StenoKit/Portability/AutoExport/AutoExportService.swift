@@ -70,6 +70,7 @@ public struct AutoExportService {
     private let trash: (URL) throws -> Void
     private let contents: (URL) throws -> [URL]
     private let createDirectory: (URL) throws -> Void
+    private let exists: (URL) -> Bool
     private let afterRead: () -> Void
 
     /// `exportedBy` is passed rather than defaulted at the call site for
@@ -96,6 +97,7 @@ public struct AutoExportService {
         createDirectory: @escaping (URL) throws -> Void = {
             try FileManager.default.createDirectory(at: $0, withIntermediateDirectories: true)
         },
+        exists: @escaping (URL) -> Bool = { FileManager.default.fileExists(atPath: $0.path) },
         afterRead: @escaping () -> Void = {}
     ) {
         self.context = context
@@ -106,6 +108,7 @@ public struct AutoExportService {
         self.trash = trash
         self.contents = contents
         self.createDirectory = createDirectory
+        self.exists = exists
         self.afterRead = afterRead
     }
 
@@ -152,17 +155,7 @@ public struct AutoExportService {
         }
 
         let folder = settings.autoExportFolder
-        if let problem = problem(withFolder: folder) {
-            return fail(problem, at: instant)
-        }
-
-        do {
-            try createDirectory(folder)
-        } catch {
-            return fail(
-                "Steno could not create \(folder.path), so no backup was written. "
-                    + error.localizedDescription, at: instant)
-        }
+        if let failure = prepareFolder(folder, at: instant) { return failure }
 
         // **Two failures, two sentences**, the distinction
         // `MainWindowModel.exportStore()` and `CLIRunner.export` both already
@@ -224,6 +217,64 @@ public struct AutoExportService {
             exportedBy: exportedBy,
             afterRead: afterRead
         ).encode()
+    }
+
+    /// Guard the destination, and create it only when it is genuinely new.
+    ///
+    /// Extracted from `run` when it crossed SwiftLint's 50-line function limit,
+    /// the same way `encode(at:)` was. The three checks belong together anyway:
+    /// each answers "may we write into this folder at all", and each returns the
+    /// sentence the user sees. `nil` means the folder is ready.
+    private func prepareFolder(_ folder: URL, at instant: Date) -> AutoExportOutcome? {
+        if let problem = problem(withFolder: folder) {
+            return fail(problem, at: instant)
+        }
+
+        // **A folder that has worked before and is now gone is reported, not
+        // recreated.** `createDirectory` below would happily make a fresh empty
+        // one at the same path and report a successful backup — which is right
+        // on a first run, and actively harmful afterwards. The case §10.5 cares
+        // about is a folder pointed at Dropbox or an external drive that has
+        // since moved, unmounted, or been signed out of: recreating a plain
+        // local directory there writes a file nobody is syncing while telling
+        // the user their off-machine copy is fine. Found in manual
+        // verification of M2.5-05, where renaming the folder away produced an
+        // unbroken run of green backups. See D-128.
+        if !exists(folder), hasBackedUp(into: folder) {
+            return fail(
+                "\(folder.path) is gone, and Steno had been backing up there. It was not "
+                    + "recreated: if that folder was on a sync service or another drive, a new "
+                    + "empty one would not be the backup you had. No backup was written.",
+                at: instant)
+        }
+
+        do {
+            try createDirectory(folder)
+        } catch {
+            return fail(
+                "Steno could not create \(folder.path), so no backup was written. "
+                    + error.localizedDescription, at: instant)
+        }
+
+        return nil
+    }
+
+    /// Has a backup ever landed in *this* folder?
+    ///
+    /// The question separates "make me a folder" from "your backup folder has
+    /// disappeared", and `AutoExportStatus` already holds the evidence: a
+    /// recorded success names the file it wrote, whose parent is the folder it
+    /// wrote into. A success recorded against a *different* folder answers no,
+    /// which is what lets the user pick a folder that does not exist yet and
+    /// have it created for them.
+    private func hasBackedUp(into folder: URL) -> Bool {
+        guard let path = settings.autoExportStatus.lastSuccess?.path else { return false }
+        let recorded = URL(fileURLWithPath: path)
+            .deletingLastPathComponent().standardizedFileURL.path
+        // Case-insensitively, for `StoreFileGuard`'s reason: HFS+ and APFS fold
+        // case by default, so two spellings of one folder must compare equal.
+        return recorded.compare(folder.standardizedFileURL.path, options: .caseInsensitive)
+            == .orderedSame
     }
 
     /// Delete the surplus, keeping the newest 14 (D-124).

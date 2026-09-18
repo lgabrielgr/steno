@@ -301,3 +301,65 @@ func aStoreChangeDuringReadIsReportedAndRecorded() throws {
     #expect(inserted > 0)
     #expect(fixture.recorder.written.isEmpty)
 }
+
+/// D-128: the case manual verification of M2.5-05 found. Renaming the backup
+/// folder away produced an unbroken run of green backups, because the service
+/// recreated it before every write — so the failure §10.5 exists to report was
+/// unreportable, and a folder that had been syncing to Dropbox came back as a
+/// plain local directory nobody was watching.
+@Test("a folder that has been backed up to before, and is now gone, is reported")
+@MainActor
+func aVanishedFolderIsReported() throws {
+    let fixture = try autoExportFixture()
+    // A success recorded against this very folder — and the folder absent,
+    // which is what `autoExportFixture` leaves behind until a run creates it.
+    fixture.settings.autoExportStatus = AutoExportStatus(
+        lastSuccess: .init(
+            writtenAt: fixture.stamp.addingTimeInterval(-48 * 60 * 60),
+            path: fixture.folder.appendingPathComponent("steno-export-2023-11-12.json").path))
+
+    let outcome = fixture.service().run(trigger: .quit)
+
+    guard case .failed(let message) = outcome else {
+        Issue.record("a vanished backup folder was not reported: \(outcome)")
+        return
+    }
+    #expect(message.contains("is gone"))
+    #expect(fixture.recorder.written.isEmpty)
+    #expect(!FileManager.default.fileExists(atPath: fixture.folder.path))
+}
+
+/// The other half of D-128, and the reason it is not simply "never create":
+/// with nothing recorded against this folder there is nothing to have lost, so
+/// the first run creates it and backs up.
+@Test("a folder with no backup behind it is created, not reported")
+@MainActor
+func aFirstRunCreatesTheFolder() throws {
+    let fixture = try autoExportFixture()
+
+    guard case .written = fixture.service().run(trigger: .quit) else {
+        Issue.record("the first run did not create its folder")
+        return
+    }
+    #expect(FileManager.default.fileExists(atPath: fixture.folder.path))
+}
+
+/// A success recorded against a *different* folder must not block the new one.
+/// This is what happens the moment the user picks a folder that does not exist
+/// yet, having backed up somewhere else until now — the common case, and the
+/// one a naive "have we ever succeeded?" check would break.
+@Test("choosing a new folder still creates it, even after backups elsewhere")
+@MainActor
+func aNewFolderIsStillCreated() throws {
+    let fixture = try autoExportFixture()
+    fixture.settings.autoExportStatus = AutoExportStatus(
+        lastSuccess: .init(
+            writtenAt: fixture.stamp.addingTimeInterval(-48 * 60 * 60),
+            path: "/somewhere/else/steno-export-2023-11-12.json"))
+
+    guard case .written = fixture.service().run(trigger: .quit) else {
+        Issue.record("a newly chosen folder was refused instead of created")
+        return
+    }
+    #expect(FileManager.default.fileExists(atPath: fixture.folder.path))
+}

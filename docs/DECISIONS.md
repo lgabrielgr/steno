@@ -3391,3 +3391,44 @@ its PR body, and adds an entry above.
 an implementer's: Jira-driven auto-transition (Q(M4)), report history retention (Q(M3)), EM task
 templates (Q(M1)), and whether auto-export is sufficient in practice (Q(M2) — a "no" reopens
 §14). Raise them; do not resolve them.
+
+---
+
+### D-128 — A backup folder that has worked before and vanished is reported, not recreated
+**2026-09-18** · M2.5-05 · **Status:** accepted · extends D-120, D-123
+
+`AutoExportService.run` creates its target folder before writing. That is right exactly once —
+on the run that first uses a folder — and wrong every time after, because the same call turns a
+folder that has *disappeared* into a fresh empty one and reports a successful backup over it.
+
+**Found by hand, not by the suite.** The acceptance criterion says a missing folder must surface
+to the user; the manual check for it was "rename the folder away, then quit". Doing that produced
+an unbroken run of green backups. Nothing was wrong with the test — the behaviour it was checking
+could not happen, because the spec's own error table had specified silent recreation and the code
+implemented it faithfully.
+
+**Why silent recreation is worse than it sounds.** §10.5 recommends pointing the folder at
+Dropbox, Google Drive or iCloud Drive, and the failure that story actually suffers is the folder
+moving, unmounting, or being signed out of. Recreating a plain local directory at that path means
+Steno writes a file nobody is syncing, records a success, and shows the user a green backup
+status — while the off-machine copy they believed in no longer exists. That is precisely the
+silent failure the whole feature exists to prevent, arriving through the one channel D-123 works
+to keep trustworthy.
+
+**The rule:** create when `AutoExportStatus.lastSuccess` does not name a file inside the
+configured folder; report when it does. The status already carries the evidence, so no new state
+is introduced, and the two cases it separates are exactly the two that matter — a folder never
+used yet (a first run, or one the user has just chosen in the panel and not created) versus a
+folder that has been holding backups and is now gone.
+
+**Alternatives.** *Never create except on first run* — simpler to state, but a folder chosen in
+the panel and not yet created would fail until the user made it by hand. *Never create at all* —
+simplest rule, and it makes a fresh install report a failure before it has ever written a backup,
+which undercuts §10.5's default-ON. *Leave it* — keeps the Dropbox-vanished case silent, which is
+the one outcome §10.5 rules out.
+
+**Falsified by** `aVanishedFolderIsReported`, `aFirstRunCreatesTheFolder`, and
+`aNewFolderIsStillCreated`. The third is the one that matters for the rule's shape: a success
+recorded against a *different* folder must not block creating a newly chosen one, and a naive
+"has anything ever succeeded?" check fails it.
+
