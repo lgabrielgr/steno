@@ -14,8 +14,15 @@ struct AutoExportOnboardingSheet: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
-            Label("Steno backs itself up", systemImage: "externaldrive.badge.checkmark")
-                .font(.headline)
+            // A `Label` rendered the symbol at body size, which read as a
+            // stray glyph beside the title rather than as the sheet's icon.
+            HStack(spacing: 10) {
+                Image(systemName: "externaldrive.badge.checkmark")
+                    .font(.system(size: 22))
+                    .foregroundStyle(Color.accentColor)
+                Text("Steno backs itself up")
+                    .font(.headline)
+            }
 
             Text(
                 "Steno writes a copy of everything to a folder on this Mac — when you quit, and "
@@ -32,15 +39,16 @@ struct AutoExportOnboardingSheet: View {
             .foregroundStyle(.secondary)
             .fixedSize(horizontal: false, vertical: true)
 
-            LabeledContent("Folder") {
-                HStack {
-                    Text(model.folder.path)
-                        .lineLimit(2)
-                        .truncationMode(.middle)
-                        .textSelection(.enabled)
-                    Button("Choose…") { model.chooseFolder() }
-                }
+            // **Not a `LabeledContent`.** Its label column squeezed the path
+            // and the button onto one line, so a long path truncated and the
+            // button sat wherever the text left room. A captioned field takes
+            // the full width and keeps the button at a fixed trailing edge.
+            VStack(alignment: .leading, spacing: 6) {
+                Text("Backup folder")
+                    .font(.subheadline.weight(.medium))
+                BackupFolderField(folder: model.folder) { model.chooseFolder() }
             }
+            .padding(.top, 4)
 
             if let problem = model.folderProblem {
                 Label(problem, systemImage: "exclamationmark.triangle")

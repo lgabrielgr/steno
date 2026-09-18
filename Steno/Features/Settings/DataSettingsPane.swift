@@ -26,15 +26,12 @@ struct DataSettingsPane: View {
             }
 
             Section("Folder") {
-                LabeledContent("Backups go to") {
-                    HStack {
-                        Text(model.folder.path)
-                            .font(.callout)
-                            .textSelection(.enabled)
-                            .lineLimit(2)
-                            .truncationMode(.middle)
-                        Button("Choose…") { model.chooseFolder() }
-                    }
+                // The same field the first-run sheet shows, for the reason
+                // `BackupFolderField` gives: these two surfaces have drifted
+                // apart once already.
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("Backups go to")
+                    BackupFolderField(folder: model.folder) { model.chooseFolder() }
                 }
                 Text(
                     "A Dropbox, Google Drive or iCloud Drive folder keeps a copy off this Mac. "
