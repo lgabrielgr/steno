@@ -33,6 +33,13 @@ public enum ActiveSheet: Identifiable, Hashable, Sendable {
     /// to describe accurately what is about to happen.
     case importPreview
 
+    /// §10.5's first-run auto-export sheet (M2.5-05).
+    ///
+    /// Carries nothing, for `standupDraft`'s reason: what it shows lives in
+    /// `AutoExportWindowModel`, and a second copy here would be one the two
+    /// could disagree about.
+    case autoExportOnboarding
+
     public var id: Self { self }
 }
 

@@ -11,14 +11,21 @@ import Foundation
 final class StubFilePanels: FilePanels {
     var exportDestination: ExportDestination?
     var importSource: URL?
+    var exportFolder: URL?
 
     private(set) var exportPrompts = 0
     private(set) var importPrompts = 0
+    private(set) var folderPrompts = 0
     private(set) var lastDefaultName: String?
+    private(set) var lastFolderStart: URL?
 
-    init(exportDestination: ExportDestination? = nil, importSource: URL? = nil) {
+    init(
+        exportDestination: ExportDestination? = nil, importSource: URL? = nil,
+        exportFolder: URL? = nil
+    ) {
         self.exportDestination = exportDestination
         self.importSource = importSource
+        self.exportFolder = exportFolder
     }
 
     func chooseExportDestination(defaultName: String) -> ExportDestination? {
@@ -30,5 +37,11 @@ final class StubFilePanels: FilePanels {
     func chooseImportSource() -> URL? {
         importPrompts += 1
         return importSource
+    }
+
+    func chooseExportFolder(startingAt current: URL) -> URL? {
+        folderPrompts += 1
+        lastFolderStart = current
+        return exportFolder
     }
 }
