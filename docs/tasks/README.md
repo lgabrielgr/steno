@@ -79,7 +79,7 @@ something better than paper. **M2 is the true MVP; M6 is the finish line.**
 - [x] [M2.5-02](M2.5-02-import-merge.md) — merge-by-UUID: idempotent, bidirectional, non-destructive — PR #29
 - [x] [M2.5-03](M2.5-03-import-preview-ui.md) — preview, cancel, single-transaction apply, Replace mode — PR #30
 - [x] [M2.5-04](M2.5-04-cli-subcommands.md) — `steno export`/`import` and the matching make targets — PR #31
-- [ ] [M2.5-05](M2.5-05-auto-export.md) — auto-export, defaulting ON at onboarding
+- [x] [M2.5-05](M2.5-05-auto-export.md) — auto-export, defaulting ON at onboarding — PR #32
 
 ### M3 — AI summarization
 > Exit: polished summary; failure falls back cleanly to M2 output.

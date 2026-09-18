@@ -28,6 +28,11 @@ final class MenuBarController: NSObject {
     /// controller is built once in `StenoApp.init` and lives for the process.
     private var closeObservation: (any NSObjectProtocol)?
 
+    /// The auto-export observation, kept for `closeObservation`'s reason: it is
+    /// the only handle by which the registration could be removed. Nothing
+    /// removes it — the controller lives for the process.
+    private var autoExportObservation: (any NSObjectProtocol)?
+
     init(container: ModelContainer) {
         // `container.mainContext`, matching what `MainWindowView` and
         // `QuickCaptureModel` read, so a write here and the window's own
@@ -45,6 +50,11 @@ final class MenuBarController: NSObject {
         // no delegate. The one piece of bookkeeping it costs is `lastCloseAt`
         // below: that dismissal does not run through `hide()`, so `toggle()`
         // would otherwise have no way to know it happened.
+        // §10.5's failure badge, set now and kept current below. The icon is
+        // the only part of Steno visible when no window is open, so it is
+        // where an unattended backup failure has to show up first.
+        refreshStatusImage()
+
         popover.behavior = .transient
         let hosting = NSHostingController(
             rootView: MenuBarPopoverView(
@@ -76,6 +86,16 @@ final class MenuBarController: NSObject {
         // reads it, making the guard inert. `willClose` is posted when the
         // close begins, so the stamp is already down by then. If a re-open is
         // still seen by hand, `popover.animates = false` is the next lever.
+        autoExportObservation = NotificationCenter.default.addObserver(
+            forName: .stenoAutoExportDidChange, object: nil, queue: nil
+        ) { [weak self] _ in
+            MainActor.assumeIsolated {
+                guard let self else { return }
+                self.model.refreshAutoExportProblem()
+                self.refreshStatusImage()
+            }
+        }
+
         closeObservation = NotificationCenter.default.addObserver(
             forName: NSPopover.willCloseNotification, object: popover, queue: nil
         ) { [weak self] _ in
@@ -132,5 +152,18 @@ final class MenuBarController: NSObject {
 
     private func hide() {
         popover.performClose(nil)
+    }
+
+    /// The status item's icon, badged when the last backup failed.
+    ///
+    /// A different symbol rather than an overlaid dot: the menu bar renders the
+    /// image as a template, so a tinted badge would be flattened to the same
+    /// monochrome as the icon under it and say nothing at all.
+    private func refreshStatusImage() {
+        let hasProblem = model.autoExportProblem != nil
+        statusItem.button?.image = NSImage(
+            systemSymbolName: hasProblem ? "externaldrive.badge.exclamationmark" : "note.text",
+            accessibilityDescription: hasProblem ? "Steno — backup failed" : "Steno")
+        statusItem.button?.toolTip = model.autoExportProblem
     }
 }
