@@ -104,7 +104,7 @@ extension CLIRunner {
         // refused too: `StenoStore.storeDirectory` calls the three files the
         // unit of deletion, and losing the write-ahead log strands the store
         // just as effectively. Raised in review of PR #31.
-        guard !isStoreFile(destination) else {
+        guard !StoreFileGuard.isStoreFile(destination, in: context) else {
             throw ExportDestinationError(
                 message:
                     "\(destination.path) is Steno's own store. Exporting over it would "
@@ -121,95 +121,6 @@ extension CLIRunner {
                 message: "There is no directory at \(parent.path), so nothing was exported.")
         }
         return destination
-    }
-}
-
-extension CLIRunner {
-    /// Would writing here overwrite the open store or one of its two SwiftData
-    /// siblings?
-    ///
-    /// **Filesystem identity first, path text only as a fallback.** Comparing
-    /// `standardizedFileURL.path` as a string was wrong on the volume macOS
-    /// actually ships: HFS+ and APFS are case-**insensitive** by default, so
-    /// `--output steno.store` names the same database as `Steno.store` and
-    /// walked straight past a case-sensitive `Set<String>` lookup. Raised in
-    /// review of PR #31.
-    ///
-    /// `fileResourceIdentifierKey` is the right instrument — it answers "same
-    /// file?" across case folding, symlinks, hard links and `..` — but it is
-    /// only available for a file that **exists**. The store always does, having
-    /// just been opened; its `-wal` and `-shm` siblings may not, and a
-    /// destination that does not exist yet cannot be compared that way either.
-    /// Case-insensitive path comparison covers those, which is the safe
-    /// direction: it can only ever refuse *more*, and the thing it might refuse
-    /// is a file differing from the store's name by case alone.
-    fileprivate func isStoreFile(_ destination: URL) -> Bool {
-        let candidate = resolved(destination)
-        for url in protectedURLs {
-            let known = resolved(url)
-            if let left = fileIdentifier(of: candidate), let right = fileIdentifier(of: known) {
-                if left.isEqual(right) { return true }
-            } else if candidate.path.compare(known.path, options: .caseInsensitive)
-                == .orderedSame
-            {
-                return true
-            }
-        }
-        return false
-    }
-
-    /// The path with its **parent's** symlinks resolved, keeping the last
-    /// component as written.
-    ///
-    /// **`resolvingSymlinksInPath()` on the whole URL is not enough**, because
-    /// the case this closes is a file that does not exist yet: when the
-    /// destination and the protected sibling are both absent, neither has a
-    /// resource identifier and the comparison falls back to path text. A parent
-    /// that is a symlink to the store directory — `/tmp/steno` pointing at it,
-    /// with `Steno.store-wal` not yet created — then produces two spellings of
-    /// one location that compare unequal, and the atomic write follows the link
-    /// and replaces the live write-ahead log. Resolving the parent makes both
-    /// sides name the same directory. Raised in review of PR #31.
-    ///
-    /// The last component is deliberately *not* resolved: if it is itself a
-    /// symlink, writing to it follows the link, which is what
-    /// `fileIdentifier(of:)` already compares — and resolving it would be wrong
-    /// for a destination that does not exist.
-    private func resolved(_ url: URL) -> URL {
-        let standardized = url.standardizedFileURL
-        return standardized.deletingLastPathComponent()
-            .resolvingSymlinksInPath()
-            .appendingPathComponent(standardized.lastPathComponent)
-    }
-
-    /// The open store and its two siblings.
-    ///
-    /// Read from the container's own configurations rather than from
-    /// `StenoStore.defaultURL`, so the `STENO_STORE_PATH` seam is covered by the
-    /// same guard — a test store is no less destroyable than the real one.
-    ///
-    /// `-wal` and `-shm` are appended to the *filename*, not added as path
-    /// extensions: the files are `Steno.store-wal`, not `Steno.store.wal`.
-    ///
-    /// **`.steno-cli.lock` is in the list too, and it is not a database file.**
-    /// `CLIWriteLock` holds an `flock` on an open file description, so replacing
-    /// that pathname atomically leaves the holder on the orphaned inode while
-    /// the next process opens and locks the replacement — two writers, and the
-    /// lock has quietly stopped being one. Raised in review of PR #31.
-    private var protectedURLs: [URL] {
-        context.container.configurations.flatMap { configuration -> [URL] in
-            let url = configuration.url.standardizedFileURL
-            let directory = url.deletingLastPathComponent()
-            return [url, CLIWriteLock.url(besideStoreAt: url)]
-                + ["-wal", "-shm"].map {
-                    directory.appendingPathComponent(url.lastPathComponent + $0)
-                }
-        }
-    }
-
-    /// The volume's own identity for this file, or `nil` if it does not exist.
-    private func fileIdentifier(of url: URL) -> (any NSObjectProtocol)? {
-        try? url.resourceValues(forKeys: [.fileResourceIdentifierKey]).fileResourceIdentifier
     }
 }
 
