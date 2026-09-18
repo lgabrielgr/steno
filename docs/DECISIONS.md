@@ -3115,6 +3115,8 @@ fresh install, the one most in need of a first backup, with none.
 **Falsified by** `theDefaultFolderIsOutsideProtectedLocations` and `aFreshInstallHasAutoExportOn`
 in `AutoExportSettingsTests`.
 
+---
+
 ### D-121 — Both triggers ship on; quit is unconditional, daily is measured from the last success
 
 **2026-09-18** · M2.5-05 · **Status:** accepted
@@ -3166,6 +3168,8 @@ backup. The write is cheap; the question is not worth introducing.
 `quitIgnoresDueness` and `manualIgnoresDueness` in `AutoExportServiceTests`, and
 `AutoExportLatencyTests.testAnExportAtQuitIsNotFelt`.
 
+---
+
 ### D-122 — Auto-exports include cached external data
 
 **2026-09-18** · M2.5-05 · **Status:** accepted
@@ -3189,6 +3193,8 @@ today for a question nobody has a basis to answer before the integrations that p
 fields exist.
 
 **Falsified by** `theWrittenFileCarriesCachedExternalData` in `AutoExportServiceTests`.
+
+---
 
 ### D-123 — A failure is persisted status with three readers, never a system notification
 
@@ -3239,6 +3245,8 @@ the launch path, which §1.1 protects for capture.
 and `aSuccessClearsIt` in `MenuBarAutoExportTests`; and `aPersistedFailureIsShownAtLaunch`,
 `dismissingHidesWithoutClearing` and `aLaterFailureIsShownAgain` in `AutoExportWindowModelTests`.
 
+---
+
 ### D-124 — Retention keeps the 14 newest by filename date, and the surplus goes to the Trash
 
 **2026-09-18** · M2.5-05 · **Status:** accepted
@@ -3273,6 +3281,8 @@ Rejected: **a configurable count.** A stepper in the Data pane for a number nobo
 `aFailedSweepDoesNotFailTheExport` in `AutoExportSweepTests`, and the exact-name and count cases
 in `AutoExportRetentionTests`.
 
+---
+
 ### D-125 — `StoreFileGuard` is extracted from the CLI and shared
 
 **2026-09-18** · M2.5-05 · **Status:** accepted · extends D-116
@@ -3305,6 +3315,8 @@ promise about March).
 `theStoreDirectoryIsRefused`, `aFolderInsideTheStoreIsRefused`, `aSiblingWithASharedPrefixIsAllowed`
 and `aRunIntoTheStoreDirectoryIsRefused` in `AutoExportStoreGuardTests`.
 
+---
+
 ### D-126 — Onboarding is one sheet on the machinery that already exists
 
 **2026-09-18** · M2.5-05 · **Status:** accepted
@@ -3336,6 +3348,8 @@ one data point.
 
 **Falsified by** `onboardingIsOwedOnce` and `finishingOnboardingWritesABackup` in
 `AutoExportWindowModelTests`.
+
+---
 
 ### D-127 — The Data pane arrives carrying auto-export only
 
