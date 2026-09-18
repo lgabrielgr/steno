@@ -41,8 +41,6 @@ final class MenuBarController: NSObject {
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
         super.init()
 
-        statusItem.button?.image = NSImage(
-            systemSymbolName: "note.text", accessibilityDescription: "Steno")
         statusItem.button?.target = self
         statusItem.button?.action = #selector(toggle)
 

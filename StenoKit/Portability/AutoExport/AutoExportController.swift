@@ -41,7 +41,7 @@ public final class AutoExportController {
         runDaily()
 
         let timer = Timer.scheduledTimer(withTimeInterval: interval, repeats: true) { _ in
-            MainActor.assumeIsolated { self.runDaily() }
+            MainActor.assumeIsolated { _ = self.runDaily() }
         }
         // `.common`, so the tick still fires while a menu is tracking or a
         // window is being resized — both put the run loop in a mode the default
@@ -54,7 +54,7 @@ public final class AutoExportController {
             NotificationCenter.default.addObserver(
                 forName: NSApplication.willTerminateNotification, object: nil, queue: nil
             ) { [weak self] _ in
-                MainActor.assumeIsolated { self?.runOnQuit() }
+                MainActor.assumeIsolated { _ = self?.runOnQuit() }
             })
     }
 
