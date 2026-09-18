@@ -27,6 +27,13 @@ struct StenoApp: App {
     /// behind it must not be.
     private let settingsModel: SettingsModel
 
+    /// FR-6's Data pane. Built with no service until M2.5-05's controller task
+    /// wires `AutoExportService` and `AppKitFilePanels` in; until then the
+    /// pane opens and reports `storeFailureNote`-style unavailability rather
+    /// than exporting anything, which is the same "opens and says why" posture
+    /// `settingsModel` takes on a failed store (§13).
+    private let dataSettingsModel: DataSettingsModel
+
     /// Exists to keep the app alive when the last window closes, which is what
     /// makes "the icon is present without the main window open" true.
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
@@ -112,6 +119,12 @@ struct StenoApp: App {
             // feature, not after it).
             settingsModel = SettingsModel()
         }
+
+        // No `service:` yet either way — wiring `AutoExportService` in is
+        // M2.5-05's controller task. Until then the pane opens and reports
+        // `storeFailureNote`, the same "opens and says why" posture the store
+        // failure path above takes (§13).
+        dataSettingsModel = DataSettingsModel()
     }
 
     var body: some Scene {
@@ -146,7 +159,7 @@ struct StenoApp: App {
         // `NSApp.activate`), so the application menu is reachable even with no
         // window open, and M1-04's popover is left as it was built.
         Settings {
-            SettingsView(model: settingsModel)
+            SettingsView(model: settingsModel, dataModel: dataSettingsModel)
         }
     }
 }
