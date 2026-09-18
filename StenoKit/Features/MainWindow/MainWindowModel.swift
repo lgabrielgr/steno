@@ -179,6 +179,14 @@ public final class MainWindowModel: MainWindowActions {
         self.standupDraft = StandupDraftModel(
             service: StandupService(context: context, now: now, save: save, copy: copy),
             undoService: StandupUndoService(context: context, save: save))
+        // Hazard for whoever adds an onboarding test here: `settings` above
+        // defaults to `AppSettings()` over `UserDefaults.standard`, so a
+        // `MainWindowModel()` built with defaults points this service at the
+        // developer's real `~/Steno Backups`. Harmless today because nothing
+        // in this suite calls `finishAutoExportOnboarding()` — the exact case
+        // `AutoExportStoreGuardTests` builds its own scratch `AppSettings` to
+        // avoid. Inject a scratch one the same way before adding a test that
+        // does.
         self.autoExport = AutoExportWindowModel(
             settings: settings, panels: panels,
             service: AutoExportService(context: context, settings: settings))

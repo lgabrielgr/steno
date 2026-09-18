@@ -8,9 +8,12 @@ struct MainWindowView: View {
 
     /// The model is built once here, from the container, rather than in `body`
     /// — which would rebuild it on every render and drop the selection.
-    /// **The one place `AppKitFilePanels` is constructed.** Every other
-    /// injection point defaults to `UnavailableFilePanels`, so the headless
-    /// test bundle cannot open a modal panel and hang the suite (D-010).
+    /// **One of two places `AppKitFilePanels` is constructed** — `StenoApp.init`
+    /// builds a second one for `DataSettingsModel`, since the type is
+    /// stateless and threading one instance through two scenes buys nothing
+    /// (D-109). Every other injection point defaults to `UnavailableFilePanels`,
+    /// so the headless test bundle cannot open a modal panel and hang the suite
+    /// (D-010).
     init(container: ModelContainer) {
         _model = State(
             initialValue: MainWindowModel(

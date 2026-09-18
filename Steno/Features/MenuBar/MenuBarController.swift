@@ -44,15 +44,15 @@ final class MenuBarController: NSObject {
         statusItem.button?.target = self
         statusItem.button?.action = #selector(toggle)
 
-        // `.transient` is what dismisses the popover on a click outside, with
-        // no delegate. The one piece of bookkeeping it costs is `lastCloseAt`
-        // below: that dismissal does not run through `hide()`, so `toggle()`
-        // would otherwise have no way to know it happened.
         // §10.5's failure badge, set now and kept current below. The icon is
         // the only part of Steno visible when no window is open, so it is
         // where an unattended backup failure has to show up first.
         refreshStatusImage()
 
+        // `.transient` is what dismisses the popover on a click outside, with
+        // no delegate. The one piece of bookkeeping it costs is `lastCloseAt`
+        // below: that dismissal does not run through `hide()`, so `toggle()`
+        // would otherwise have no way to know it happened.
         popover.behavior = .transient
         let hosting = NSHostingController(
             rootView: MenuBarPopoverView(
@@ -75,15 +75,9 @@ final class MenuBarController: NSObject {
         hosting.sizingOptions = [.preferredContentSize]
         popover.contentViewController = hosting
 
-        // `willClose`, not `didClose`. Every close lands in both — `hide()`,
-        // `Esc`, a successful capture, and the `.transient` dismissal AppKit
-        // performs on its own — but `didClose` is posted after the close
-        // *completes*, and `popover.animates` defaults to `true`. The fade can
-        // outlast the mouse-up that follows the dismissing mouse-down, which
-        // would leave `lastCloseAt` unset at exactly the moment `toggle()`
-        // reads it, making the guard inert. `willClose` is posted when the
-        // close begins, so the stamp is already down by then. If a re-open is
-        // still seen by hand, `popover.animates = false` is the next lever.
+        // §10.5's failure badge, kept current for as long as the controller
+        // lives: a backup failure from the hourly tick or the quit hook must
+        // reach the popover and the status item even with neither open.
         autoExportObservation = NotificationCenter.default.addObserver(
             forName: .stenoAutoExportDidChange, object: nil, queue: nil
         ) { [weak self] _ in
@@ -94,6 +88,15 @@ final class MenuBarController: NSObject {
             }
         }
 
+        // `willClose`, not `didClose`. Every close lands in both — `hide()`,
+        // `Esc`, a successful capture, and the `.transient` dismissal AppKit
+        // performs on its own — but `didClose` is posted after the close
+        // *completes*, and `popover.animates` defaults to `true`. The fade can
+        // outlast the mouse-up that follows the dismissing mouse-down, which
+        // would leave `lastCloseAt` unset at exactly the moment `toggle()`
+        // reads it, making the guard inert. `willClose` is posted when the
+        // close begins, so the stamp is already down by then. If a re-open is
+        // still seen by hand, `popover.animates = false` is the next lever.
         closeObservation = NotificationCenter.default.addObserver(
             forName: NSPopover.willCloseNotification, object: popover, queue: nil
         ) { [weak self] _ in
