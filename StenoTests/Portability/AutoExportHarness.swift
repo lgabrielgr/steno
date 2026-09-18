@@ -17,8 +17,20 @@ final class AutoExportRecorder {
     /// disk.
     var writeFailure: (any Error)?
 
-    /// Set to make trashing throw, which must leave the export successful.
+    /// Set to make every trash throw, which must leave the export successful.
     var trashFailure: (any Error)?
+
+    /// Names (`lastPathComponent`) of files whose trash must throw, leaving
+    /// the rest to succeed.
+    ///
+    /// Separate from `trashFailure`: that one exists to prove a stuck sweep
+    /// never fails the export; this one exists to prove the sweep does not
+    /// abandon the rest of the folder over a single undeletable file — the
+    /// property `AutoExportService.sweep`'s per-file `do`/`catch` documents.
+    /// A single `Set<URL>` matched on `lastPathComponent` rather than on the
+    /// full `URL`, because the folder in a fixture is a fresh temp directory
+    /// each run and only the name is known ahead of time.
+    var trashFailures: Set<String> = []
 
     func write(_ data: Data, to url: URL) throws {
         if let writeFailure { throw writeFailure }
@@ -28,6 +40,9 @@ final class AutoExportRecorder {
 
     func trash(_ url: URL) throws {
         if let trashFailure { throw trashFailure }
+        if trashFailures.contains(url.lastPathComponent) {
+            throw AutoExportFailure(detail: "could not trash \(url.lastPathComponent)")
+        }
         trashed.append(url)
         // Removed rather than trashed: the suite must not put files in the
         // developer's Trash (§9.4). What `AutoExportService` does with the URL

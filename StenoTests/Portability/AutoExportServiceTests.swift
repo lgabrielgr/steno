@@ -83,6 +83,26 @@ func quitIgnoresDueness() throws {
     }
 }
 
+/// The Data pane's "Back Up Now" — the one gesture where the user is
+/// watching and expecting a file, so it must never go quiet just because a
+/// backup already ran within the day.
+@Test("manual exports even when a daily export would not be due")
+@MainActor
+func manualIgnoresDueness() throws {
+    let fixture = try autoExportFixture()
+    fixture.settings.autoExportStatus = AutoExportStatus(
+        lastSuccess: .init(
+            writtenAt: fixture.stamp.addingTimeInterval(-60 * 60),
+            path: "/somewhere/an-hour-ago.json"))
+
+    let outcome = fixture.service().run(trigger: .manual)
+
+    guard case .written = outcome else {
+        Issue.record("manual was skipped: \(outcome)")
+        return
+    }
+}
+
 @Test("a daily export inside 24h is skipped")
 @MainActor
 func dailyInsideTheDayIsSkipped() throws {

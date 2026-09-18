@@ -47,6 +47,42 @@ func theSweepIgnoresModificationTime() throws {
             ).path))
 }
 
+/// The sweep's `do`/`catch` inside `AutoExportService.sweep` is scoped **per
+/// file**, not around the whole loop — the doc comment there says one
+/// undeletable file must not strand the rest, and until now nothing checked
+/// it.
+///
+/// `run()` writes today's export into the folder before sweeping, so the 20
+/// fixed files plus that one make 21, and retention's default `keeping: 14`
+/// makes the oldest 7 (`2023-10-01`...`2023-10-07`) prunable, iterated newest
+/// of the doomed first: `07, 06, 05, 04, 03, 02, 01`. Failing `07` — the
+/// *first* the loop reaches — is what makes this test distinguish the two
+/// implementations: under a catch wrapped around the whole loop, that throw
+/// exits before `06`...`01` are ever attempted, and `trashed` would hold none
+/// of them rather than all six.
+@Test("a sweep that cannot delete one file still deletes the rest")
+@MainActor
+func aFailedTrashDoesNotStrandTheRest() throws {
+    let fixture = try autoExportFixture()
+    try FileManager.default.createDirectory(
+        at: fixture.folder, withIntermediateDirectories: true)
+    for day in (1...20).map({ String(format: "2023-10-%02d", $0) }) {
+        try Data("{}".utf8).write(
+            to: fixture.folder.appendingPathComponent("steno-export-\(day).json"))
+    }
+    fixture.recorder.trashFailures = ["steno-export-2023-10-07.json"]
+
+    let outcome = fixture.service().run(trigger: .quit)
+
+    guard case .written = outcome else {
+        Issue.record("a single undeletable file was reported as an export failure: \(outcome)")
+        return
+    }
+    #expect(fixture.settings.autoExportStatus.problem == nil)
+    let stillOwed = (1...6).map { String(format: "steno-export-2023-10-%02d.json", $0) }
+    #expect(Set(fixture.recorder.trashed.map(\.lastPathComponent)) == Set(stillOwed))
+}
+
 /// D-124: the export succeeded, so a stuck sweep must not be reported as a
 /// failed backup. The failure channel has to stay trustworthy.
 @Test("a sweep that cannot delete leaves the export successful")

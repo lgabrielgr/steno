@@ -120,20 +120,32 @@ public struct AutoExportService {
     /// write, *then* record success and sweep. Nothing marks a success until
     /// the bytes are on disk, so a throw anywhere leaves the previous success
     /// record intact and adds a failure beside it.
+    ///
+    /// **One clock reading for the whole call.** `now` is read once, into
+    /// `instant`, and every date this run produces — the dueness check, the
+    /// filename, the encoded `exportedAt`, and either the success or the
+    /// failure record — is derived from that one value. `Date.init` reads the
+    /// wall clock fresh each call, so re-reading it at each of those points
+    /// let a run that straddled midnight name its file for one day and record
+    /// `writtenAt` on the next: two disagreeing timestamps describing what was
+    /// supposed to be a single, atomic operation. `MainWindowModel.reload` and
+    /// `StandupService.commit` take the same one-reading-per-operation shape,
+    /// for the same reason.
     @discardableResult
     public func run(trigger: AutoExportTrigger) -> AutoExportOutcome {
+        let instant = now()
         guard settings.autoExportEnabled else { return .skipped(.disabled) }
         guard trigger.isEnabled(by: settings) else { return .skipped(.triggerOff) }
         if trigger == .daily,
             !AutoExportDue.isDue(
-                lastSuccess: settings.autoExportStatus.lastSuccess?.writtenAt, now: now())
+                lastSuccess: settings.autoExportStatus.lastSuccess?.writtenAt, now: instant)
         {
             return .skipped(.notDue)
         }
 
         let folder = settings.autoExportFolder
         if let problem = problem(withFolder: folder) {
-            return fail(problem)
+            return fail(problem, at: instant)
         }
 
         do {
@@ -141,7 +153,7 @@ public struct AutoExportService {
         } catch {
             return fail(
                 "Steno could not create \(folder.path), so no backup was written. "
-                    + error.localizedDescription)
+                    + error.localizedDescription, at: instant)
         }
 
         // **Two failures, two sentences**, the distinction
@@ -151,42 +163,58 @@ public struct AutoExportService {
         // sends someone whose store is merely busy off to check their disk.
         let data: Data
         do {
-            // `includesCachedExternalData: true`, not optional and not a
-            // setting (D-122). `BackupWriter` documents the argument: a
-            // snapshot that silently drops `cachedSummary` and `lastFetchedAt`
-            // is not one anybody can restore from, and §10.1's "nil loses to
-            // any value" would hand those fields away on the way back in.
-            data = try ExportEncoder(
-                context: context,
-                includesCachedExternalData: true,
-                now: now,
-                exportedBy: exportedBy
-            ).encode()
+            data = try encode(at: instant)
         } catch let error as ExportError {
-            return fail(error.message)
+            return fail(error.message, at: instant)
         } catch {
             Log.app.error(
                 "auto-export could not be built: \(String(describing: error), privacy: .public)")
-            return fail("Steno could not read its own store, so no backup was written.")
+            return fail(
+                "Steno could not read its own store, so no backup was written.", at: instant)
         }
 
-        let url = folder.appendingPathComponent(ExportFilename.forDate(now()))
+        let url = folder.appendingPathComponent(ExportFilename.forDate(instant))
         do {
             try write(data, url)
         } catch {
             return fail(
                 "Could not write \(url.path). Nothing on this Mac was changed. "
-                    + error.localizedDescription)
+                    + error.localizedDescription, at: instant)
         }
 
         record(
             AutoExportStatus(
-                lastSuccess: .init(writtenAt: now(), path: url.path), lastFailure: nil))
+                lastSuccess: .init(writtenAt: instant, path: url.path), lastFailure: nil))
         Log.app.info(
             "auto-export (\(trigger.rawValue, privacy: .public)) written to \(url.path, privacy: .public)"
         )
         sweep(folder)
         return .written(url)
+    }
+
+    /// Encode the store as it stood at `instant`.
+    ///
+    /// Pulled out of `run` so the reasoning below stays attached to the call
+    /// it explains without pushing `run`'s body past SwiftLint's length gate;
+    /// the two-sentence distinction between this throwing and `write`
+    /// throwing is drawn in `run`, where both are caught.
+    ///
+    /// `includesCachedExternalData: true`, not optional and not a setting
+    /// (D-122). `BackupWriter` documents the argument: a snapshot that
+    /// silently drops `cachedSummary` and `lastFetchedAt` is not one anybody
+    /// can restore from, and §10.1's "nil loses to any value" would hand
+    /// those fields away on the way back in.
+    ///
+    /// `now: { instant }`, not `now: now` — the encoder reads its clock twice
+    /// more internally for the stability check, and both reads must agree
+    /// with the timestamp this run already committed to.
+    private func encode(at instant: Date) throws -> Data {
+        try ExportEncoder(
+            context: context,
+            includesCachedExternalData: true,
+            now: { instant },
+            exportedBy: exportedBy
+        ).encode()
     }
 
     /// Delete the surplus, keeping the newest 14 (D-124).
@@ -225,9 +253,12 @@ public struct AutoExportService {
     }
 
     /// Record a failure and hand back the sentence.
-    private func fail(_ message: String) -> AutoExportOutcome {
+    ///
+    /// `instant` is passed in rather than read here, so a failure is stamped
+    /// with the same clock reading the rest of `run` used — see `run`'s note.
+    private func fail(_ message: String, at instant: Date) -> AutoExportOutcome {
         var status = settings.autoExportStatus
-        status.lastFailure = .init(failedAt: now(), message: message)
+        status.lastFailure = .init(failedAt: instant, message: message)
         record(status)
         Log.app.error("auto-export failed: \(message, privacy: .public)")
         return .failed(message)
