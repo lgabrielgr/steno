@@ -40,8 +40,10 @@ public final class AutoExportController {
     public func start(interval: TimeInterval = AutoExportController.tickInterval) {
         runDaily()
 
-        let timer = Timer.scheduledTimer(withTimeInterval: interval, repeats: true) { _ in
-            MainActor.assumeIsolated { _ = self.runDaily() }
+        let timer = Timer.scheduledTimer(
+            withTimeInterval: interval, repeats: true
+        ) { [weak self] _ in
+            MainActor.assumeIsolated { _ = self?.runDaily() }
         }
         // `.common`, so the tick still fires while a menu is tracking or a
         // window is being resized — both put the run loop in a mode the default
@@ -77,8 +79,14 @@ public final class AutoExportController {
     deinit {
         // `timer` is `@MainActor`-isolated state and `deinit` is not, so the
         // invalidation cannot happen here — the same Swift 6 constraint
-        // `WriteObservation` exists for. A `Timer` on the main run loop is
-        // retained by the run loop anyway, so an un-invalidated one outlives
-        // this object regardless; `stop()` is the supported way to end it.
+        // `WriteObservation` exists for. That is not a gap: the timer's block
+        // captures `self` weakly, matching `terminationObservation` above, so
+        // the run loop's retention of an armed `Timer` does not retain this
+        // object in turn — the object can still deallocate with the timer
+        // left running (harmlessly ticking a `weak self` that resolves to
+        // `nil`) until it is invalidated. `stop()` is what invalidates it;
+        // nothing calls `stop()` today because `StenoApp.init` holds this
+        // controller in a stored property for the life of the process, so it
+        // never deallocates while the app is running.
     }
 }
