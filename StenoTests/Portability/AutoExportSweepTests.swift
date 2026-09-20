@@ -106,3 +106,32 @@ func aFailedSweepDoesNotFailTheExport() throws {
     #expect(fixture.settings.autoExportStatus.problem == nil)
     #expect(fixture.settings.autoExportStatus.lastSuccess != nil)
 }
+
+/// `contentsOfDirectory` lists subdirectories too, and the retention rule is
+/// pure over names — so a *folder* called `steno-export-2023-10-01.json` was a
+/// deletion candidate. Trashing something Steno never wrote is the one thing
+/// retention promises not to do. Raised by Copilot in review of PR #32.
+@Test("a directory named like an export is never trashed")
+@MainActor
+func aDirectoryNamedLikeAnExportSurvives() throws {
+    let fixture = try autoExportFixture()
+    try FileManager.default.createDirectory(
+        at: fixture.folder, withIntermediateDirectories: true)
+
+    // Twenty real exports, so the sweep has genuine surplus to remove, plus a
+    // directory whose name would otherwise make it the oldest candidate.
+    let days = (2...21).map { String(format: "2023-10-%02d", $0) }
+    for day in days {
+        try Data("{}".utf8).write(
+            to: fixture.folder.appendingPathComponent("steno-export-\(day).json"))
+    }
+    let impostor = fixture.folder.appendingPathComponent("steno-export-2023-10-01.json")
+    try FileManager.default.createDirectory(at: impostor, withIntermediateDirectories: true)
+
+    fixture.service().run(trigger: .quit)
+
+    #expect(!fixture.recorder.trashed.contains(impostor))
+    #expect(FileManager.default.fileExists(atPath: impostor.path))
+    // The sweep still did its job on the real files: 20 + today's = 21, keep 14.
+    #expect(fixture.recorder.trashed.count == 7)
+}

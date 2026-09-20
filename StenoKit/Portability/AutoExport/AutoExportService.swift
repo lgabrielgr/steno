@@ -71,6 +71,7 @@ public struct AutoExportService {
     private let contents: (URL) throws -> [URL]
     private let createDirectory: (URL) throws -> Void
     private let exists: (URL) -> Bool
+    private let isRegularFile: (URL) -> Bool
     private let afterRead: () -> Void
 
     /// `exportedBy` is passed rather than defaulted at the call site for
@@ -98,6 +99,9 @@ public struct AutoExportService {
             try FileManager.default.createDirectory(at: $0, withIntermediateDirectories: true)
         },
         exists: @escaping (URL) -> Bool = { FileManager.default.fileExists(atPath: $0.path) },
+        isRegularFile: @escaping (URL) -> Bool = {
+            (try? $0.resourceValues(forKeys: [.isRegularFileKey]).isRegularFile) == true
+        },
         afterRead: @escaping () -> Void = {}
     ) {
         self.context = context
@@ -109,6 +113,7 @@ public struct AutoExportService {
         self.contents = contents
         self.createDirectory = createDirectory
         self.exists = exists
+        self.isRegularFile = isRegularFile
         self.afterRead = afterRead
     }
 
@@ -296,7 +301,14 @@ public struct AutoExportService {
                 "auto-export could not list \(folder.path, privacy: .public) to apply retention")
             return
         }
-        for url in AutoExportRetention.prunable(from: urls) {
+        // **Directories are not candidates, whatever they are called.**
+        // `contentsOfDirectory` lists subdirectories too, and
+        // `AutoExportRetention` is pure over names — it cannot see that
+        // `steno-export-2026-09-18.json` is a folder somebody made. Trashing a
+        // directory Steno never wrote is exactly what retention promises never
+        // to do. Filtered here, where the filesystem is reachable, rather than
+        // in the pure rule. Raised by Copilot in review of PR #32.
+        for url in AutoExportRetention.prunable(from: urls.filter(isRegularFile)) {
             do {
                 // `trashItem`, not `removeItem` (D-124): this is a product
                 // whose event log is append-only because permanent loss is the
