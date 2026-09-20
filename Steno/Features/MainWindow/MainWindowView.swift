@@ -8,9 +8,12 @@ struct MainWindowView: View {
 
     /// The model is built once here, from the container, rather than in `body`
     /// — which would rebuild it on every render and drop the selection.
-    /// **The one place `AppKitFilePanels` is constructed.** Every other
-    /// injection point defaults to `UnavailableFilePanels`, so the headless
-    /// test bundle cannot open a modal panel and hang the suite (D-010).
+    /// **One of two places `AppKitFilePanels` is constructed** — `StenoApp.init`
+    /// builds a second one for `DataSettingsModel`, since the type is
+    /// stateless and threading one instance through two scenes buys nothing
+    /// (D-109). Every other injection point defaults to `UnavailableFilePanels`,
+    /// so the headless test bundle cannot open a modal panel and hang the suite
+    /// (D-010).
     init(container: ModelContainer) {
         _model = State(
             initialValue: MainWindowModel(
@@ -51,6 +54,19 @@ struct MainWindowView: View {
                     dismiss: model.dismissNotice)
             }
 
+            // §10.5's unattended backup, which has no other way to speak.
+            // Its own row rather than `lastError`, for
+            // `MenuBarModel.readError`'s reason: a successful import clearing a
+            // standing backup failure would erase the one message telling the
+            // user they have no copy of their data anywhere.
+            if let problem = model.autoExport.problem {
+                banner(
+                    icon: "externaldrive.badge.exclamationmark",
+                    tint: .red.opacity(0.22),
+                    text: problem,
+                    dismiss: model.autoExport.dismissProblem)
+            }
+
             NavigationSplitView {
                 SidebarView(model: model)
             } content: {
@@ -68,6 +84,10 @@ struct MainWindowView: View {
         .onAppear {
             MainWindowReveal.reopen = { openWindow(id: MainWindowReveal.sceneID) }
         }
+        // §10.5's first run, presented from the window rather than from
+        // `MainWindowModel.init` — a sheet assigned during initialization has
+        // no window to be presented over yet.
+        .task { model.presentAutoExportOnboardingIfNeeded() }
         .focusedSceneValue(\.mainWindowActions, model)
         .sheet(item: $model.activeSheet) { sheet in
             switch sheet {
@@ -89,6 +109,10 @@ struct MainWindowView: View {
                     placeholder: "Optional — waiting on what?",
                     confirm: "Add Reason"
                 ) { model.addBlockedReason($0, to: id) }
+            case .autoExportOnboarding:
+                AutoExportOnboardingSheet(
+                    model: model.autoExport,
+                    onDone: { model.finishAutoExportOnboarding() })
             case .importPreview:
                 ImportPreviewSheet(
                     preview: model.importPreview,

@@ -28,6 +28,11 @@ final class MenuBarController: NSObject {
     /// controller is built once in `StenoApp.init` and lives for the process.
     private var closeObservation: (any NSObjectProtocol)?
 
+    /// The auto-export observation, kept for `closeObservation`'s reason: it is
+    /// the only handle by which the registration could be removed. Nothing
+    /// removes it — the controller lives for the process.
+    private var autoExportObservation: (any NSObjectProtocol)?
+
     init(container: ModelContainer) {
         // `container.mainContext`, matching what `MainWindowView` and
         // `QuickCaptureModel` read, so a write here and the window's own
@@ -36,10 +41,13 @@ final class MenuBarController: NSObject {
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
         super.init()
 
-        statusItem.button?.image = NSImage(
-            systemSymbolName: "note.text", accessibilityDescription: "Steno")
         statusItem.button?.target = self
         statusItem.button?.action = #selector(toggle)
+
+        // §10.5's failure badge, set now and kept current below. The icon is
+        // the only part of Steno visible when no window is open, so it is
+        // where an unattended backup failure has to show up first.
+        refreshStatusImage()
 
         // `.transient` is what dismisses the popover on a click outside, with
         // no delegate. The one piece of bookkeeping it costs is `lastCloseAt`
@@ -66,6 +74,19 @@ final class MenuBarController: NSObject {
         // and a list of six are both sized correctly and neither scrolls.
         hosting.sizingOptions = [.preferredContentSize]
         popover.contentViewController = hosting
+
+        // §10.5's failure badge, kept current for as long as the controller
+        // lives: a backup failure from the hourly tick or the quit hook must
+        // reach the popover and the status item even with neither open.
+        autoExportObservation = NotificationCenter.default.addObserver(
+            forName: .stenoAutoExportDidChange, object: nil, queue: nil
+        ) { [weak self] _ in
+            MainActor.assumeIsolated {
+                guard let self else { return }
+                self.model.refreshAutoExportProblem()
+                self.refreshStatusImage()
+            }
+        }
 
         // `willClose`, not `didClose`. Every close lands in both — `hide()`,
         // `Esc`, a successful capture, and the `.transient` dismissal AppKit
@@ -132,5 +153,18 @@ final class MenuBarController: NSObject {
 
     private func hide() {
         popover.performClose(nil)
+    }
+
+    /// The status item's icon, badged when the last backup failed.
+    ///
+    /// A different symbol rather than an overlaid dot: the menu bar renders the
+    /// image as a template, so a tinted badge would be flattened to the same
+    /// monochrome as the icon under it and say nothing at all.
+    private func refreshStatusImage() {
+        let hasProblem = model.autoExportProblem != nil
+        statusItem.button?.image = NSImage(
+            systemSymbolName: hasProblem ? "externaldrive.badge.exclamationmark" : "note.text",
+            accessibilityDescription: hasProblem ? "Steno — backup failed" : "Steno")
+        statusItem.button?.toolTip = model.autoExportProblem
     }
 }

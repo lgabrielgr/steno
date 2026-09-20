@@ -97,6 +97,10 @@ public final class MainWindowModel: MainWindowActions {
     /// holds no reference back to this model.
     public let importPreview = ImportPreviewModel()
 
+    /// §10.5's auto-export banner and first-run sheet (M2.5-05). A `let` for
+    /// `importPreview`'s reason: it holds no reference back to this model.
+    public let autoExport: AutoExportWindowModel
+
     /// The report the selected project could undo right now (FR-4.1), or `nil`.
     ///
     /// **Cached rather than fetched on demand**, because `canUndoStandup` is
@@ -175,6 +179,17 @@ public final class MainWindowModel: MainWindowActions {
         self.standupDraft = StandupDraftModel(
             service: StandupService(context: context, now: now, save: save, copy: copy),
             undoService: StandupUndoService(context: context, save: save))
+        // Hazard for whoever adds an onboarding test here: `settings` above
+        // defaults to `AppSettings()` over `UserDefaults.standard`, so a
+        // `MainWindowModel()` built with defaults points this service at the
+        // developer's real `~/Steno Backups`. Harmless today because nothing
+        // in this suite calls `finishAutoExportOnboarding()` — the exact case
+        // `AutoExportStoreGuardTests` builds its own scratch `AppSettings` to
+        // avoid. Inject a scratch one the same way before adding a test that
+        // does.
+        self.autoExport = AutoExportWindowModel(
+            settings: settings, panels: panels,
+            service: AutoExportService(context: context, settings: settings))
         reload()
 
         // Registered last, deliberately: `self` may only be captured once

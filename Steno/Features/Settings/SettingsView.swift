@@ -14,6 +14,7 @@ import SwiftUI
 /// arrives, and this is the shape all five panes use.
 struct SettingsView: View {
     let model: SettingsModel
+    let dataModel: DataSettingsModel
     @State private var selection: SettingsPane = .capture
 
     var body: some View {
@@ -34,6 +35,8 @@ struct SettingsView: View {
         switch pane {
         case .capture:
             CaptureSettingsPane(model: model)
+        case .data:
+            DataSettingsPane(model: dataModel)
         }
     }
 }

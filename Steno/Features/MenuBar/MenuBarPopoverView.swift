@@ -49,6 +49,18 @@ struct MenuBarPopoverView: View {
                 .padding(.bottom, 8)
             }
 
+            // §10.5's backup failure. **Above the divider with the other two
+            // messages, and not dismissible here**: this popover is what a user
+            // with no main window open actually sees, and a silently missing
+            // backup is the one outcome §10.5 rules out. It clears when a
+            // backup succeeds.
+            if let problem = model.autoExportProblem {
+                Label(problem, systemImage: "externaldrive.badge.exclamationmark")
+                    .font(.caption)
+                    .padding(.horizontal, 12)
+                    .padding(.bottom, 8)
+            }
+
             Divider()
 
             if model.rows.isEmpty {
