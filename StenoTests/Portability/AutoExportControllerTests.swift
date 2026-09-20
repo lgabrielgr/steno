@@ -80,3 +80,27 @@ func stoppingUnregistersTheObserver() throws {
 
     #expect(fixture.recorder.written.count == afterStart)
 }
+
+/// `start()` twice must leave one controller running, not two.
+///
+/// **What this test can and cannot see.** The duplicate *observer* is directly
+/// observable and asserted below: two registrations would export twice for one
+/// termination. The duplicate *timer* is not observable from outside — a
+/// scheduled `Timer` is retained by the run loop rather than by this object,
+/// which is precisely why reassigning the property leaked one — so `start()`
+/// calling `stop()` first is what prevents it, and this test pins the half that
+/// can be pinned. Raised by Copilot in review of PR #32.
+@Test("starting twice does not back up twice on termination")
+@MainActor
+func startingTwiceDoesNotDoubleUp() throws {
+    let (controller, fixture) = try controllerFixture()
+    defer { controller.stop() }
+    controller.start(interval: 3600)
+    controller.start(interval: 3600)
+    let afterStarts = fixture.recorder.written.count
+
+    NotificationCenter.default.post(
+        name: NSApplication.willTerminateNotification, object: nil)
+
+    #expect(fixture.recorder.written.count == afterStarts + 1)
+}

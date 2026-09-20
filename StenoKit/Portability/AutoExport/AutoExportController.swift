@@ -38,6 +38,16 @@ public final class AutoExportController {
     /// file would put an export on the launch path before anything had decided
     /// one was due.
     public func start(interval: TimeInterval = AutoExportController.tickInterval) {
+        // **Idempotent, because the timer half is not self-correcting.**
+        // Reassigning `timer` does not stop the old one: a scheduled `Timer` is
+        // retained by the run loop, so a second `start()` used to leave two
+        // live tickers firing forever, and every later one added another. The
+        // observation half *was* safe — replacing the `WriteObservation`
+        // deallocates the old one, whose `deinit` removes the token — but
+        // relying on that asymmetry is how the next reader gets it wrong.
+        // Raised by Copilot in review of PR #32.
+        stop()
+
         runDaily()
 
         let timer = Timer.scheduledTimer(
