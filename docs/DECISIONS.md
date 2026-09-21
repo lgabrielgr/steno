@@ -3432,3 +3432,210 @@ the one outcome §10.5 rules out.
 recorded against a *different* folder must not block creating a newly chosen one, and a naive
 "has anything ever succeeded?" check fails it.
 
+
+---
+
+### D-129 — `StandupDraft` is cadence-tagged neutral bullets, not report sections
+
+§7.3's two schemas are not cosmetic variants: the sections differ, and so does the cardinality of
+the task reference. `StandupDraft` is an enum over `DailyDraft` and `PeriodicDraft`, whose
+`CodingKeys` are §7.3's wire names — so the type *is* the contract and a provider decodes straight
+into it.
+
+**The rejected alternative was returning `[ReportSection]`**, the type `RawReportSections` already
+produces, which would let M3-03 hand the result straight to `SlackMarkdown.render`. It loses on the
+layer rule: the provider would own §7.3's section names and D17's cadence wording, so every future
+provider re-implements them. `ReportSection`'s own doc comment anticipated this split — "M3-03
+produces them from schema-validated AI bullets" — and these are those bullets.
+
+Raw JSON was also rejected: maximum neutrality, but `StandupDraft` stops being a type anyone can
+reason about and D-133's rule has nowhere typed to live.
+
+Reasoning in full: `docs/superpowers/specs/2026-09-21-m3-01-ai-provider-protocol-design.md`.
+
+### D-130 — The request carries prompt and schema; the provider knows nothing about stand-ups
+
+`StandupRequest` carries `systemPrompt`, `userPrompt`, `outputSchema` and `allowedTaskIDs`, all
+built upstream. M3-02 knows HTTP, auth, retries and error mapping; it does not know what a stand-up
+is. §7.3's prompt constraints — never introduce a fact, preserve ticket keys verbatim, do not
+elevate register, 8–12 bullets for a long `periodic` window — are M3-03's scope, and putting them
+behind the seam means a second provider inherits them instead of re-deriving them. The one that
+re-derived them wrongly would inflate the user's language in front of their team.
+
+`AIOutputSchema` is opaque bytes rather than a typed tree because nothing in M3-01..M3-04 inspects
+a schema; they transmit it.
+
+`timeout` and `maxOutputTokens` carry **no default**. M3-02's task file decides the budget, and a
+default chosen by a task that never made a network call would quietly pre-empt it.
+
+### D-131 — `AIProvider` is `Sendable`, which §7.1's printed signature is not
+
+§7.1 and the task file both print the protocol without a conformance, and the task says "exactly as
+specified". `SWIFT_VERSION` is 6.0, `generateStandup` is awaited across an isolation boundary, and
+a non-`Sendable` provider cannot be held by the caller that awaits it — the same reasoning
+`GatheredWindow` already records for returning value types rather than `@Model` rows.
+
+Declared in the PR body rather than absorbed silently. It does not amend REQUIREMENTS.md: §7.1's
+intent is vendor neutrality, which a language-mode conformance does not touch.
+
+### D-132 — No case of `AIError` carries a free-form `String`
+
+The obvious shape for an invalid response is `(reason: String)`, and the obvious reason string is
+built from the model's output — which puts a stand-up's contents inside a value that §8's logging
+path then prints. `InvalidResponseReason` is a three-case enum instead, and `.unknownTaskIDs`
+carries a **count, not the ids**: what §8 permits logging is metadata, and the ids are enough to
+reconstruct which of the user's tasks were in the window.
+
+`.network` and `.timedOut` are separate because §7.4's fallback says different things to the user
+and because a retry policy applies to one and not the other. `.invalidCredential` is separate
+because M3-02's acceptance criterion requires `testConnection()` to distinguish a rejected key from
+an unreachable network.
+
+`metricsLabel` is spelled out rather than derived from `String(describing:)`, which is a refactor
+away from changing and would print associated values into a field meant to be one word.
+
+**Falsified by** `errorDescriptionsCarryNoPayload` over all eleven fixtures, and
+`theErrorAuditIsComplete`, which pins the label set so a ninth case cannot join the enum and skip
+every audit.
+
+### D-133 — §7.3's hallucinated-ID rejection lives on `StandupDraft`, and the provider calls it
+
+§7.3: a hallucinated `task_id` "is the clearest possible signal the model invented a fact, and it
+should fail loudly into the §7.4 fallback rather than render." `validated(against:)` is defined on
+the draft, `allowedTaskIDs` rides on the request, and the protocol's contract says
+`generateStandup` returns only validated drafts.
+
+Two placements worked for the provider that exists; only this one works for the provider that does
+not yet. A rule the *caller* applies is a rule the next provider can ship without, with no test
+failing to say so.
+
+**Falsified by** `aHallucinatedTaskIDIsRejected` and `aHallucinatedThemedIDIsRejected` — the second
+matters because the periodic path flattens `task_ids`, so a draft whose first id is legitimate
+would pass a check that looked at only one per bullet.
+
+### D-134 — The login keychain, because the data-protection one breaks CI
+
+**This reverses the design's first draft on probe evidence.** §6 named
+`kSecAttrAccessibleAfterFirstUnlock`, which on macOS is honoured only by the data-protection
+keychain, which requires the restricted `keychain-access-groups` entitlement. Measured before any
+code was written:
+
+| configuration | result |
+|---|---|
+| data-protection, ad-hoc signed (CI's shape) | `-34018` errSecMissingEntitlement |
+| data-protection, Apple Development identity, no entitlement | `-34018` errSecMissingEntitlement |
+| data-protection + entitlement, bare `codesign` | **SIGKILL** — amfid: "no eligible provisioning profiles found" |
+| data-protection + entitlement, real app target, `-allowProvisioningUpdates` | works |
+| **login keychain, ad-hoc signed** | **PASS** — add 0, read 0, delete 0 |
+
+The working row is unusable for three reasons found by running it:
+
+1. **It breaks the required CI check.** `make build XCFLAGS="CODE_SIGN_IDENTITY=- CODE_SIGN_STYLE=Manual"` — the workflow's exact shape per D-053 — fails with *"Steno requires a provisioning profile"*. A GitHub runner has no certificate and no profile.
+2. **`make build` stops working offline**, needing `-allowProvisioningUpdates`, a network, and a live Apple ID session — against §9.2.
+3. **The minted profile expires in seven days** on the free Personal Team §6.1 commits to.
+
+REQUIREMENTS.md §6 is amended to **v1.20** accordingly. What §6 actually requires is unchanged and
+met: the key is in the Keychain and never in SwiftData, `UserDefaults`, a plist, or a log.
+
+The layering stands: `CredentialStore` is a protocol, `InMemoryCredentialStore` backs every
+automated test, and no test writes into the developer's login keychain — the hygiene §9.4 already
+requires of `UserDefaults`. A real round-trip test that skipped on `-34018` was rejected: it would
+be green on CI precisely because it never ran.
+
+### D-135 — One generic-password item per provider, and no inert attributes
+
+`kSecClassGenericPassword`, service `com.lgabrielgr.steno.ai`, account = provider id, value =
+JSON-encoded `Credential`. A second provider is a second item rather than a migration.
+
+**`kSecAttrAccessible` is deliberately absent.** The probe confirmed the login keychain accepts it
+and returns `errSecSuccess` — accepted and inert. Passing it would leave a line that looks like it
+enforces §6's accessibility rule and does not, which is this repo's most-repeated defect shape.
+
+`kSecAttrSynchronizable` is **set** to `false`, not defaulted: iCloud Keychain would put the API key
+on the user's other machines, and sync is cancelled (D1, §14). Leaving it to the platform default
+would make that a platform decision rather than ours.
+
+Writes are `SecItemAdd` falling back to `SecItemUpdate` on `errSecDuplicateItem` — not
+delete-then-add, which loses the stored key if the add half fails and leaves the user with an AI
+provider that silently stopped working.
+
+**Falsified by** `theItemIsNeverSynchronizable` and `accessibilityIsNotPassed`; both were confirmed
+by mutation.
+
+### D-136 — The unreachable `.oauth` case is exercised, and §7.2's UI rule is a value
+
+§7.2 requires the enum so a subscription flow can be added later without a refactor, and is equally
+explicit that no OAuth flow is implemented here. The risk is a case nothing constructs, which on
+this project becomes the next task's bug.
+
+Two things keep it honest. The store serializes the **enum**, so `.oauth` round-trips under test
+alongside `.apiKey` — exercised code, not a declaration. And `CredentialKind.userSelectable` turns
+"API key is the only enabled option in Settings" into a value M3-01 asserts today, rather than a
+doc comment a future UI author has to find and honour.
+
+`Credential`'s `Codable` conformance is hand-written because these bytes are persisted: Swift's
+synthesized enum encoding is a compiler implementation detail, and a stored credential that stops
+decoding because a toolchain changed its mind is a user who silently loses their API key. Both
+directions are pinned, because a round trip through one encoder passes even when both halves change
+together.
+
+### D-137 — One metrics emitter, and no payload-logging code anywhere
+
+§8 permits token counts, latency and model, and forbids full payloads "by default".
+`AIRequestMetrics` has no field that could hold a prompt or a draft, and `AIMetricsLog.record` is
+the only emitter — a category plus a written field list would make §8 a convention every future
+provider must remember, with nothing failing when one forgets.
+
+**No payload-logging path exists at all**, not behind `#if DEBUG` and a defaults key. That opt-in is
+the literal reading of "by default", and it writes a stand-up's contents to the unified log where
+`log show` retrieves them long afterwards. M3-03 can add one if §7.3's prompt work demands it.
+
+`line(for:)` is split from `record` so §8 can be asserted rather than asserted about: a `Logger`
+call cannot be read back in-process, so a test of `record` alone could only check that it did not
+crash. The single `privacy: .public` interpolation is load-bearing — `Logger` redacts non-literal
+strings by default, so a model id logged without it arrives as `<private>`, a failure invisible in
+review and visible only in `log show`.
+
+`Log.aiLayer`, not `Log.ai`, and `Outcome.succeeded`, not `.ok`: SwiftLint's `identifier_name`
+rejects names under three characters. The logged label stays `ok`.
+
+**Falsified by** `theMetricsLineCarriesOnlyMetadata` (the line is pinned character for character),
+`metricsDeclaresOnlyMetadataFields` (a `Mirror` audit — a field can exist, carry a payload, and
+simply not be logged *yet*, which is how the next task inherits a loaded gun), and
+`noSettingsKeyLooksLikeACredential`.
+
+### D-138 — `make verify-keychain` is how the real store gets executed before M3-04
+
+D-134 means no automated test touches the real Keychain, and no Settings UI reads it until M3-04.
+Without a harness, not one line of `KeychainCredentialStore` would execute in this PR or the two
+after it — and this repo has twice found that the unexecuted path is where the defects sit.
+
+`make verify-keychain` runs the built, signed binary with a hidden `keychain-selftest` first
+argument (D-113: a bare first argument is what makes the binary a CLI), absent from `CLIUsage.text`.
+It is answered in `CLIEntry` **before the store is opened**: verifying a credential has nothing to
+do with the event log, and a harness that created the user's store as a side effect would be a
+worse tool than none.
+
+It round-trips **twice** — store, read, store again, read, delete — so D-135's
+`errSecDuplicateItem` → `SecItemUpdate` fallback is exercised, the one sequence D-139's pure tests
+cannot reach and the one whose failure mode is a user who changes their API key and silently keeps
+using the old one. `selftest` is a provider id no real provider uses, so it cannot overwrite a
+stored key.
+
+This is outside M3-01's stated scope and is declared in the PR body.
+
+### D-139 — `KeychainCredentialStore` is tested as pure functions, not against a scratch keychain
+
+With the login keychain in play, a real round trip inside `make test` became possible: a throwaway
+keychain file (`SecKeychainCreate` + `kSecUseKeychain`) was probed and passes, ad-hoc signed, inside
+the test sandbox. It is still rejected.
+
+It costs five deprecation warnings, and one is structural rather than local: redirecting the store
+at a keychain puts `SecKeychain` — deprecated in 2014 — into a **production** initializer
+signature, in order to serve a test.
+
+Instead the store is split so that what can be tested purely, is: `KeychainQuery.lookup/insert/update`
+and `KeychainError.from(_:)` are where the branches are, and both are asserted without `SecItem*`
+running at all. The tests assert the exact attributes — including that **no** `kSecAttrAccessible`
+key is present, so D-135's absence is asserted rather than merely commented. What is left for
+D-138's harness is the part that genuinely needs a keychain.

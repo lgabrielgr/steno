@@ -23,6 +23,14 @@ public enum CLICommand: Equatable, Sendable {
 
     /// `steno import --file PATH [--replace]`.
     case importFile(URL, mode: ImportMode)
+
+    /// `steno keychain-selftest` — hidden, and absent from `CLIUsage.text`.
+    ///
+    /// **Carries no store.** It is handled before `CLIEntry` opens a
+    /// `ModelContainer`, because verifying the Keychain has nothing to do with
+    /// the event log and a harness that created the user's store as a side
+    /// effect would be a worse tool than no harness. See `KeychainSelftest`.
+    case keychainSelftest
 }
 
 /// A command line this build cannot act on.

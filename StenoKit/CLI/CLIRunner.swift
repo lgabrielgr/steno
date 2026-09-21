@@ -104,6 +104,20 @@ public struct CLIRunner {
             export(to: output, includingCachedData: includesCached)
         case .importFile(let url, let mode):
             importFile(url, mode: mode)
+        case .keychainSelftest:
+            misroutedSelftest()
         }
+    }
+
+    /// `CLIEntry` answers `keychain-selftest` before a store is ever opened, so
+    /// a runner — which exists to act on the store — should never be handed one.
+    ///
+    /// **Reported, not trapped.** `preconditionFailure` would turn a wiring
+    /// mistake into a crash report; a message names the mistake and exits. It is
+    /// reachable from a test, which is the point: the claim above is asserted
+    /// rather than assumed.
+    private func misroutedSelftest() -> Int32 {
+        err("steno: keychain-selftest is handled before the store opens.")
+        return ExitCode.failure
     }
 }
