@@ -3432,3 +3432,51 @@ the one outcome §10.5 rules out.
 recorded against a *different* folder must not block creating a newly chosen one, and a naive
 "has anything ever succeeded?" check fails it.
 
+
+---
+
+### D-140 — The auto-export setting governs the automatic triggers, not backup itself
+
+**2026-09-21** · fix from M2.5-05's review · **Status:** accepted · refines D-123, does not amend it
+
+PR #32 shipped a known defect: a standing auto-export failure could not be cleared once the
+feature was switched off. D-123 clears the status only on a successful export, `Back Up Now` was
+gated on the same toggle, and turning auto-export off therefore removed the only way to produce a
+success. The warning then stood on all three of D-123's surfaces — the menu-bar badge, the window
+banner and the Data pane — with nothing the user could do about it.
+
+It was reported as a choice between two contradictions: clearing status on disable contradicts
+D-123, and un-gating the button "makes it work while the feature is off".
+
+**The second premise is false, and §10.5 already says so.** Auto-export is defined there as "an
+optional setting: on quit, or daily" — the two *automatic* triggers — and §10.5 lists manual
+export as its own surface, which is why File → Export and `steno export` both work with the
+toggle off. The Data pane's button was the single manual surface that did not.
+
+The code had already drawn the distinction and then overridden it.
+`AutoExportTrigger.isEnabled(by:)` answers `true` for `.manual`; a blanket
+`guard settings.autoExportEnabled` in `run` simply ran first. The guard now admits `.manual` and
+stops the automatic triggers as before.
+
+**D-123 is untouched.** "Cleared only by a successful export" remains literally true; this makes a
+success reachable. Clearing status on disable was rejected for exactly the reason D-123 gives: the
+status describes the state of the user's backups, not the state of a toggle, and a user with no
+recent backup still has no recent backup after flipping a switch.
+
+**The store gate stays.** `storeFailureNote != nil` means there is nothing to export (D-018).
+
+**The rule moved to `DataSettingsModel.canBackUpNow`**, out of the pane's `.disabled(...)`. The
+test bundle is unhosted and cannot reach the app target (D-010), so a rule that lived only in a
+SwiftUI view was a rule no test could hold — which is how the original gating shipped unexamined.
+
+**Deliberately not changed:** the menu-bar badge still reports a standing failure while
+auto-export is off. It remains true — there is no recent backup — and it is now one click from
+being resolved. Suppressing the nag while the feature is off is a separate call, to be made from
+experience rather than pre-empted.
+
+**Falsified by** `aManualBackupRunsWhileDisabled` and
+`aManualBackupClearsAStandingFailureWhileDisabled` (the stuck state, and the way out),
+`disabledStopsTheAutomaticTriggers`, `backUpNowStaysAvailableWhileDisabled` and
+`backUpNowIsUnavailableWithoutAStore`. Each was confirmed by mutation: reverting the guard turns
+the first two red, re-gating `canBackUpNow` on `isEnabled` turns the fourth red, and dropping its
+store gate turns the fifth red.
