@@ -21,7 +21,7 @@ testability alone: it is what lets M3-03's summarization be tested with networki
 
 ## What this task decides
 
-Ten things §7 leaves open. Each gets a `DECISIONS.md` entry, D-129 through D-138.
+Eleven things §7 leaves open. Each gets a `DECISIONS.md` entry, D-129 through D-139.
 
 | Question | Decision |
 |---|---|
@@ -30,8 +30,9 @@ Ten things §7 leaves open. Each gets a `DECISIONS.md` entry, D-129 through D-13
 | Whether §7.1's printed signature is copied verbatim | No — `AIProvider: Sendable`, declared as a deviation |
 | What the neutral error may carry | Typed cases only; no free-form `String` anywhere in `AIError` |
 | Where §7.3's hallucinated-ID rejection runs | On `StandupDraft`, called by the provider, not by M3-03 |
-| Which keychain, given CI signs ad-hoc | Data-protection; `make test` never executes `SecItem*` |
+| Which keychain, given CI signs ad-hoc | The login keychain — the data-protection one was probed and breaks CI; §6 is amended |
 | How the item is shaped | One generic password per provider; `synchronizable: false`; add-then-update |
+| How `KeychainCredentialStore` is covered | Pure query and status-mapping tests; the round trip belongs to the harness |
 | What keeps the unreachable `.oauth` case honest | The store serializes the enum; `userSelectable` encodes §7.2's UI rule |
 | The §8 logging shape M3-02/M3-03 inherit | One shared emitter, no payload path in the codebase at all |
 | How the real Keychain gets executed before M3-04 | `make verify-keychain` + a hidden `keychain-selftest` subcommand |
@@ -214,18 +215,34 @@ say so. The protocol doc says `generateStandup` returns only validated drafts.
 in any section means the model returned nothing usable, and §7.4's raw fallback is strictly
 better than an empty report.
 
-## D-134 — Data-protection keychain, and `make test` never executes `SecItem*`
+## D-134 — The login keychain, because the data-protection one breaks CI
 
-§6 names `kSecAttrAccessibleAfterFirstUnlock`. On macOS that attribute is honoured by the
-**data-protection** keychain (`kSecUseDataProtectionKeychain: true`); the legacy file-based
-login keychain accepts it in the dictionary without it meaning anything, where access is
-governed by the keychain's lock state instead. Honouring §6 literally therefore means the
-data-protection keychain, which requires a real signing identity with an access group.
+**This decision reverses the design's first draft on probe evidence.** §6 names
+`kSecAttrAccessibleAfterFirstUnlock`, which on macOS only means anything to the data-protection
+keychain (`kSecUseDataProtectionKeychain: true`). Four configurations were probed before any
+code was written:
 
-CI signs ad-hoc — `CODE_SIGN_IDENTITY=-` in `.github/workflows`, per D-053 — so a real keychain
-write from the test bundle there fails with `errSecMissingEntitlement` (-34018).
+| configuration | result |
+|---|---|
+| data-protection, ad-hoc signed (CI's shape) | `-34018` errSecMissingEntitlement |
+| data-protection, Apple Development identity, no entitlement | `-34018` errSecMissingEntitlement |
+| data-protection + `keychain-access-groups`, bare `codesign` | **SIGKILL** — amfid: "no eligible provisioning profiles found" |
+| data-protection + entitlement, real app target, `-allowProvisioningUpdates` | works |
+| **login keychain, ad-hoc signed** | **PASS** — add 0, read 0, delete 0 |
 
-The resolution is that no automated test touches the real keychain at all:
+The fourth row works and is still unusable, for three reasons found by running it:
+
+1. **It breaks the required CI check.** `make build XCFLAGS="CODE_SIGN_IDENTITY=- CODE_SIGN_STYLE=Manual"` — the workflow's exact signing shape, per D-053 — fails with *"Steno requires a provisioning profile"*. `keychain-access-groups` is a restricted entitlement; a GitHub runner has no certificate and no profile to satisfy it.
+2. **`make build` stops working offline.** It needs `-allowProvisioningUpdates`, a network, and a live Apple ID session — against §9.2's requirement that the app be fully buildable from the command line.
+3. **The minted profile expires in seven days.** Free Personal Team: created 2026-09-21, expires 2026-09-28. A weekly re-mint is a standing tax on every build, and §6.1 rules out the paid membership that would not fix CI anyway.
+
+So Steno uses the login keychain, and **§6 is amended in this PR** — version bumped to v1.20 with
+a changelog entry, per CLAUDE.md's "When the spec is wrong". §6's actual requirement is
+unchanged and fully met: keys live in the Keychain and never in SwiftData, `UserDefaults`,
+plists, or logs. What is given up is an accessibility attribute whose practical effect on a Mac
+that is logged in, with its login keychain unlocked, is nil.
+
+The layering is unchanged from the original design and still carries its own weight:
 
 ```swift
 public protocol CredentialStore: Sendable {
@@ -235,23 +252,11 @@ public protocol CredentialStore: Sendable {
 }
 ```
 
-`KeychainCredentialStore` is the real one. `InMemoryCredentialStore` (in `StenoTests`) backs
-every automated test, so `make test` stays hermetic under `sandbox-exec` and CI's signing mode
-is irrelevant to it. The real store is executed by D-138's harness on a signed build.
+`KeychainCredentialStore` is the real one; `InMemoryCredentialStore` (in `StenoTests`) backs
+every test that needs *a* store rather than *the* store, so nothing in `make test` writes into
+the developer's login keychain — the same hygiene §9.4 already requires of `UserDefaults`.
 
-**The rejected alternative was a real round-trip test that skips on -34018.** It would be green
-on CI precisely because it never ran, and this repo has already shipped four tests that
-compiled, passed, and could not detect anything.
-
-**Step one of implementation is a probe, before any of this is committed to code.** Cheapest
-hypothesis first: automatic signing with the Personal Team may already give the binary an
-`application-identifier` sufficient for the data-protection keychain, in which case
-`Steno.entitlements` is untouched. Only if that fails do we add `keychain-access-groups`. If
-*that* fails against a free Personal Team, the choice between the legacy keychain (a §6
-amendment) and a paid membership (§6.1 says not required and not wanted) is a product call and
-returns to the user rather than being made here.
-
-## D-135 — One generic-password item per provider, never synchronizable
+## D-135 — One generic-password item per provider, and no inert attributes
 
 | attribute | value |
 |---|---|
@@ -259,11 +264,16 @@ returns to the user rather than being made here.
 | `kSecAttrService` | `com.lgabrielgr.steno.ai` |
 | `kSecAttrAccount` | provider id (`anthropic`) |
 | `kSecValueData` | JSON-encoded `Credential` |
-| `kSecUseDataProtectionKeychain` | `true` |
-| `kSecAttrAccessible` | `kSecAttrAccessibleAfterFirstUnlock` (§6) |
 | `kSecAttrSynchronizable` | `false`, set explicitly |
 
 Account is the provider id, so a second provider is a second item rather than a migration.
+
+**`kSecAttrAccessible` is deliberately absent.** The probe confirmed the login keychain accepts
+it and returns `errSecSuccess` — it is accepted and inert. Passing it would leave a line of code
+that looks like it enforces §6's accessibility rule and does not, which is this repo's
+most-repeated defect shape: a comment or a call asserting a property the code does not have. The
+constraint is recorded in the amended §6 and in a doc comment that says the attribute is
+*omitted on purpose*, not forgotten.
 
 `synchronizable` is **set**, not defaulted: iCloud Keychain would put the API key on the user's
 other machines, and D1/§14 cancelled sync. Leaving it to the platform default would make that a
@@ -276,7 +286,7 @@ AI provider that silently stopped working.
 `credential(for:)` returns `Credential?` with absence as `nil`: `errSecItemNotFound` is a normal
 answer, not a failure, and it is what becomes `AIError.notConfigured` one layer up.
 
-`KeychainError` maps `OSStatus` into typed cases — `.missingEntitlement`, `.interactionNotAllowed`,
+`KeychainError` maps `OSStatus` into typed cases — `.duplicateItem`, `.interactionNotAllowed`,
 `.userCancelled`, `.unexpected(OSStatus)` — and deliberately does **not** fold into `AIError`:
 credential storage is its own layer with its own owner, and the AI layer's view of it is exactly
 two outcomes, a credential or none.
@@ -372,6 +382,40 @@ that the unexecuted path is where the defects sit, most recently when running th
 faults that eleven review rounds and the whole test suite did not.
 
 `selftest` is a provider id no real provider uses, so the harness cannot overwrite a stored key.
+It round-trips **twice** — store, read, store again, read — so the `errSecDuplicateItem` →
+`SecItemUpdate` fallback of D-135 is exercised, which is the one sequence D-139's pure tests
+cannot reach.
+
+## D-139 — `KeychainCredentialStore` is tested as pure functions, not against a scratch keychain
+
+With the login keychain in play, a genuine round trip inside `make test` became possible: a
+throwaway keychain file (`SecKeychainCreate` + `kSecUseKeychain`) was probed and passes
+ad-hoc signed, inside the test sandbox. It is still rejected.
+
+It costs five deprecation warnings — `SecKeychainCreate`, `SecKeychainDelete`, `kSecUseKeychain`,
+`kSecMatchSearchList` — and one of them is structural rather than local: redirecting the store
+at a keychain means `SecKeychain` appears in a **production** initializer signature, so a type
+Apple deprecated in 2014 becomes part of `StenoKit`'s public surface in order to serve a test.
+
+Instead the store is split so that what can be tested purely, is:
+
+```swift
+enum KeychainQuery {
+    static func lookup(providerID: String) -> [String: Any]
+    static func insert(_ data: Data, providerID: String) -> [String: Any]
+    static func update(_ data: Data) -> [String: Any]
+}
+
+extension KeychainError {
+    static func from(_ status: OSStatus) -> KeychainError
+}
+```
+
+Query construction and `OSStatus` mapping are the parts with branches, and both are tested
+without `SecItem*` running at all: the tests assert the exact dictionaries — service, account,
+`kSecAttrSynchronizable == false`, and that **no** `kSecAttrAccessible` key is present (D-135's
+absence is asserted, not merely commented). What is left for D-138's harness is the part that
+genuinely needs a keychain: that the calls succeed and that the second store overwrites.
 
 ---
 
@@ -387,9 +431,10 @@ StenoKit/AI/
   AIRequestMetrics.swift        + AIMetricsLog (D-137)
   Credential.swift              Credential, TokenSet, CredentialKind (D-136)
   CredentialStore.swift         protocol (D-134)
-  KeychainCredentialStore.swift + KeychainError (D-135)
+  KeychainCredentialStore.swift + KeychainQuery + KeychainError (D-135, D-139)
 
 StenoKit/Support/Logging.swift  Log.ai added
+docs/REQUIREMENTS.md            §6 amended, Status -> v1.20, changelog entry (D-134)
 StenoKit/CLI/                   keychain-selftest subcommand (D-138)
 Makefile                        verify-keychain target
 
@@ -423,8 +468,10 @@ mutation before the PR opens, with the results in the PR body:
 The count assertion in the middle row is what stops that test being vacuous: without it, it
 passes forever by matching nothing.
 
-Beyond those: `Credential` round-trips through `InMemoryCredentialStore` in **both** cases
-(D-136); `StandupDraft` decodes from §7.3's literal JSON, keys included; `validated(against:)`
+Beyond those: `KeychainQuery`'s three builders are asserted dictionary-for-dictionary, including
+that `kSecAttrAccessible` is absent and `kSecAttrSynchronizable` is `false`, and
+`KeychainError.from` is a table test over every mapped `OSStatus` (D-139); `Credential`
+round-trips through `InMemoryCredentialStore` in **both** cases (D-136); `StandupDraft` decodes from §7.3's literal JSON, keys included; `validated(against:)`
 rejects an id the app did not send and accepts one it did, in both cadences; `AIError` is
 `Equatable` across every case including associated values.
 
@@ -443,8 +490,10 @@ and `make verify-keychain` run by the user on a signed build.
 
 ## Risks
 
-1. **The entitlement probe fails against a free Personal Team.** Mitigated by running it first,
-   before code. Escalates to a product call between a §6 amendment and a paid membership.
+1. **§6's amendment is a real reduction in stated posture**, not a clarification. The probe
+   evidence is in D-134 and the amendment says plainly what was given up and why, so a future
+   reader meets a decision rather than a silent omission. If Steno is ever distributed — §6.1
+   says it will not be — this is the line to revisit.
 2. **`AIOutputSchema` as opaque `Data` defers all schema validation to M3-02/M3-03.** Accepted:
    nothing here can validate a schema it does not author, and `StandupDraft`'s decode is the
    real gate.
