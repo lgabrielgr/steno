@@ -65,6 +65,15 @@ func storingACredentialTouchesNoDefaults() {
 
     // Read-only, and narrow: the sentinel, not a key census, so a test running
     // beside this one cannot make it flake.
+    //
+    // **If you run that mutation, clean up after it.** The write lands in the
+    // xctest tool's own domain and survives the run, so this test then fails on
+    // an unmutated tree until you clear it:
+    //
+    //     defaults delete com.apple.dt.xctest.tool <key>
+    //
+    // That persistence is the test working — a leaked credential does not
+    // evaporate when the process exits — but it will look like a broken suite.
     let values = UserDefaults.standard.dictionaryRepresentation().values
     let leaked = values.filter { String(describing: $0).contains("selftest-") }
     #expect(leaked.isEmpty, "\(leaked)")
