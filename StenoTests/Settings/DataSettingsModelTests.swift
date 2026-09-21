@@ -126,3 +126,28 @@ func aFailedStoreDisablesThePane() throws {
     model.exportNow()
     #expect(fixture.recorder.written.isEmpty)
 }
+
+/// The pane's own half of the same fix. `DataSettingsPane` is SwiftUI in the
+/// app target, which the unhosted test bundle cannot reach (D-010) — so the
+/// button's enablement rule lives on the model, where it can be asserted, and
+/// the view binds to it rather than re-deriving it.
+@Test("Back Up Now stays available while auto-export is off")
+@MainActor
+func backUpNowStaysAvailableWhileDisabled() throws {
+    let fixture = try autoExportFixture()
+    let model = DataSettingsModel(settings: fixture.settings, service: fixture.service())
+
+    model.isEnabled = false
+
+    #expect(model.canBackUpNow)
+}
+
+@Test("Back Up Now is unavailable when the store could not be opened")
+@MainActor
+func backUpNowIsUnavailableWithoutAStore() {
+    // The gate that must survive: there is nothing to export, and D-018's
+    // posture is that the app runs on without one.
+    let model = DataSettingsModel(service: nil)
+
+    #expect(model.canBackUpNow == false)
+}

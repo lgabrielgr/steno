@@ -11,13 +11,25 @@ public enum AutoExportTrigger: String, Equatable, Sendable {
     /// success.
     case daily
 
-    /// The Data pane's "Export now". Bypasses the dueness check, and nothing
-    /// else.
+    /// The Data pane's "Back Up Now".
+    ///
+    /// Bypasses the dueness check **and the `autoExportEnabled` gate** (D-140):
+    /// that setting governs the automatic triggers, and §10.5 lists manual
+    /// export as its own surface — File > Export and `steno export` have always
+    /// worked with the toggle off. Everything else a run does, including the
+    /// folder guard and retention, applies to it unchanged.
     case manual
 
     /// Whether this trigger's own toggle is on. `manual` has no toggle — the
-    /// button *is* the gesture — and the pane disables it when auto-export is
-    /// off, so there is nothing for it to consult.
+    /// button *is* the gesture — so there is nothing for it to consult.
+    ///
+    /// **It is not gated on `autoExportEnabled` either** (D-140). An earlier
+    /// version of this comment said the pane disables the button when
+    /// auto-export is off; that was true, and it was the defect — D-123 clears
+    /// a standing failure only on a success, so the gate removed the only way
+    /// to produce one. `run` admits `.manual` through that guard now, and
+    /// `DataSettingsModel.canBackUpNow` gates the button on the store alone.
+    /// Do not reintroduce the toggle here or in the pane.
     func isEnabled(by settings: AppSettings) -> Bool {
         switch self {
         case .quit: return settings.autoExportOnQuit
@@ -150,7 +162,22 @@ public struct AutoExportService {
     @discardableResult
     public func run(trigger: AutoExportTrigger) -> AutoExportOutcome {
         let instant = now()
-        guard settings.autoExportEnabled else { return .skipped(.disabled) }
+        // **The setting governs the *automatic* triggers, not backup itself.**
+        // `.manual` is the Data pane's "Back Up Now", and refusing it here had
+        // a consequence nobody chose: D-123 clears a standing failure only on a
+        // success, so turning auto-export off removed the only way to produce
+        // one and left the warning standing on all three of D-123's surfaces
+        // with nothing the user could do about it.
+        //
+        // This is not the feature running while it is off. A manual export
+        // already works with this toggle off, from File > Export and from
+        // `steno export`; the pane's button was the one manual surface that did
+        // not. The line below already said as much — `isEnabled(by:)` answers
+        // `true` for `.manual` — and the blanket guard simply ran first.
+        // Raised in PR #32.
+        guard trigger == .manual || settings.autoExportEnabled else {
+            return .skipped(.disabled)
+        }
         guard trigger.isEnabled(by: settings) else { return .skipped(.triggerOff) }
         if trigger == .daily,
             !AutoExportDue.isDue(

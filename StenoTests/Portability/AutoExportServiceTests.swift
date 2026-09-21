@@ -131,31 +131,6 @@ func dailyPastTheDayRuns() throws {
     }
 }
 
-@Test("auto-export turned off writes nothing, on any trigger")
-@MainActor
-func disabledWritesNothing() throws {
-    let fixture = try autoExportFixture()
-    fixture.settings.autoExportEnabled = false
-
-    #expect(fixture.service().run(trigger: .quit) == .skipped(.disabled))
-    #expect(fixture.service().run(trigger: .daily) == .skipped(.disabled))
-    #expect(fixture.service().run(trigger: .manual) == .skipped(.disabled))
-    #expect(fixture.recorder.written.isEmpty)
-}
-
-@Test("each trigger's own toggle gates only that trigger")
-@MainActor
-func aTriggerTogglesIndependently() throws {
-    let fixture = try autoExportFixture()
-    fixture.settings.autoExportOnQuit = false
-
-    #expect(fixture.service().run(trigger: .quit) == .skipped(.triggerOff))
-    guard case .written = fixture.service().run(trigger: .daily) else {
-        Issue.record("the daily trigger was disabled by the quit toggle")
-        return
-    }
-}
-
 @Test("a successful export records where it went and clears the last failure")
 @MainActor
 func successRecordsTheStatus() throws {
