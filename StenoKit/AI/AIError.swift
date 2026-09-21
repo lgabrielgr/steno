@@ -61,9 +61,9 @@ extension AIError: LocalizedError {
     public var errorDescription: String? {
         switch self {
         case .notConfigured:
-            return "No API key is set for this provider. Add one in Settings."
+            return "No credential is set for this provider. Add an API key in Settings."
         case .invalidCredential:
-            return "The provider rejected this API key."
+            return "The provider rejected this credential."
         case .network:
             return "Couldn't reach the provider. Check your connection."
         case .timedOut:

@@ -63,6 +63,45 @@ func theSecondWriteIsAnOverwrite() {
     #expect(store.writes == 2)
 }
 
+@Test("a failure partway through still leaves nothing behind")
+func aFailedRunCleansUpAfterItself() {
+    // The finding this covers (Copilot, PR #33): the explicit delete sits at the
+    // end of the sequence, so a mismatch on the first read-back used to return
+    // early and strand a credential-shaped item in the real Keychain — the one
+    // place it must not accumulate, and at the moment someone is investigating.
+    //
+    // Mutation: drop the `defer` in `KeychainSelftest.run`. Red.
+    let store = MisreadingCredentialStore()
+
+    let code = KeychainSelftest.run(store: store, out: { _ in })
+
+    #expect(code == 1)
+    #expect(store.contents.isEmpty, "\(store.contents)")
+}
+
+/// Stores faithfully and reads back something else — a Keychain that fails the
+/// harness *after* the first write has landed, which is the path that leaked.
+private final class MisreadingCredentialStore: CredentialStore, @unchecked Sendable {
+    private let lock = NSLock()
+    private var held: [String: Credential] = [:]
+
+    func store(_ credential: Credential, for providerID: String) throws {
+        lock.withLock { held[providerID] = credential }
+    }
+
+    func credential(for providerID: String) throws -> Credential? {
+        lock.withLock { held[providerID] == nil ? nil : .apiKey("something-else") }
+    }
+
+    func delete(for providerID: String) throws {
+        lock.withLock { held.removeValue(forKey: providerID) }
+    }
+
+    var contents: [String: Credential] {
+        lock.withLock { held }
+    }
+}
+
 /// Accepts writes and returns nothing — the shape of a Keychain that reports
 /// success while dropping the item.
 private final class ForgetfulCredentialStore: CredentialStore, @unchecked Sendable {

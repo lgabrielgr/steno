@@ -33,6 +33,15 @@ public enum KeychainSelftest {
         let first = Credential.apiKey("selftest-first-\(UUID().uuidString)")
         let second = Credential.apiKey("selftest-second-\(UUID().uuidString)")
 
+        // **Every exit path, not just the happy one.** The explicit delete below
+        // is part of what this harness verifies, so it stays — but a mismatch or
+        // a throw before it would return early and strand a credential-shaped
+        // item in the real Keychain, at exactly the moment someone is
+        // investigating why the Keychain is misbehaving. Deleting what is
+        // already gone succeeds, so this costs the passing run nothing.
+        // Raised by Copilot on PR #33.
+        defer { try? store.delete(for: providerID) }
+
         do {
             try store.store(first, for: providerID)
             let readBack = try store.credential(for: providerID)

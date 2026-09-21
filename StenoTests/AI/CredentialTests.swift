@@ -8,7 +8,7 @@ import Testing
 @Test(
     "both cases survive a round trip through a store",
     arguments: [
-        Credential.apiKey("sk-ant-api03-not-a-real-key"),
+        Credential.apiKey("fixture-key-value"),
         Credential.oauth(
             TokenSet(
                 accessToken: "access", refreshToken: "refresh",
