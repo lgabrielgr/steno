@@ -38,6 +38,24 @@ public final class DataSettingsModel {
             : nil
     }
 
+    /// Whether "Back Up Now" is offered.
+    ///
+    /// **Not gated on `isEnabled`.** That setting governs *automatic* backup;
+    /// a manual one is the same act the File menu and `steno export` already
+    /// perform with the toggle off. Gating it here had a consequence nobody
+    /// chose: D-123 clears a standing failure only on a success, so turning
+    /// auto-export off removed the only way to produce one and left the warning
+    /// standing in the popover and this pane with no way to act on it.
+    ///
+    /// The store gate stays — there is nothing to export without one (D-018).
+    ///
+    /// Lives on the model rather than in the pane's `.disabled(...)` because
+    /// the unhosted test bundle cannot reach the app target (D-010), and a rule
+    /// only a view knows is a rule no test can hold.
+    public var canBackUpNow: Bool {
+        storeFailureNote == nil
+    }
+
     private let settings: AppSettings
     private let panels: any FilePanels
     private let service: AutoExportService?

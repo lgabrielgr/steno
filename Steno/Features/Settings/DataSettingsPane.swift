@@ -72,7 +72,7 @@ struct DataSettingsPane: View {
                 }
 
                 Button("Back Up Now") { model.exportNow() }
-                    .disabled(model.storeFailureNote != nil || !model.isEnabled)
+                    .disabled(!model.canBackUpNow)
             }
         }
         .formStyle(.grouped)
