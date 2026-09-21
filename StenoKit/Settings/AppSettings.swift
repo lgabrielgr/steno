@@ -21,6 +21,28 @@ public struct AppSettings {
     /// FR-6's default project — rung 4 of FR-1.4's ladder.
     public static let defaultProjectIDKey = "com.lgabrielgr.steno.defaultProjectID"
 
+    /// Every key this type declares.
+    ///
+    /// **This list is what §8's audit reads.** This type's own doc comment
+    /// above says a codebase where every model declares its own key is one
+    /// where the "secrets are never exported" audit has no single place to
+    /// look — this is that place made machine-readable, so
+    /// `AISecretsTests` can assert that no setting is named like a credential.
+    ///
+    /// A new key must be added here. `AISecretsTests` asserts the count, so
+    /// adding one without listing it turns the audit red rather than quietly
+    /// shrinking its coverage — the same guard `CredentialPatterns.all` uses.
+    public static let allKeys: [String] = [
+        hotkeyChordKey,
+        defaultProjectIDKey,
+        autoExportEnabledKey,
+        autoExportOnQuitKey,
+        autoExportDailyKey,
+        autoExportFolderKey,
+        autoExportStatusKey,
+        autoExportOnboardedKey,
+    ]
+
     private let defaults: UserDefaults
 
     /// - Parameter defaults: injected so tests use a scratch suite rather than

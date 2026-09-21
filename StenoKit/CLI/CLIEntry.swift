@@ -74,6 +74,14 @@ public enum CLIEntry {
             return CLIRunner.ExitCode.usage
         }
 
+        // Before the store is opened, and before the instance check: the
+        // Keychain harness reads no event log, and creating the user's store as
+        // a side effect of verifying a credential would be a surprise nobody
+        // asked for. See `KeychainSelftest`.
+        if case .keychainSelftest = command {
+            return KeychainSelftest.run(store: KeychainCredentialStore())
+        }
+
         // **Before the store is opened, not after.** `StenoStore.live` creates
         // the store directory and, on a fresh path, the store itself — so a
         // refusal raised further in had already written to disk, and could fail
