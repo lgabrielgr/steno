@@ -24,6 +24,13 @@ public enum CLIParser {
             return try parseExport(Array(rest.dropFirst()))
         case "import":
             return try parseImport(Array(rest.dropFirst()))
+        case "keychain-selftest":
+            // Takes no flags. Accepting and ignoring them would let
+            // `keychain-selftest --replace` look like it did something.
+            guard rest.count == 1 else {
+                throw unexpected(rest[1], of: "keychain-selftest")
+            }
+            return .keychainSelftest
         default:
             throw CLIUsageError(
                 "steno: unknown subcommand \"\(subcommand)\".\n\n\(CLIUsage.text)")

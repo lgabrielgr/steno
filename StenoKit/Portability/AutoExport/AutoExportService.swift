@@ -11,13 +11,25 @@ public enum AutoExportTrigger: String, Equatable, Sendable {
     /// success.
     case daily
 
-    /// The Data pane's "Export now". Bypasses the dueness check, and nothing
-    /// else.
+    /// The Data pane's "Back Up Now".
+    ///
+    /// Bypasses the dueness check **and the `autoExportEnabled` gate** (D-140):
+    /// that setting governs the automatic triggers, and §10.5 lists manual
+    /// export as its own surface — File > Export and `steno export` have always
+    /// worked with the toggle off. Everything else a run does, including the
+    /// folder guard and retention, applies to it unchanged.
     case manual
 
     /// Whether this trigger's own toggle is on. `manual` has no toggle — the
-    /// button *is* the gesture — and the pane disables it when auto-export is
-    /// off, so there is nothing for it to consult.
+    /// button *is* the gesture — so there is nothing for it to consult.
+    ///
+    /// **It is not gated on `autoExportEnabled` either** (D-140). An earlier
+    /// version of this comment said the pane disables the button when
+    /// auto-export is off; that was true, and it was the defect — D-123 clears
+    /// a standing failure only on a success, so the gate removed the only way
+    /// to produce one. `run` admits `.manual` through that guard now, and
+    /// `DataSettingsModel.canBackUpNow` gates the button on the store alone.
+    /// Do not reintroduce the toggle here or in the pane.
     func isEnabled(by settings: AppSettings) -> Bool {
         switch self {
         case .quit: return settings.autoExportOnQuit

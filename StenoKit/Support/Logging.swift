@@ -28,6 +28,25 @@ public enum Log {
     /// Spell out `/usr/bin/log` — zsh has a `log` builtin that shadows it.
     public static let report = Logger(subsystem: subsystem, category: "report")
 
+    /// The AI layer (§7, §8).
+    ///
+    /// Its own category so an AI call can be found without reading every `app`
+    /// line, and because §8 governs this output specifically: metadata only —
+    /// token counts, latency, model — and never a prompt or a draft. Everything
+    /// written here goes through `AIMetricsLog.record`, which is the only
+    /// emitter; there is no payload-logging path in this codebase to find.
+    ///
+    ///     /usr/bin/log show --last 1h --info --predicate \
+    ///       'subsystem == "com.lgabrielgr.steno" AND category == "ai"'
+    ///
+    /// Spell out `/usr/bin/log` — zsh has a `log` builtin that shadows it. And
+    /// `--info`, or `info`-level lines are filtered out and the command returns
+    /// nothing at all.
+    /// Named `aiLayer` rather than `ai` because SwiftLint's `identifier_name`
+    /// rejects a two-character name. The *category* stays `ai` — it is what
+    /// the `log show` predicate above matches on.
+    public static let aiLayer = Logger(subsystem: subsystem, category: "ai")
+
     /// Intervals around the capture path.
     ///
     /// §1.1 makes capture latency a P0 functional requirement and §13 requires

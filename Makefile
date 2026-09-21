@@ -230,6 +230,20 @@ import: build ## Merge an export into the store (FILE=path required)
 	@test -n "$$FILE" || { echo "usage: make import FILE=path/to/export.json"; exit 2; }
 	@"$(BIN)" import --file "$$FILE"
 
+# §8's Keychain path, run against the real Keychain on a signed build.
+#
+# `make test` deliberately never touches the Keychain (D-134): it uses an
+# in-memory double, so nothing in the suite writes into the developer's login
+# keychain, and CI — which signs ad-hoc — has nothing to fail on. The cost of
+# that choice is that `KeychainCredentialStore` has no automated execution at
+# all until M3-04 builds a Settings pane, which is two milestones of a security
+# path nobody has run. This target is the answer: it stores, overwrites, reads
+# and deletes under a `selftest` provider id no real provider uses.
+#
+# Run it after any change to KeychainCredentialStore or KeychainQuery.
+verify-keychain: build ## Round-trip the real Keychain (signed build; §8, D-138)
+	@"$(BIN)" keychain-selftest
+
 # The swiftlint check lives here rather than in `preflight`, which gates
 # build/run/release — none of which should start requiring a linter.
 #
