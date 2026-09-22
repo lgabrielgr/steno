@@ -3789,8 +3789,15 @@ provider sending `x-api-key` would fail for a reason that is not a defect.
 except the `as? HTTPURLResponse` cast. Covering it means a `URLProtocol` stub — a process-global
 registry, `@unchecked Sendable`, and ordering care under parallel Swift Testing runs — standing
 between the suite and a file whose only untested behaviour is "Foundation does what Foundation
-does". M3-04's "Test connection" is the first human check. **If that file grows a branch, it
-needs a test, and that is the moment to pay for the harness.**
+does". **If that file grows a branch, it needs a test, and that is the moment to pay for the
+harness.**
+
+**The deferral has an owner, not just a comment.** A note saying "nothing covers this today" is a
+bug filed against whoever reads it next and finds no one named, so M3-04's task file carries the
+work: `make verify-models`, a hidden `models-selftest` subcommand on the D-138 pattern, which
+executes the real adapter and prints the ranked list. It closes this *and* D-140's unconfirmed
+cursor field names in one target. Until then the check is a `curl`, written out in that task
+file.
 
 ### D-143 — Three new `AIError` cases, because the honest mapping needs them
 

@@ -7,8 +7,12 @@ import Foundation
 /// stub — a process-global registry, `@unchecked Sendable`, and ordering care
 /// under parallel Swift Testing runs — standing between the suite and a file
 /// whose only untested behaviour is "Foundation does what Foundation does".
-/// M3-04's "Test connection" is the first human check. If this file grows a
-/// branch, that is the moment to pay for the harness.
+/// If this file grows a branch, that is the moment to pay for the harness.
+///
+/// **Who closes it: M3-04**, whose task file carries `make verify-models` — a
+/// hidden `models-selftest` subcommand on `make verify-keychain`'s pattern
+/// (D-138) that runs this adapter against the real API. Until then the first
+/// thing to execute this code is a human clicking "Test connection".
 public struct URLSessionTransport: HTTPTransport {
     private let session: URLSession
 

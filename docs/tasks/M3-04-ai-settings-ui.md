@@ -42,3 +42,27 @@ model picker, and a working "Test connection".
 - Everything here must degrade. §7.4's guarantee is that the app produces a report with no key
   configured at all, so Settings must never present the AI as required.
 - Keep this pane small. The product is a recall tool; configuration is not where its value is.
+- **Add `make verify-models`, the network twin of `make verify-keychain`** (filed from M3-02,
+  PR #35). D-138 set the precedent: what `make test` cannot reach gets a hidden CLI subcommand
+  and a `make` target, so a human can run it on a signed build. M3-02 left two things in exactly
+  that position and added no such target:
+  - **`URLSessionTransport` has no test at all** (D-142). Its only untested behaviour is
+    "Foundation does what Foundation does", so a `URLProtocol` harness was judged not worth its
+    cost — but that leaves the real adapter first executed by a human in this task.
+  - **The `/v1/models` cursor field names came from documentation, not a live call.**
+    `after_id` / `has_more` / `last_id` is the Models endpoint's scheme, and the paging loop is
+    written to terminate on anything it does not recognise rather than spin. Nothing has
+    confirmed it against the API.
+
+  A `models-selftest` subcommand that reads the stored key, calls `availableModels()`, and prints
+  the ranked list closes both: it exercises the real transport end to end and prints enough to
+  check D-140's ordering against what the API actually returns. Model it on
+  `KeychainSelftest` — hidden from `CLIUsage.text`, handled before the store opens.
+
+  **Until it exists, the check is manual:**
+
+  ```
+  curl -s "https://api.anthropic.com/v1/models?limit=3" \
+    -H "x-api-key: $ANTHROPIC_API_KEY" -H "anthropic-version: 2023-06-01" \
+    | jq '{has_more, last_id, first: .data[0]}'
+  ```
