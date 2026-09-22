@@ -3810,6 +3810,11 @@ response that arrived intact but says the model declined or ran out of room. Add
 | `stop_reason: "refusal"` | `.invalidResponse(.refused)` |
 | `stop_reason: "max_tokens"` | `.invalidResponse(.truncated)` |
 
+**Its message names no single cause** (amended in review, PR #35). The case spans 400, 404, 413
+and 422, so "the selected model may no longer exist" — true only of the 404 — gave model-picker
+advice for a window too large to send. It carries nothing that could tell those apart, and
+inventing a distinction the value does not hold would be worse than naming both possibilities.
+
 **404 belongs with 400, not with `.providerUnavailable`.** The two 404s this app can provoke are
 a model id retired since the user picked it and a typo'd path — both ours. Routing them to "the
 provider is unavailable right now" would send a user whose selected model no longer exists to a
@@ -3890,8 +3895,20 @@ offline. The deadline branch throws `.timedOut` itself, and
 `AnthropicErrors.error(forTransport:)` maps a stray `URLError.cancelled` or `CancellationError`
 the same way, because nothing else in this module cancels.
 
-**Falsified by** `cancellationIsATimeout` and `aHangIsATimeout`. Confirmed by mutation:
-collapsing the `URLError` branch to `.network` turns the first red.
+**Amended in review (PR #35).** The first version mapped cancellation in `generateStandup` and
+not in `availableModels`, and a mutation *survived* the test written for it — cancelling the
+caller cancels both children of the race, so whether a raw `CancellationError` escapes is a
+coin flip between the deadline task's sleep and the operation's, and the test happened to hit the
+path the transport had already mapped. **The mapping now lives in `withDeadline` itself**, which
+covers every caller and makes the contract deterministic: a cancelled deadline throws
+`AIError.timedOut`, never `CancellationError`. `availableModels` keeps a catch-all too, because a
+mapping applied to one of two sibling paths is the defect this repo keeps re-learning.
+
+**Falsified by** `cancellationIsATimeout`, `aHangIsATimeout` and
+`cancellationStaysInsideTheContract` — the last driving an operation that does no mapping of its
+own, so it fails the moment `withDeadline` stops mapping. Confirmed by mutation: collapsing the
+`URLError` branch to `.network` turns the first red, and removing `withDeadline`'s
+`catch is CancellationError` turns the third red.
 
 ### D-146 — Only `generateStandup` emits §8's metrics line
 
@@ -3909,3 +3926,17 @@ message reaches a log line even on the error branches: the mapping functions tak
 and a header dictionary, the error envelope is never decoded, and the `DecodingError` from a
 failed parse is dropped rather than described — its message quotes the value that failed, which
 on the draft path is the user's stand-up.
+
+**Amended in review (PR #35): the failure line keeps its token counts.** The first version
+recorded `nil` for both on every failure, which is wrong for exactly the class of failure that
+costs money — a refusal, a truncation and a hallucinated id are all *billed* calls, where the API
+reports `usage` and then the draft fails. An internal `DraftFailure` now carries the decoded
+usage to the catch; it never escapes `generateStandup`, so the public contract is still `AIError`
+alone. `DraftFailure` and `draft(from:cadence:allowed:)` are `internal` rather than `private` so
+that this is a test rather than a claim: `record` writes to the unified log and cannot be read
+back in-process.
+
+**Falsified by** `failedDraftsKeepTheirUsage` and `validationFailuresKeepTheirUsage` — two,
+because the `stop_reason` branches and the `decode`/`validated` pair are separate throw sites and
+a fix applied to one would leave the other recording nothing. Confirmed by mutation: passing
+`usage: nil` in the refusal branch turns the first red.

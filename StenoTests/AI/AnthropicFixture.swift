@@ -45,11 +45,12 @@ enum AnthropicFixture {
     static func request(
         timeout: Duration = .seconds(5),
         allowed: Set<UUID> = [taskID],
-        schema: String = #"{"type":"object"}"#
+        schema: String = #"{"type":"object"}"#,
+        cadence: ReportCadence = .daily
     ) -> StandupRequest {
         StandupRequest(
             modelID: "claude-sonnet-5",
-            cadence: .daily,
+            cadence: cadence,
             systemPrompt: "system",
             userPrompt: "user",
             outputSchema: AIOutputSchema(name: "daily", json: Data(schema.utf8)),
@@ -80,6 +81,26 @@ enum AnthropicFixture {
         ]
         let body = (try? JSONSerialization.data(withJSONObject: envelope)) ?? Data()
         return HTTPResponse(status: status, body: body)
+    }
+
+    /// A `/v1/messages` response whose text block is §7.3's `periodic` JSON.
+    ///
+    /// D17's two cadences "are not cosmetic variants of each other" (§7.3):
+    /// the sections differ and so does the cardinality of the task reference,
+    /// so the provider's cadence switch needs both sides exercised.
+    static func periodicDraftResponse(taskIDs: [UUID] = [taskID]) -> HTTPResponse {
+        let ids = taskIDs.map { "\"\($0.uuidString)\"" }.joined(separator: ",")
+        let draft = """
+            {"completed":[{"task_ids":[\(ids)],"text":"shipped the export encoder"}],\
+            "in_flight":[],"blockers_and_risks":[]}
+            """
+        let envelope: [String: Any] = [
+            "content": [["type": "text", "text": draft]],
+            "stop_reason": "end_turn",
+            "usage": ["input_tokens": 900, "output_tokens": 120],
+        ]
+        let body = (try? JSONSerialization.data(withJSONObject: envelope)) ?? Data()
+        return HTTPResponse(status: 200, body: body)
     }
 
     /// One page of `/v1/models`.

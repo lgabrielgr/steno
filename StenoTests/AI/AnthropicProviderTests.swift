@@ -115,19 +115,34 @@ func aBrokenSchemaIsCaughtLocally() async {
     #expect(await transport.received.isEmpty)
 }
 
-@Test("two calls with equal inputs produce equal bytes")
+@Test("the body is serialized with its keys in sorted order")
 func theBodyIsDeterministic() async throws {
-    // `JSONSerialization`'s unsorted key order is hash order, which differs
-    // between processes. Mutation: drop `.sortedKeys`. Red only sometimes,
-    // which is why the two bodies are compared within one run *and* the option
-    // is asserted by this test's existence in review.
-    let first = StubHTTPTransport(answers: [.respond(AnthropicFixture.draftResponse())])
-    let second = StubHTTPTransport(answers: [.respond(AnthropicFixture.draftResponse())])
+    // **An exact byte sequence, not two serializations compared.** The earlier
+    // version of this test ran `messagesBody` twice in one process and compared
+    // the results — which cannot detect a missing `.sortedKeys` at all, because
+    // unsorted dictionary iteration is stable *within* a process and both calls
+    // produce the same order either way (PR #35 review). It was a test that
+    // could not fail for the mutation its own comment named.
+    //
+    // §10.2 already pays for this lesson once: hash order differs between
+    // processes, so a body that is not explicitly sorted is not reproducible.
+    // Mutation: drop `.sortedKeys`. Red — the nested objects reorder too.
+    let transport = StubHTTPTransport(answers: [.respond(AnthropicFixture.draftResponse())])
+    _ = try await AnthropicFixture.provider(transport).generateStandup(AnthropicFixture.request())
 
-    _ = try await AnthropicFixture.provider(first).generateStandup(AnthropicFixture.request())
-    _ = try await AnthropicFixture.provider(second).generateStandup(AnthropicFixture.request())
+    let body = try #require(await transport.received.first?.body)
+    let expected = """
+        {"max_tokens":1024,"messages":[{"content":"user","role":"user"}],\
+        "model":"claude-sonnet-5",\
+        "output_config":{"format":{"schema":{"type":"object"},"type":"json_schema"}},\
+        "system":"system"}
+        """
 
-    #expect(await first.received.first?.body == second.received.first?.body)
+    // The failable initializer rather than `String(decoding:)`, per SwiftLint's
+    // `optional_data_string_conversion` — which is the better assertion anyway:
+    // a body that is not valid UTF-8 fails here rather than becoming replacement
+    // characters that then compare unequal for an unrelated-looking reason.
+    #expect(String(bytes: body, encoding: .utf8) == expected)
 }
 
 // MARK: - The draft path (D-143)
@@ -203,5 +218,109 @@ func garbageIsUndecodable() async {
 
     await #expect(throws: AIError.invalidResponse(.undecodable)) {
         try await AnthropicFixture.provider(transport).generateStandup(AnthropicFixture.request())
+    }
+}
+
+@Test("a periodic window decodes into the periodic draft, not the daily one")
+func periodicCadenceRoundTrips() async throws {
+    // §7.3: the two cadences "are not cosmetic variants of each other — the
+    // sections differ, and so does the cardinality of the task reference." The
+    // provider switches on cadence to pick the decode, and only `.daily` was
+    // covered (PR #35 review). Mutation: decode `.daily` regardless of cadence.
+    // Red — a periodic body has no `since_last_standup`.
+    let transport = StubHTTPTransport(answers: [.respond(AnthropicFixture.periodicDraftResponse())])
+
+    let draft = try await AnthropicFixture.provider(transport)
+        .generateStandup(AnthropicFixture.request(cadence: .periodic))
+
+    guard case .periodic(let periodic) = draft else {
+        Issue.record("expected a periodic draft")
+        return
+    }
+    #expect(periodic.completed.first?.text == "shipped the export encoder")
+    #expect(periodic.completed.first?.taskIDs == [AnthropicFixture.taskID])
+    #expect(periodic.inFlight.isEmpty)
+}
+
+@Test("a hallucinated id in a periodic bullet is rejected too")
+func periodicDraftsAreValidated() async {
+    // `task_ids` is plural here and `allTaskIDs` flattens it — a guard that
+    // only walked the daily shape would let a themed bullet smuggle one in.
+    let transport = StubHTTPTransport(answers: [
+        .respond(
+            AnthropicFixture.periodicDraftResponse(
+                taskIDs: [AnthropicFixture.taskID, AnthropicFixture.otherID]))
+    ])
+
+    await #expect(throws: AIError.unknownTaskIDs(count: 1)) {
+        try await AnthropicFixture.provider(transport)
+            .generateStandup(AnthropicFixture.request(cadence: .periodic))
+    }
+}
+
+// MARK: - The contract, and what §8 keeps when it breaks
+
+@Test("cancelling a model-list fetch still surfaces an AIError")
+func cancellationDoesNotEscapeTheContract() async {
+    // M3-01's contract: an implementation throws `AIError` and nothing else,
+    // because §7.4 "cannot switch on an error type it has never heard of".
+    // Cancelling the caller cancels the deadline's child tasks, and `Task.sleep`
+    // then throws a bare `CancellationError` past every mapping inside the
+    // group — `generateStandup` caught that and `availableModels` did not
+    // (PR #35 review). Mutation: drop the catch in `availableModels`. Red.
+    let transport = StubHTTPTransport(
+        answers: [.respond(AnthropicFixture.modelsResponse(ids: ["claude-sonnet-5"]))],
+        delay: .seconds(60))
+    let provider = AnthropicFixture.provider(transport)
+
+    let task = Task { try await provider.availableModels() }
+    task.cancel()
+
+    do {
+        _ = try await task.value
+        Issue.record("expected the cancelled fetch to fail")
+    } catch is AIError {
+        // The contract held.
+    } catch {
+        Issue.record("escaped as \(type(of: error)), which §7.4 cannot classify")
+    }
+}
+
+@Test("a refusal keeps the token counts it was billed for")
+func failedDraftsKeepTheirUsage() throws {
+    // D-146: the metrics line keeps the token counts whenever the response
+    // carried them. A refusal, a truncation and a hallucinated id are all
+    // billed calls — the API reports `usage` and *then* the draft fails — so
+    // recording `nil` would lose the numbers for the one class of failure that
+    // actually cost the user money (PR #35 review).
+    //
+    // Mutation: return `nil` for `usage` in `DraftFailure`. Red.
+    let body = AnthropicFixture.draftResponse(stopReason: "refusal").body
+
+    do {
+        _ = try AnthropicProvider.draft(
+            from: body, cadence: .daily, allowed: [AnthropicFixture.taskID])
+        Issue.record("expected a refusal to fail")
+    } catch let failure as AnthropicProvider.DraftFailure {
+        #expect(failure.error == .invalidResponse(.refused))
+        #expect(failure.usage?.inputTokens == 120)
+        #expect(failure.usage?.outputTokens == 45)
+    }
+}
+
+@Test("a hallucinated id keeps its usage too, not just a refusal")
+func validationFailuresKeepTheirUsage() throws {
+    // The `StandupDraft.decode` / `validated(against:)` pair throws a plain
+    // `AIError`, so it needs its own wrap — a fix applied to the `stop_reason`
+    // branches alone would leave this path recording nothing.
+    let body = AnthropicFixture.draftResponse(taskID: AnthropicFixture.otherID).body
+
+    do {
+        _ = try AnthropicProvider.draft(
+            from: body, cadence: .daily, allowed: [AnthropicFixture.taskID])
+        Issue.record("expected a hallucinated id to fail")
+    } catch let failure as AnthropicProvider.DraftFailure {
+        #expect(failure.error == .unknownTaskIDs(count: 1))
+        #expect(failure.usage?.inputTokens == 120)
     }
 }

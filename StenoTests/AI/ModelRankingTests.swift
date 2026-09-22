@@ -104,3 +104,46 @@ func timestampsToleratePrecision() {
     #expect(AnthropicWire.timestamp("the first of January") == nil)
     #expect(AnthropicWire.timestamp(nil) == nil)
 }
+
+// MARK: - Decoding (the path the ranking tests above do not take)
+
+@Test("structured_outputs is read out of the nested capabilities tree")
+func capabilitiesDecodeFromTheWire() throws {
+    // The tests above build `AnthropicModel` through its memberwise init, so
+    // the custom `init(from:)` — where all the defensiveness lives — was never
+    // exercised (PR #35 review). This is the decode path a vendor response
+    // actually takes.
+    let json = """
+        {"data":[
+          {"id":"a","display_name":"Model A","created_at":"2026-01-01T00:00:00Z",
+           "capabilities":{"structured_outputs":{"supported":false}}},
+          {"id":"b","display_name":"Model B",
+           "capabilities":{"structured_outputs":{"supported":true}}},
+          {"id":"c"},
+          {"id":"d","capabilities":{"something_else":{"supported":false}}}
+        ],"has_more":false}
+        """
+
+    let page = try JSONDecoder().decode(AnthropicModelsPage.self, from: Data(json.utf8))
+
+    // Only an explicit `false` is a refusal; a missing or unrecognised shape
+    // says nothing, and D-140 drops nothing on "nothing".
+    #expect(page.data.map(\.supportsStructuredOutputs) == [false, true, nil, nil])
+    // `display_name` falls back to the id rather than failing the page.
+    #expect(page.data.map(\.displayName) == ["Model A", "Model B", "c", "d"])
+    #expect(page.data[0].createdAt != nil)
+    #expect(page.data[2].createdAt == nil)
+    #expect(page.hasMore == false)
+}
+
+@Test("a model whose timestamp will not parse still decodes")
+func aBadTimestampCostsRankingQualityAndNothingElse() throws {
+    // Returning `nil` rather than throwing is the whole point: the model still
+    // belongs in the picker, it just ranks by id within its family.
+    let json = #"{"data":[{"id":"a","created_at":"yesterday"}]}"#
+    let page = try JSONDecoder().decode(AnthropicModelsPage.self, from: Data(json.utf8))
+
+    #expect(page.data.count == 1)
+    #expect(page.data[0].createdAt == nil)
+    #expect(page.hasMore == nil)
+}

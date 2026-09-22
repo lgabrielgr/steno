@@ -19,6 +19,27 @@ func withDeadline<T: Sendable>(
     _ duration: Duration,
     operation: @escaping @Sendable () async throws -> T
 ) async throws -> T {
+    do {
+        return try await race(duration, operation: operation)
+    } catch is CancellationError {
+        // **Cancelling the caller cancels both children**, and a cancelled
+        // `Task.sleep` throws `CancellationError` — from the deadline task
+        // before it reaches its `throw`, and from anything inside `operation`
+        // that sleeps. Either can win the race, so a mapping applied at one
+        // call site is a coin flip: M3-02's first attempt caught this in
+        // `availableModels` and a mutation survived, because the test happened
+        // to hit the path the transport had already mapped (PR #35 review).
+        //
+        // Mapping it here covers every caller and makes the contract
+        // deterministic: `withDeadline` throws `AIError` and nothing else.
+        throw AIError.timedOut
+    }
+}
+
+private func race<T: Sendable>(
+    _ duration: Duration,
+    operation: @escaping @Sendable () async throws -> T
+) async throws -> T {
     try await withThrowingTaskGroup(of: T.self) { group in
         group.addTask { try await operation() }
         group.addTask {

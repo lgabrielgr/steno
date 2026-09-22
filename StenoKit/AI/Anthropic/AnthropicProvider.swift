@@ -101,7 +101,31 @@ public struct AnthropicProvider: AIProvider {
         let transport = self.transport
         let baseURL = configuration.baseURL
 
-        return try await withDeadline(configuration.settingsTimeout) {
+        // **The catch is not redundant with `send`'s.** Cancelling the *caller*
+        // cancels this deadline's child tasks, and `Task.sleep` then throws a
+        // bare `CancellationError` straight out of the group — past every
+        // mapping inside it. `generateStandup` already had a catch-all for the
+        // same reason; a mapping applied to one of two sibling paths is the
+        // defect this repo keeps re-learning (PR #35 review).
+        do {
+            return try await Self.fetchModels(
+                transport: transport,
+                baseURL: baseURL,
+                key: key,
+                timeout: configuration.settingsTimeout
+            )
+        } catch {
+            throw AnthropicErrors.error(forTransport: error)
+        }
+    }
+
+    private static func fetchModels(
+        transport: any HTTPTransport,
+        baseURL: URL,
+        key: String,
+        timeout: Duration
+    ) async throws -> [AIModel] {
+        try await withDeadline(timeout) {
             var collected: [AnthropicModel] = []
             var cursor: String?
 
@@ -141,12 +165,16 @@ public struct AnthropicProvider: AIProvider {
             )
             return draft
         } catch {
-            let mapped = AnthropicErrors.error(forTransport: error)
+            // `DraftFailure` never escapes this method: it is unwrapped here
+            // for the usage it carries, and what leaves is an `AIError`, which
+            // is the contract §7.4 relies on.
+            let failure = error as? DraftFailure
+            let mapped = AnthropicErrors.error(forTransport: failure?.error ?? error)
             record(
                 request,
                 started: started,
-                inputTokens: nil,
-                outputTokens: nil,
+                inputTokens: failure?.usage?.inputTokens,
+                outputTokens: failure?.usage?.outputTokens,
                 outcome: .failed(label: mapped.metricsLabel)
             )
             throw mapped
@@ -226,20 +254,41 @@ public struct AnthropicProvider: AIProvider {
         }
     }
 
-    private static func draft(
+    /// An `AIError` plus the usage the response reported before it failed.
+    ///
+    /// **Internal to the draft path and never thrown past `generateStandup`.**
+    /// A refusal, a truncation and a hallucinated id are all billed calls: the
+    /// API reports `usage` and then the draft fails. D-146 says the metrics
+    /// line keeps the token counts whenever the response carried them, and
+    /// without this wrapper the catch has nothing to keep — it would record
+    /// `nil` for the one class of failure that actually cost the user money
+    /// (PR #35 review).
+    ///
+    /// `internal` rather than `private`, with `draft(from:cadence:allowed:)`,
+    /// so that "the token counts survive the failure" is a test rather than a
+    /// claim: `record` writes to the unified log and cannot be read back
+    /// in-process, so the only way to assert D-146's rule is to assert the
+    /// value the catch is handed.
+    struct DraftFailure: Error {
+        let error: AIError
+        let usage: AnthropicUsage?
+    }
+
+    static func draft(
         from body: Data, cadence: ReportCadence, allowed: Set<UUID>
     ) throws -> (StandupDraft, AnthropicUsage?) {
         let response = try decode(AnthropicMessagesResponse.self, from: body)
+        let usage = response.usage
 
         switch response.stopReason {
         case AnthropicWire.StopReason.refusal:
             // A distinct reason, not `.undecodable`: the model declined, which
             // says nothing about whether it can produce §7.3's schema.
-            throw AIError.invalidResponse(.refused)
+            throw DraftFailure(error: .invalidResponse(.refused), usage: usage)
         case AnthropicWire.StopReason.maxTokens:
             // The JSON is cut off mid-object, so decoding it would report
             // `.undecodable` and blame the model for a budget the app set.
-            throw AIError.invalidResponse(.truncated)
+            throw DraftFailure(error: .invalidResponse(.truncated), usage: usage)
         default:
             break
         }
@@ -248,13 +297,18 @@ public struct AnthropicProvider: AIProvider {
             let text = response.content.first(where: { $0.type == "text" })?.text,
             !text.isEmpty
         else {
-            throw AIError.invalidResponse(.emptyDraft)
+            throw DraftFailure(error: .invalidResponse(.emptyDraft), usage: usage)
         }
 
-        let draft = try StandupDraft.decode(Data(text.utf8), cadence: cadence)
-        // §7.3's hallucinated-id rejection runs here, inside the provider, so
-        // the next provider inherits it rather than re-deriving it (D-133).
-        return (try draft.validated(against: allowed), response.usage)
+        do {
+            let draft = try StandupDraft.decode(Data(text.utf8), cadence: cadence)
+            // §7.3's hallucinated-id rejection runs here, inside the provider,
+            // so the next provider inherits it rather than re-deriving it
+            // (D-133).
+            return (try draft.validated(against: allowed), usage)
+        } catch let error as AIError {
+            throw DraftFailure(error: error, usage: usage)
+        }
     }
 
     // MARK: - Plumbing
