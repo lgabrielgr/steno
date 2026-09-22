@@ -2220,7 +2220,12 @@ The PR body must carry, per §9.5 and the spec's Verification section:
 - The mutation results table — each test run against its stated mutation, with survivors reported as survivors.
 - The deviation note: `AIProvider.availableModels()` gains an ordering contract that M3-04 depends on.
 - The uncovered seam: `URLSessionTransport` has no test, and why.
-- The unverifiable claims: the `/v1/models` cursor field names come from documentation rather than a live call, and 20 seconds is reasoned rather than measured — M3-04's "Test connection" and M3-03's first real draft are where both get confirmed.
+- The claims this task cannot verify from the suite, and what became of them. **The `/v1/models`
+  shape and cursor round-trip were confirmed by hand against the live API on 2026-09-22**, during
+  review — field names, nesting, `limit=1000`, and `after_id` advancing the window — so that risk
+  is closed rather than carried; what remains is drift, which is why `make verify-models` is filed
+  against M3-04 as a repeatable check. **The 20-second budget is still reasoned, not measured**:
+  nothing here can measure it, and M3-03's first real draft is where it gets timed.
 
 - [ ] **Step 5: Work the review loop, then stop**
 
