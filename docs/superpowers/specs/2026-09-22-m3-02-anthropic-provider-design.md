@@ -85,9 +85,9 @@ grows a field must not empty the user's picker.
 
 **Ranking runs on the wire records, not on `AIModel`.** `AIModel` is two fields by D-129's
 reasoning and carries no `created_at`, and sorting ids as strings puts `claude-sonnet-10` below
-`claude-sonnet-5`. So `ModelRanking.ordered(_:)` takes `[AnthropicWire.Model]` and returns
-`[AIModel]`; it is a pure function and the recency rule is tested with an input order that
-disagrees with the expected order.
+`claude-sonnet-5`. So `ModelRanking.ordered(_:)` takes `[AnthropicModel]` — the wire record —
+and returns `[AIModel]`; it is a pure function and the recency rule is tested with an input order
+that disagrees with the expected order.
 
 **Paging.** `/v1/models` uses the `after_id`/`before_id` cursor scheme and returns
 `has_more`/`first_id`/`last_id`. The provider requests `?limit=1000` and, while `has_more` is
@@ -122,7 +122,7 @@ Nothing else.**
   "system": "<request.systemPrompt>",
   "messages": [{ "role": "user", "content": "<request.userPrompt>" }],
   "output_config": {
-    "format": { "type": "json_schema", "schema": { /* request.outputSchema.json, verbatim */ } }
+    "format": { "type": "json_schema", "schema": { /* request.outputSchema.json */ } }
   }
 }
 ```
@@ -137,8 +137,14 @@ cheaply.
 
 `AIOutputSchema.name` is unused by this provider — Anthropic's `json_schema` format takes a
 schema, not a name. That is not a defect in M3-01's type; the field exists "where a provider's
-API wants one", and this one does not. The schema `Data` is embedded verbatim, never re-encoded,
-so a schema M3-03 authors arrives byte-for-byte.
+API wants one", and this one does not.
+
+**The schema reaches the API as the JSON value M3-03 authored** — parsed once and re-serialized
+as part of the body, not spliced in as bytes. Semantic identity, not byte identity: an `Encoder`
+has no way to emit raw bytes, and hand-splicing a body around them would be the fussier and more
+breakable of the two. The parse is also what catches a schema that is not a JSON object, locally,
+before a network call. Body keys are sorted, because `JSONSerialization`'s unsorted order is hash
+order and differs between processes — which would make a body assertion flake.
 
 ## D-142 — `HTTPTransport` over value types, not `URLProtocol` and not `URLSession`
 
@@ -301,13 +307,20 @@ StenoKit/AI/
   AIError.swift                   + .invalidRequest, .refused, .truncated, labels (D-143)
   Anthropic/
     AnthropicProvider.swift       the conformance: auth, budgets, retry, orchestration
-    AnthropicWire.swift           internal Codable request/response/error/model types (D-141)
+    AnthropicWire.swift           request builders + the internal Codable response types
+                                  (D-141). Named `Anthropic*` at file scope rather than nested,
+                                  because each needs its own CodingKeys and SwiftLint caps
+                                  nesting at one level. No type for the API's error envelope:
+                                  its `message` can quote the request (§8).
     AnthropicErrors.swift         status + URLError -> AIError, pure (D-143)
     ModelRanking.swift            ordered(_:) -> [AIModel], pure (D-140)
 
 StenoTests/AI/
   StubHTTPTransport.swift         scripted responses, recorded requests
-  AnthropicProviderTests.swift
+  AnthropicFixture.swift          the fixtures both provider suites share
+  AnthropicProviderTests.swift    credentials, request body, draft path
+  AnthropicProviderBudgetTests.swift  budget, retry, model list — split out because
+                                  SwiftLint caps a file at 400 lines
   AnthropicErrorMappingTests.swift
   ModelRankingTests.swift
   DeadlineTests.swift
@@ -322,7 +335,7 @@ constructs it); no signature on it mentions a wire type, which is the acceptance
 **The transport double** scripts a queue of `HTTPResponse`s or thrown `URLError`s, records every
 `HTTPRequest` it received, and can hold before answering so the deadline is exercised. Recording
 the request is what makes the §8 and D-141 assertions possible — that the body contains exactly
-five keys, that the schema bytes are verbatim, that `x-api-key` is present, and that no request
+five keys, that the schema arrives as the value M3-03 authored, that `x-api-key` is present, and that no request
 is sent at all when the store holds no credential.
 
 | Area | What is asserted |
