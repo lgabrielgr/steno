@@ -79,3 +79,26 @@ func mappedErrorsSurviveTheMapper() {
     #expect(AnthropicErrors.error(forTransport: AIError.timedOut) == .timedOut)
     #expect(AnthropicErrors.error(forTransport: AIError.invalidRequest) == .invalidRequest)
 }
+
+@Test("a Retry-After sent in any casing is still found")
+func headerLookupIsCaseInsensitive() {
+    // `AnthropicErrors` looks the header up by the exact key `retry-after`, so
+    // before `HTTPResponse` normalised its keys a transport returning
+    // `Retry-After` lost the server's interval silently and fell back to the
+    // default backoff — a wrong wait with nothing to notice it (PR #35 review).
+    // Mutation: drop `HTTPHeaders.normalized` from `HTTPResponse.init`. Red.
+    let response = HTTPResponse(status: 429, headers: ["Retry-After": "45"])
+
+    #expect(response.headers["retry-after"] == "45")
+    #expect(
+        AnthropicErrors.error(forStatus: response.status, headers: response.headers)
+            == .rateLimited(retryAfter: .seconds(45)))
+}
+
+@Test("a request's header names are normalised too")
+func requestHeadersAreNormalised() {
+    let request = HTTPRequest(
+        method: .get, url: URL(fileURLWithPath: "/x"), headers: ["X-Api-Key": "k"])
+
+    #expect(request.headers["x-api-key"] == "k")
+}

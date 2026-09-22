@@ -8,6 +8,18 @@ import Foundation
 /// retry loop runs *inside* the deadline, which is what makes D-144's budget
 /// cover backoff rather than resetting it on the second attempt.
 ///
+/// **What this cannot do is return while the operation refuses to stop.**
+/// `withThrowingTaskGroup` awaits its children before leaving scope and Swift
+/// cancellation is cooperative, so an `HTTPTransport` that ignores cancellation
+/// keeps this blocked past the budget — §7.4's fallback would then arrive late
+/// rather than promptly (PR #35 review). The shipped transport is
+/// `URLSession`, which honours cancellation, and `HTTPTransport.send` now says
+/// in its own doc comment that an implementation must. That is the contract
+/// rather than an enforcement: making the deadline return independently means
+/// abandoning a live task, which trades a late answer for a leaked request.
+/// The error stays correct either way — `DeadlineTests` pins that against an
+/// operation that deliberately will not stop.
+///
 /// **The subtle part is which error the loser throws.** Cancelling an in-flight
 /// `URLSession` task surfaces as `URLError.cancelled`, which sits in the same
 /// error domain as the genuine connectivity failures — so mapping it by domain,

@@ -3810,9 +3810,23 @@ login keychain, `StubFilePanels` so tests never open an `NSOpenPanel`.
 **Values rather than `URLRequest`/`HTTPURLResponse`**, for two reasons. `HTTPURLResponse` is a
 Foundation class whose `Sendable` status is a poor thing to bet a Swift 6 module on, and — more
 usefully — error mapping over `(status, headers)` is then a pure function, which is what makes
-D-143's table a table test rather than a fixture exercise. Header names are lowercased at the
-boundary: HTTP header names are case-insensitive, and a test asserting `X-Api-Key` against a
-provider sending `x-api-key` would fail for a reason that is not a defect.
+D-143's table a table test rather than a fixture exercise.
+
+**Header names are lowercased by the initializers, not by a doc comment** (amended in review,
+PR #35). Both types *said* their keys were lowercased and neither enforced it, while
+`URLSessionTransport` happened to lowercase on the way in — so the promise held for the shipped
+transport and for nothing else. `AnthropicErrors` looks `retry-after` up by that exact key, so a
+second transport returning `Retry-After` would have dropped the server's retry interval and used
+the default backoff instead: a wrong wait, with nothing to notice it. `HTTPHeaders.normalized`
+now runs in both initializers.
+
+**The transport must be cancellation-aware, and that is a contract rather than an enforcement.**
+`withDeadline` cancels the operation and returns, but Swift cancellation is cooperative and a
+task group awaits its children — so a transport ignoring cancellation keeps the deadline blocked
+past D-144's budget and §7.4's fallback arrives late. `URLSession` honours it. Making the
+deadline return regardless would mean abandoning a live task, trading a late answer for a leaked
+request, so `HTTPTransport.send` carries the requirement in its doc comment and `DeadlineTests`
+pins that the error stays `.timedOut` even when an operation refuses to stop.
 
 **`URLSessionTransport` ships uncovered, deliberately.** It is a ~30-line adapter with no branch
 except the `as? HTTPURLResponse` cast. Covering it means a `URLProtocol` stub — a process-global

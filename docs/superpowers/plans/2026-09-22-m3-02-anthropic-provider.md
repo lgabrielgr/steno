@@ -272,6 +272,31 @@ func cancellationStaysInsideTheContract() async {
         Issue.record("escaped as \(type(of: error)), which §7.4 cannot classify")
     }
 }
+
+@Test("an operation that ignores cancellation still yields the right error")
+func uncooperativeWorkStillReportsATimeout() async {
+    // Swift cancellation is cooperative and a task group awaits its children,
+    // so `withDeadline` cannot return while the operation refuses to stop —
+    // it can only be right about *why* (PR #35 review).
+    //
+    // A busy-wait is the uncooperative case on purpose: it never suspends, so
+    // it never observes cancellation, the way blocking I/O in some future
+    // transport would not. (`Thread.sleep` would read better and the compiler
+    // forbids it in an async context.) Fifty milliseconds, because the point
+    // is the error and not the duration.
+    //
+    // What this pins is that the late answer is still `.timedOut` — not a
+    // `CancellationError` leaking out, and not the operation's own result
+    // arriving as if nothing had expired. `HTTPTransport.send` carries the
+    // contract that keeps a real transport from being late at all.
+    await #expect(throws: AIError.timedOut) {
+        try await withDeadline(.milliseconds(10)) {
+            let end = Date().addingTimeInterval(0.05)
+            while Date() < end {}
+            return 1
+        }
+    }
+}
 ```
 
 - [ ] **Step 2: Run and watch it fail**
@@ -300,6 +325,13 @@ import Foundation
 /// pure function, which is what makes `AnthropicErrors` a table test rather
 /// than a fixture exercise.
 public protocol HTTPTransport: Sendable {
+    /// **Must be cancellation-aware.** `withDeadline` enforces D-144's budget by
+    /// cancelling this call and returning, but Swift cancellation is
+    /// cooperative and a task group waits for its children: an implementation
+    /// that ignores cancellation keeps the deadline blocked past its budget,
+    /// and §7.4's fallback is what arrives late. `URLSession` honours it;
+    /// anything built on blocking I/O must check `Task.isCancelled` (PR #35
+    /// review).
     func send(_ request: HTTPRequest) async throws -> HTTPResponse
 }
 
@@ -313,9 +345,10 @@ public struct HTTPRequest: Sendable, Equatable {
     public let method: Method
     public let url: URL
 
-    /// Lowercased field names. HTTP header names are case-insensitive, and a
-    /// test that asserted `X-Api-Key` against a provider that sent `x-api-key`
-    /// would fail for a reason that is not a defect.
+    /// Lowercased field names — **enforced by the initializer, not promised by
+    /// this comment.** HTTP header names are case-insensitive, and a test that
+    /// asserted `X-Api-Key` against a provider that sent `x-api-key` would fail
+    /// for a reason that is not a defect.
     public let headers: [String: String]
 
     public let body: Data?
@@ -323,7 +356,7 @@ public struct HTTPRequest: Sendable, Equatable {
     public init(method: Method, url: URL, headers: [String: String] = [:], body: Data? = nil) {
         self.method = method
         self.url = url
-        self.headers = headers
+        self.headers = HTTPHeaders.normalized(headers)
         self.body = body
     }
 }
@@ -332,15 +365,34 @@ public struct HTTPRequest: Sendable, Equatable {
 public struct HTTPResponse: Sendable, Equatable {
     public let status: Int
 
-    /// Lowercased field names, for the reason `HTTPRequest.headers` gives.
+    /// Lowercased field names, for the reason `HTTPRequest.headers` gives, and
+    /// enforced here for a sharper one: `AnthropicErrors` looks `retry-after`
+    /// up by that exact key, so a transport returning `Retry-After` would
+    /// silently lose the server's retry interval and fall back to the default
+    /// backoff — a wrong wait with nothing to notice it (PR #35 review).
     public let headers: [String: String]
 
     public let body: Data
 
     public init(status: Int, headers: [String: String] = [:], body: Data = Data()) {
         self.status = status
-        self.headers = headers
+        self.headers = HTTPHeaders.normalized(headers)
         self.body = body
+    }
+}
+
+/// Where the lowercasing actually happens.
+///
+/// A free function rather than a rule each initializer restates: the promise
+/// "these keys are lowercased" was a doc comment on two types and true of
+/// neither, which is the defect class this repo keeps meeting.
+enum HTTPHeaders {
+    /// Lowercased keys. A collision — `Retry-After` and `retry-after` in one
+    /// dictionary — keeps the last value, which is what HTTP means by treating
+    /// the two as the same header.
+    static func normalized(_ headers: [String: String]) -> [String: String] {
+        guard headers.contains(where: { $0.key != $0.key.lowercased() }) else { return headers }
+        return Dictionary(headers.map { ($0.key.lowercased(), $0.value) }) { _, last in last }
     }
 }
 ```
@@ -424,6 +476,18 @@ import Foundation
 /// on this: "if the API is slow, the user is standing in a meeting". The
 /// retry loop runs *inside* the deadline, which is what makes D-144's budget
 /// cover backoff rather than resetting it on the second attempt.
+///
+/// **What this cannot do is return while the operation refuses to stop.**
+/// `withThrowingTaskGroup` awaits its children before leaving scope and Swift
+/// cancellation is cooperative, so an `HTTPTransport` that ignores cancellation
+/// keeps this blocked past the budget — §7.4's fallback would then arrive late
+/// rather than promptly (PR #35 review). The shipped transport is
+/// `URLSession`, which honours cancellation, and `HTTPTransport.send` now says
+/// in its own doc comment that an implementation must. That is the contract
+/// rather than an enforcement: making the deadline return independently means
+/// abandoning a live task, which trades a late answer for a leaked request.
+/// The error stays correct either way — `DeadlineTests` pins that against an
+/// operation that deliberately will not stop.
 ///
 /// **The subtle part is which error the loser throws.** Cancelling an in-flight
 /// `URLSession` task surfaces as `URLError.cancelled`, which sits in the same
@@ -674,6 +738,29 @@ func mappedErrorsSurviveTheMapper() {
     // timeout as an offline device.
     #expect(AnthropicErrors.error(forTransport: AIError.timedOut) == .timedOut)
     #expect(AnthropicErrors.error(forTransport: AIError.invalidRequest) == .invalidRequest)
+}
+
+@Test("a Retry-After sent in any casing is still found")
+func headerLookupIsCaseInsensitive() {
+    // `AnthropicErrors` looks the header up by the exact key `retry-after`, so
+    // before `HTTPResponse` normalised its keys a transport returning
+    // `Retry-After` lost the server's interval silently and fell back to the
+    // default backoff — a wrong wait with nothing to notice it (PR #35 review).
+    // Mutation: drop `HTTPHeaders.normalized` from `HTTPResponse.init`. Red.
+    let response = HTTPResponse(status: 429, headers: ["Retry-After": "45"])
+
+    #expect(response.headers["retry-after"] == "45")
+    #expect(
+        AnthropicErrors.error(forStatus: response.status, headers: response.headers)
+            == .rateLimited(retryAfter: .seconds(45)))
+}
+
+@Test("a request's header names are normalised too")
+func requestHeadersAreNormalised() {
+    let request = HTTPRequest(
+        method: .get, url: URL(fileURLWithPath: "/x"), headers: ["X-Api-Key": "k"])
+
+    #expect(request.headers["x-api-key"] == "k")
 }
 ```
 
