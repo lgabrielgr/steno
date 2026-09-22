@@ -3907,8 +3907,15 @@ budget while bytes trickle. Streaming is out of scope, so the whole draft lands 
 and a Sonnet-class summarization typically takes 5–15s. Twelve seconds would cut off legitimate
 periodic windows; thirty is most of the time the user has before they speak.
 
-**One retry, not two.** A 529 is Anthropic briefly overloaded, and dropping to raw events for
-something a one-second wait would fix is a worse stand-up than the user could have had. The
+**One retry, not two, and only for 429, 529 and 5xx.** A 529 is Anthropic briefly overloaded, and
+dropping to raw events for something a one-second wait would fix is a worse stand-up than the
+user could have had.
+
+**The gate is on the status, not on the error case** (amended in review, PR #35).
+`AnthropicErrors` files every non-2xx, non-4xx status under `.providerUnavailable` — which
+includes the 3xx a transport might surface without following it — so matching the case alone
+retried redirects, sending the same POST twice for a response no retry can change. The list above
+is the list the code now checks. The
 backoff is `retry-after` when present and integer-valued, one second otherwise, and the retry
 runs only if `backoff + 2s` of budget remains — a retry certain to be cancelled mid-flight is a
 slower failure, not a second chance. A `retry-after` that cannot fit fails immediately with

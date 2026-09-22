@@ -244,12 +244,20 @@ public struct AnthropicProvider: AIProvider {
         switch error {
         case .rateLimited(let retryAfter):
             return retryAfter ?? configuration.retryBackoff
-        case .providerUnavailable:
+        case .providerUnavailable(let status) where (500..<600).contains(status):
+            // **Gated on 5xx, not on the case.** `AnthropicErrors` files every
+            // non-2xx, non-4xx status here, which includes the 3xx a custom
+            // transport might surface without following it — and retrying a
+            // redirect means sending the same POST twice for a response that
+            // will never change. D-144 permits a retry for 429, 529 and 5xx,
+            // and this is that list rather than its enclosing case (PR #35
+            // review).
             return configuration.retryBackoff
         default:
             // Everything else is either ours to fix (`.invalidRequest`,
-            // `.invalidCredential`), already out of time (`.timedOut`), or a
-            // failure a second identical request cannot change.
+            // `.invalidCredential`), already out of time (`.timedOut`), a
+            // status no retry can change (3xx), or a failure a second
+            // identical request cannot change.
             return nil
         }
     }

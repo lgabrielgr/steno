@@ -2186,12 +2186,20 @@ public struct AnthropicProvider: AIProvider {
         switch error {
         case .rateLimited(let retryAfter):
             return retryAfter ?? configuration.retryBackoff
-        case .providerUnavailable:
+        case .providerUnavailable(let status) where (500..<600).contains(status):
+            // **Gated on 5xx, not on the case.** `AnthropicErrors` files every
+            // non-2xx, non-4xx status here, which includes the 3xx a custom
+            // transport might surface without following it — and retrying a
+            // redirect means sending the same POST twice for a response that
+            // will never change. D-144 permits a retry for 429, 529 and 5xx,
+            // and this is that list rather than its enclosing case (PR #35
+            // review).
             return configuration.retryBackoff
         default:
             // Everything else is either ours to fix (`.invalidRequest`,
-            // `.invalidCredential`), already out of time (`.timedOut`), or a
-            // failure a second identical request cannot change.
+            // `.invalidCredential`), already out of time (`.timedOut`), a
+            // status no retry can change (3xx), or a failure a second
+            // identical request cannot change.
             return nil
         }
     }
@@ -2454,6 +2462,27 @@ func retriesAreNotALoop() async {
         try await AnthropicFixture.provider(transport).generateStandup(AnthropicFixture.request())
     }
     #expect(await transport.received.count == 2)
+}
+
+@Test("a redirect is not retried, though it lands in the same error case")
+func onlyServerFailuresAreRetried() async {
+    // `AnthropicErrors` files every non-2xx, non-4xx status under
+    // `.providerUnavailable`, so gating the retry on the *case* retried 3xx
+    // too — sending the same POST twice for a response no retry can change
+    // (PR #35 review, found in code that had not changed since the first
+    // round). D-144's list is 429, 529 and 5xx.
+    //
+    // Mutation: gate on `case .providerUnavailable` without the status range.
+    // Red on the request count.
+    let transport = StubHTTPTransport(answers: [
+        .respond(HTTPResponse(status: 302)),
+        .respond(AnthropicFixture.draftResponse()),
+    ])
+
+    await #expect(throws: AIError.providerUnavailable(status: 302)) {
+        try await AnthropicFixture.provider(transport).generateStandup(AnthropicFixture.request())
+    }
+    #expect(await transport.received.count == 1)
 }
 
 @Test("a 400 is never retried")

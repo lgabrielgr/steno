@@ -51,6 +51,27 @@ func retriesAreNotALoop() async {
     #expect(await transport.received.count == 2)
 }
 
+@Test("a redirect is not retried, though it lands in the same error case")
+func onlyServerFailuresAreRetried() async {
+    // `AnthropicErrors` files every non-2xx, non-4xx status under
+    // `.providerUnavailable`, so gating the retry on the *case* retried 3xx
+    // too — sending the same POST twice for a response no retry can change
+    // (PR #35 review, found in code that had not changed since the first
+    // round). D-144's list is 429, 529 and 5xx.
+    //
+    // Mutation: gate on `case .providerUnavailable` without the status range.
+    // Red on the request count.
+    let transport = StubHTTPTransport(answers: [
+        .respond(HTTPResponse(status: 302)),
+        .respond(AnthropicFixture.draftResponse()),
+    ])
+
+    await #expect(throws: AIError.providerUnavailable(status: 302)) {
+        try await AnthropicFixture.provider(transport).generateStandup(AnthropicFixture.request())
+    }
+    #expect(await transport.received.count == 1)
+}
+
 @Test("a 400 is never retried")
 func ourOwnMistakesAreNotRetried() async {
     // Mutation: add `.invalidRequest` to `backoff(for:)`. Red on the count.
