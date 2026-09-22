@@ -17,8 +17,16 @@ import Foundation
 /// in its own doc comment that an implementation must. That is the contract
 /// rather than an enforcement: making the deadline return independently means
 /// abandoning a live task, which trades a late answer for a leaked request.
-/// The error stays correct either way — `DeadlineTests` pins that against an
-/// operation that deliberately will not stop.
+///
+/// **That limit is deliberately not unit-tested, after a test for it flaked in
+/// CI.** An operation that ignores cancellation has to block its thread to do
+/// so, and blocking a cooperative-pool thread can starve the very timer the
+/// test is waiting on: the operation then finishes first and no timeout is
+/// thrown. It passed locally and failed on a constrained runner, on the same
+/// commit that passed a second time — the definition of a flake, and a flaky
+/// test is worse than none because it teaches people to re-run. The property
+/// belongs to Swift's task-group semantics rather than to this function, so it
+/// is stated here and required of `HTTPTransport.send` instead.
 ///
 /// **The subtle part is which error the loser throws.** Cancelling an in-flight
 /// `URLSession` task surfaces as `URLError.cancelled`, which sits in the same

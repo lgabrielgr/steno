@@ -102,3 +102,27 @@ func requestHeadersAreNormalised() {
 
     #expect(request.headers["x-api-key"] == "k")
 }
+
+@Test("a redirect is refused rather than followed, so the API key stays put")
+func redirectsAreNotFollowed() async throws {
+    // `URLSession` follows redirects by default and carries custom headers
+    // across them, so a 302 to another host would re-send `x-api-key` to
+    // wherever it pointed (PR #35 review). `RedirectBlocker` returns nil,
+    // which hands the 3xx back as the response instead of chasing it.
+    //
+    // Mutation: return `request` instead of `nil`. Red.
+    let origin = URL(fileURLWithPath: "/v1/models")
+    let elsewhere = URL(fileURLWithPath: "/somewhere-else")
+    let redirect = try #require(
+        HTTPURLResponse(
+            url: origin, statusCode: 302, httpVersion: nil,
+            headerFields: ["Location": elsewhere.absoluteString]))
+
+    let followed = await RedirectBlocker.shared.urlSession(
+        URLSession.shared,
+        task: URLSession.shared.dataTask(with: origin),
+        willPerformHTTPRedirection: redirect,
+        newRequest: URLRequest(url: elsewhere))
+
+    #expect(followed == nil)
+}

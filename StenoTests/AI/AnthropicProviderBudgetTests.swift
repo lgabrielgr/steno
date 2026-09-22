@@ -152,8 +152,10 @@ func aRepeatedCursorTerminates() async throws {
     // `models.count == 2` and pinned a duplicated picker entry as intended
     // behaviour (PR #35 review). `ModelRanking.ordered` now dedupes by id.
     //
-    // Mutations: drop the `last != cursor` guard (red on the request count);
-    // drop the `seen.insert` filter (red on the model list).
+    // Mutations: drop the `last != cursor` guard (the run then pages until the
+    // settings deadline expires — see `endlessPagingIsATimeout` for why that
+    // is the right outcome); drop the `seen.insert` filter (red on the model
+    // list).
     let repeated = AnthropicFixture.modelsResponse(
         ids: ["claude-sonnet-5"], hasMore: true, lastID: "cursor")
     let transport = StubHTTPTransport(
@@ -209,4 +211,34 @@ func theMetricsLineIsMetadataOnly() {
             == "ai provider=anthropic model=claude-sonnet-5 ms=1234 in=120 out=45 outcome=invalidRequest"
     )
     #expect(CredentialPatterns.matches(in: line).isEmpty)
+}
+
+@Test("a vendor that pages forever times out rather than truncating")
+func endlessPagingIsATimeout() async {
+    // Every page carries a *different* cursor, so the repeat guard never
+    // fires. The twenty-page cap this replaced would have returned whatever it
+    // had collected and called it the model list — a picker missing the user's
+    // model, reported as success. The deadline reports the truth instead
+    // (PR #35 review).
+    let provider = AnthropicProvider(
+        transport: EndlessPagingTransport(),
+        credentials: AnthropicFixture.store(),
+        configuration: AnthropicProvider.Configuration(
+            baseURL: URL(fileURLWithPath: "/api.example.test"),
+            settingsTimeout: .milliseconds(50),
+            retryBackoff: .milliseconds(1),
+            retryHeadroom: .milliseconds(1)))
+
+    await #expect(throws: AIError.timedOut) { _ = try await provider.availableModels() }
+}
+
+/// Answers every request with a page whose cursor has never been seen before.
+private actor EndlessPagingTransport: HTTPTransport {
+    private var page = 0
+
+    func send(_ request: HTTPRequest) async throws -> HTTPResponse {
+        page += 1
+        return AnthropicFixture.modelsResponse(
+            ids: ["claude-sonnet-\(page)"], hasMore: true, lastID: "cursor-\(page)")
+    }
 }

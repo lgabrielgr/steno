@@ -65,28 +65,3 @@ func cancellationStaysInsideTheContract() async {
         Issue.record("escaped as \(type(of: error)), which §7.4 cannot classify")
     }
 }
-
-@Test("an operation that ignores cancellation still yields the right error")
-func uncooperativeWorkStillReportsATimeout() async {
-    // Swift cancellation is cooperative and a task group awaits its children,
-    // so `withDeadline` cannot return while the operation refuses to stop —
-    // it can only be right about *why* (PR #35 review).
-    //
-    // A busy-wait is the uncooperative case on purpose: it never suspends, so
-    // it never observes cancellation, the way blocking I/O in some future
-    // transport would not. (`Thread.sleep` would read better and the compiler
-    // forbids it in an async context.) Fifty milliseconds, because the point
-    // is the error and not the duration.
-    //
-    // What this pins is that the late answer is still `.timedOut` — not a
-    // `CancellationError` leaking out, and not the operation's own result
-    // arriving as if nothing had expired. `HTTPTransport.send` carries the
-    // contract that keeps a real transport from being late at all.
-    await #expect(throws: AIError.timedOut) {
-        try await withDeadline(.milliseconds(10)) {
-            let end = Date().addingTimeInterval(0.05)
-            while Date() < end {}
-            return 1
-        }
-    }
-}

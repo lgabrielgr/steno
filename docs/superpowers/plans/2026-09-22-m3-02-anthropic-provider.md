@@ -272,31 +272,6 @@ func cancellationStaysInsideTheContract() async {
         Issue.record("escaped as \(type(of: error)), which §7.4 cannot classify")
     }
 }
-
-@Test("an operation that ignores cancellation still yields the right error")
-func uncooperativeWorkStillReportsATimeout() async {
-    // Swift cancellation is cooperative and a task group awaits its children,
-    // so `withDeadline` cannot return while the operation refuses to stop —
-    // it can only be right about *why* (PR #35 review).
-    //
-    // A busy-wait is the uncooperative case on purpose: it never suspends, so
-    // it never observes cancellation, the way blocking I/O in some future
-    // transport would not. (`Thread.sleep` would read better and the compiler
-    // forbids it in an async context.) Fifty milliseconds, because the point
-    // is the error and not the duration.
-    //
-    // What this pins is that the late answer is still `.timedOut` — not a
-    // `CancellationError` leaking out, and not the operation's own result
-    // arriving as if nothing had expired. `HTTPTransport.send` carries the
-    // contract that keeps a real transport from being late at all.
-    await #expect(throws: AIError.timedOut) {
-        try await withDeadline(.milliseconds(10)) {
-            let end = Date().addingTimeInterval(0.05)
-            while Date() < end {}
-            return 1
-        }
-    }
-}
 ```
 
 - [ ] **Step 2: Run and watch it fail**
@@ -406,8 +381,9 @@ import Foundation
 
 /// The one place in this module where Foundation's networking types appear.
 ///
-/// **Deliberately uncovered by `make test`** (D-142). There is no branch here
-/// except the `as? HTTPURLResponse` cast, and covering it means a `URLProtocol`
+/// **`send` is deliberately uncovered by `make test`** (D-142) — though
+/// `RedirectBlocker`, below, is not. Its only branch is the
+/// `as? HTTPURLResponse` cast, and covering it means a `URLProtocol`
 /// stub — a process-global registry, `@unchecked Sendable`, and ordering care
 /// under parallel Swift Testing runs — standing between the suite and a file
 /// whose only untested behaviour is "Foundation does what Foundation does".
@@ -436,7 +412,15 @@ public struct URLSessionTransport: HTTPTransport {
             urlRequest.setValue(value, forHTTPHeaderField: field)
         }
 
-        let (data, response) = try await session.data(for: urlRequest)
+        // **The delegate is what stops the API key travelling.** `URLSession`
+        // follows redirects by default and carries custom headers across them,
+        // so a 302 to another host — or to plain HTTP — would re-send
+        // `x-api-key` to wherever it pointed (PR #35 review). Refusing every
+        // redirect is the blunt answer and the right one here: this module
+        // talks to exactly one endpoint, and a redirect from it is already
+        // something to distrust.
+        let (data, response) = try await session.data(
+            for: urlRequest, delegate: RedirectBlocker.shared)
 
         guard let http = response as? HTTPURLResponse else {
             // Not reachable over HTTPS, and `.network` rather than a crash
@@ -458,6 +442,30 @@ public struct URLSessionTransport: HTTPTransport {
             result[name.lowercased()] = text
         }
         return result
+    }
+}
+
+/// Refuses every HTTP redirect, so a credential never follows one.
+///
+/// Returning `nil` from this delegate method hands the 3xx back as the
+/// response rather than chasing it, which is why `AnthropicErrors` maps a
+/// redirect to `.providerUnavailable(status:)` — and why D-144's retry gate
+/// checks for 5xx rather than matching that case, so the request is not
+/// repeated either.
+///
+/// `@unchecked Sendable` is safe because the type has no stored properties:
+/// `NSObject` simply is not `Sendable`, and a stateless subclass of it cannot
+/// say so any other way.
+final class RedirectBlocker: NSObject, URLSessionTaskDelegate, @unchecked Sendable {
+    static let shared = RedirectBlocker()
+
+    func urlSession(
+        _ session: URLSession,
+        task: URLSessionTask,
+        willPerformHTTPRedirection response: HTTPURLResponse,
+        newRequest request: URLRequest
+    ) async -> URLRequest? {
+        nil
     }
 }
 ```
@@ -486,8 +494,16 @@ import Foundation
 /// in its own doc comment that an implementation must. That is the contract
 /// rather than an enforcement: making the deadline return independently means
 /// abandoning a live task, which trades a late answer for a leaked request.
-/// The error stays correct either way — `DeadlineTests` pins that against an
-/// operation that deliberately will not stop.
+///
+/// **That limit is deliberately not unit-tested, after a test for it flaked in
+/// CI.** An operation that ignores cancellation has to block its thread to do
+/// so, and blocking a cooperative-pool thread can starve the very timer the
+/// test is waiting on: the operation then finishes first and no timeout is
+/// thrown. It passed locally and failed on a constrained runner, on the same
+/// commit that passed a second time — the definition of a flake, and a flaky
+/// test is worse than none because it teaches people to re-run. The property
+/// belongs to Swift's task-group semantics rather than to this function, so it
+/// is stated here and required of `HTTPTransport.send` instead.
 ///
 /// **The subtle part is which error the loser throws.** Cancelling an in-flight
 /// `URLSession` task surfaces as `URLError.cancelled`, which sits in the same
@@ -761,6 +777,30 @@ func requestHeadersAreNormalised() {
         method: .get, url: URL(fileURLWithPath: "/x"), headers: ["X-Api-Key": "k"])
 
     #expect(request.headers["x-api-key"] == "k")
+}
+
+@Test("a redirect is refused rather than followed, so the API key stays put")
+func redirectsAreNotFollowed() async throws {
+    // `URLSession` follows redirects by default and carries custom headers
+    // across them, so a 302 to another host would re-send `x-api-key` to
+    // wherever it pointed (PR #35 review). `RedirectBlocker` returns nil,
+    // which hands the 3xx back as the response instead of chasing it.
+    //
+    // Mutation: return `request` instead of `nil`. Red.
+    let origin = URL(fileURLWithPath: "/v1/models")
+    let elsewhere = URL(fileURLWithPath: "/somewhere-else")
+    let redirect = try #require(
+        HTTPURLResponse(
+            url: origin, statusCode: 302, httpVersion: nil,
+            headerFields: ["Location": elsewhere.absoluteString]))
+
+    let followed = await RedirectBlocker.shared.urlSession(
+        URLSession.shared,
+        task: URLSession.shared.dataTask(with: origin),
+        willPerformHTTPRedirection: redirect,
+        newRequest: URLRequest(url: elsewhere))
+
+    #expect(followed == nil)
 }
 ```
 
@@ -1454,6 +1494,7 @@ Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>"
 
 **Files:**
 - Create: `StenoKit/AI/Anthropic/AnthropicProvider.swift`
+- Create: `StenoKit/AI/Anthropic/AnthropicProvider+Draft.swift`
 - Create: `StenoTests/AI/AnthropicFixture.swift`
 - Test: `StenoTests/AI/AnthropicProviderTests.swift`
 
@@ -2020,9 +2061,9 @@ public struct AnthropicProvider: AIProvider {
 
     public let displayName = "Anthropic"
 
-    private let transport: any HTTPTransport
-    private let credentials: any CredentialStore
-    private let configuration: Configuration
+    let transport: any HTTPTransport
+    let credentials: any CredentialStore
+    let configuration: Configuration
 
     public init(
         transport: any HTTPTransport = URLSessionTransport(),
@@ -2071,11 +2112,22 @@ public struct AnthropicProvider: AIProvider {
             var collected: [AnthropicModel] = []
             var cursor: String?
 
-            // A bound rather than `while true`. Every termination condition
-            // below depends on a field the vendor controls, and a page that
-            // reports `has_more` forever would otherwise spin until the
-            // deadline — burning the user's budget instead of answering.
-            for _ in 0..<Self.maximumModelPages {
+            // **No page cap, and the deadline is the bound — but only because
+            // the loop checks cancellation.** An earlier version stopped after
+            // twenty pages, which turned a vendor that kept saying `has_more`
+            // into a *silently truncated* list: a picker missing the user's
+            // model, reported as success (PR #35 review).
+            //
+            // Removing the cap is only safe with the check below. Nothing else
+            // in this loop suspends in a way that throws on cancellation — an
+            // actor hop does not — so without it the deadline fires, the group
+            // waits for a child that never notices, and the whole call hangs.
+            // That is the same cooperative-cancellation trap `HTTPTransport`'s
+            // doc comment warns implementers about, and this loop was quietly
+            // an instance of it. A test that pages forever found it.
+            while true {
+                try Task.checkCancellation()
+
                 let request = AnthropicWire.modelsRequest(
                     baseURL: baseURL, apiKey: key, after: cursor)
                 let response = try await Self.send(request, on: transport)
@@ -2091,6 +2143,117 @@ public struct AnthropicProvider: AIProvider {
             return ModelRanking.ordered(collected)
         }
     }
+
+    /// Verify the stored credential (§7.1).
+    ///
+    /// The model list is the cheapest call that separates a rejected key (401,
+    /// `.invalidCredential`) from an unreachable host (`.network`), and it
+    /// inherits this type's whole mapping rather than re-deriving it.
+    public func testConnection() async throws {
+        _ = try await availableModels()
+    }
+
+    // MARK: - Plumbing
+
+    static func send(
+        _ request: HTTPRequest, on transport: any HTTPTransport
+    ) async throws -> HTTPResponse {
+        let response: HTTPResponse
+        do {
+            response = try await transport.send(request)
+        } catch {
+            throw AnthropicErrors.error(forTransport: error)
+        }
+
+        if let failure = AnthropicErrors.error(
+            forStatus: response.status, headers: response.headers)
+        {
+            throw failure
+        }
+        return response
+    }
+
+    /// Decode a wire type, reporting anything unreadable as `.undecodable`.
+    ///
+    /// The `DecodingError` is dropped rather than described: its message quotes
+    /// the coding path and, for a type mismatch, the value that failed — which
+    /// on the draft path is the user's stand-up (§8, D-132).
+    static func decode<T: Decodable>(_ type: T.Type, from body: Data) throws -> T {
+        do {
+            return try JSONDecoder().decode(type, from: body)
+        } catch {
+            throw AIError.invalidResponse(.undecodable)
+        }
+    }
+
+    /// The stored API key, or `.notConfigured` (§7.4's "is not configured").
+    ///
+    /// `.oauth` resolves to `.notConfigured` too: §7.2 ships the API key path
+    /// only, and a token this provider cannot send is indistinguishable, from
+    /// the user's side, from no credential at all.
+    func apiKey() throws -> String {
+        let stored: Credential?
+        do {
+            stored = try credentials.credential(for: id)
+        } catch {
+            // A Keychain read that fails is reported as "not configured"
+            // rather than surfaced: there is no `AIError` case for it, and
+            // every remedy the user has — re-enter the key — is the same one
+            // `.notConfigured` already asks for.
+            throw AIError.notConfigured
+        }
+
+        guard case .apiKey(let key) = stored, !key.isEmpty else {
+            throw AIError.notConfigured
+        }
+        return key
+    }
+
+    /// §8's one metrics line, emitted for a draft and for nothing else (D-146).
+    func record(
+        _ request: StandupRequest,
+        started: ContinuousClock.Instant,
+        inputTokens: Int?,
+        outputTokens: Int?,
+        outcome: AIRequestMetrics.Outcome
+    ) {
+        AIMetricsLog.record(
+            AIRequestMetrics(
+                providerID: id,
+                modelID: request.modelID,
+                latency: started.duration(to: ContinuousClock.now),
+                inputTokens: inputTokens,
+                outputTokens: outputTokens,
+                outcome: outcome
+            )
+        )
+    }
+}
+```
+
+- [ ] **Step 5: Create the draft path**
+
+SwiftLint caps a file at 400 lines and the provider crosses it, so the draft path is its own
+extension file. The boundary is a real one even so: everything here turns one `StandupRequest`
+into one validated `StandupDraft`, while the main file owns the model list, the credential and
+the shared plumbing. Note that this is why `transport`, `credentials`, `configuration`, `send`,
+`decode`, `apiKey` and `record` are `internal` rather than `private` — `private` does not reach
+an extension in another file.
+
+Create `StenoKit/AI/Anthropic/AnthropicProvider+Draft.swift`:
+
+```swift
+import Foundation
+
+/// `AnthropicProvider`'s draft path: §7.3's call, D-144's retry, and the
+/// failure wrapper that keeps §8's token counts.
+///
+/// **Split from the main file only because SwiftLint caps a file at 400 lines**
+/// — the provider crossed it once the review fixes landed. The boundary is a
+/// real one even so: everything here is about turning one `StandupRequest`
+/// into one validated `StandupDraft`, while the main file owns the model list,
+/// the credential, and the shared plumbing.
+extension AnthropicProvider {
 
     /// Summarize a window (§7.3), already validated against the ids the app
     /// sent.
@@ -2122,19 +2285,7 @@ public struct AnthropicProvider: AIProvider {
             throw mapped
         }
     }
-
-    /// Verify the stored credential (§7.1).
-    ///
-    /// The model list is the cheapest call that separates a rejected key (401,
-    /// `.invalidCredential`) from an unreachable host (`.network`), and it
-    /// inherits this type's whole mapping rather than re-deriving it.
-    public func testConnection() async throws {
-        _ = try await availableModels()
-    }
-
     // MARK: - The draft path
-
-    private static let maximumModelPages = 20
 
     private func attemptDraft(
         _ request: StandupRequest
@@ -2260,86 +2411,10 @@ public struct AnthropicProvider: AIProvider {
             throw DraftFailure(error: error, usage: usage)
         }
     }
-
-    // MARK: - Plumbing
-
-    private static func send(
-        _ request: HTTPRequest, on transport: any HTTPTransport
-    ) async throws -> HTTPResponse {
-        let response: HTTPResponse
-        do {
-            response = try await transport.send(request)
-        } catch {
-            throw AnthropicErrors.error(forTransport: error)
-        }
-
-        if let failure = AnthropicErrors.error(
-            forStatus: response.status, headers: response.headers)
-        {
-            throw failure
-        }
-        return response
-    }
-
-    /// Decode a wire type, reporting anything unreadable as `.undecodable`.
-    ///
-    /// The `DecodingError` is dropped rather than described: its message quotes
-    /// the coding path and, for a type mismatch, the value that failed — which
-    /// on the draft path is the user's stand-up (§8, D-132).
-    private static func decode<T: Decodable>(_ type: T.Type, from body: Data) throws -> T {
-        do {
-            return try JSONDecoder().decode(type, from: body)
-        } catch {
-            throw AIError.invalidResponse(.undecodable)
-        }
-    }
-
-    /// The stored API key, or `.notConfigured` (§7.4's "is not configured").
-    ///
-    /// `.oauth` resolves to `.notConfigured` too: §7.2 ships the API key path
-    /// only, and a token this provider cannot send is indistinguishable, from
-    /// the user's side, from no credential at all.
-    private func apiKey() throws -> String {
-        let stored: Credential?
-        do {
-            stored = try credentials.credential(for: id)
-        } catch {
-            // A Keychain read that fails is reported as "not configured"
-            // rather than surfaced: there is no `AIError` case for it, and
-            // every remedy the user has — re-enter the key — is the same one
-            // `.notConfigured` already asks for.
-            throw AIError.notConfigured
-        }
-
-        guard case .apiKey(let key) = stored, !key.isEmpty else {
-            throw AIError.notConfigured
-        }
-        return key
-    }
-
-    /// §8's one metrics line, emitted for a draft and for nothing else (D-146).
-    private func record(
-        _ request: StandupRequest,
-        started: ContinuousClock.Instant,
-        inputTokens: Int?,
-        outputTokens: Int?,
-        outcome: AIRequestMetrics.Outcome
-    ) {
-        AIMetricsLog.record(
-            AIRequestMetrics(
-                providerID: id,
-                modelID: request.modelID,
-                latency: started.duration(to: ContinuousClock.now),
-                inputTokens: inputTokens,
-                outputTokens: outputTokens,
-                outcome: outcome
-            )
-        )
-    }
 }
 ```
 
-- [ ] **Step 5: Add the ordering contract to the protocol**
+- [ ] **Step 6: Add the ordering contract to the protocol**
 
 In `StenoKit/AI/AIProvider.swift`, replace the one-line doc on `availableModels()` with:
 
@@ -2359,12 +2434,12 @@ In `StenoKit/AI/AIProvider.swift`, replace the one-line doc on `availableModels(
     func availableModels() async throws -> [AIModel]
 ```
 
-- [ ] **Step 6: Run the tests**
+- [ ] **Step 7: Run the tests**
 
 Run: `make test`
 Expected: PASS.
 
-- [ ] **Step 7: Verify the hallucination guard can fail**
+- [ ] **Step 8: Verify the hallucination guard can fail**
 
 Apply this mutation in `draft(from:cadence:allowed:)`, run `make test`, confirm red, then revert it:
 
@@ -2374,11 +2449,12 @@ Apply this mutation in `draft(from:cadence:allowed:)`, run `make test`, confirm 
 
 Expected red: "a task id the app never sent is rejected inside the provider".
 
-- [ ] **Step 8: Commit**
+- [ ] **Step 9: Commit**
 
 ```bash
 make format && make lint
-git add StenoKit/AI/Anthropic/AnthropicProvider.swift StenoKit/AI/AIProvider.swift \
+git add StenoKit/AI/Anthropic/AnthropicProvider.swift \
+        StenoKit/AI/Anthropic/AnthropicProvider+Draft.swift StenoKit/AI/AIProvider.swift \
         StenoTests/AI/AnthropicFixture.swift StenoTests/AI/AnthropicProviderTests.swift
 git commit -m "feat: AnthropicProvider, behind M3-01's seam
 
@@ -2565,8 +2641,10 @@ func aRepeatedCursorTerminates() async throws {
     // `models.count == 2` and pinned a duplicated picker entry as intended
     // behaviour (PR #35 review). `ModelRanking.ordered` now dedupes by id.
     //
-    // Mutations: drop the `last != cursor` guard (red on the request count);
-    // drop the `seen.insert` filter (red on the model list).
+    // Mutations: drop the `last != cursor` guard (the run then pages until the
+    // settings deadline expires — see `endlessPagingIsATimeout` for why that
+    // is the right outcome); drop the `seen.insert` filter (red on the model
+    // list).
     let repeated = AnthropicFixture.modelsResponse(
         ids: ["claude-sonnet-5"], hasMore: true, lastID: "cursor")
     let transport = StubHTTPTransport(
@@ -2622,6 +2700,36 @@ func theMetricsLineIsMetadataOnly() {
             == "ai provider=anthropic model=claude-sonnet-5 ms=1234 in=120 out=45 outcome=invalidRequest"
     )
     #expect(CredentialPatterns.matches(in: line).isEmpty)
+}
+
+@Test("a vendor that pages forever times out rather than truncating")
+func endlessPagingIsATimeout() async {
+    // Every page carries a *different* cursor, so the repeat guard never
+    // fires. The twenty-page cap this replaced would have returned whatever it
+    // had collected and called it the model list — a picker missing the user's
+    // model, reported as success. The deadline reports the truth instead
+    // (PR #35 review).
+    let provider = AnthropicProvider(
+        transport: EndlessPagingTransport(),
+        credentials: AnthropicFixture.store(),
+        configuration: AnthropicProvider.Configuration(
+            baseURL: URL(fileURLWithPath: "/api.example.test"),
+            settingsTimeout: .milliseconds(50),
+            retryBackoff: .milliseconds(1),
+            retryHeadroom: .milliseconds(1)))
+
+    await #expect(throws: AIError.timedOut) { _ = try await provider.availableModels() }
+}
+
+/// Answers every request with a page whose cursor has never been seen before.
+private actor EndlessPagingTransport: HTTPTransport {
+    private var page = 0
+
+    func send(_ request: HTTPRequest) async throws -> HTTPResponse {
+        page += 1
+        return AnthropicFixture.modelsResponse(
+            ids: ["claude-sonnet-\(page)"], hasMore: true, lastID: "cursor-\(page)")
+    }
 }
 ```
 

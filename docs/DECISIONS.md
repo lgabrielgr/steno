@@ -3727,6 +3727,15 @@ nothing — a vendor response that renames a field must not empty the user's pic
 **Paging** follows the Models endpoint's `after_id` cursor scheme, requesting `limit=1000` and
 re-requesting while `has_more` is true.
 
+**The loop is bounded by the deadline, not by a page count** (amended in review, PR #35). It
+first stopped after twenty pages, which turned a vendor that kept saying `has_more` into a
+silently truncated list — a picker missing the user's model, reported as success. Removing the
+cap required `try Task.checkCancellation()` at the top of each iteration: nothing else in the
+loop throws on cancellation (an actor hop does not), so without it the deadline fired, the task
+group waited for a child that never noticed, and the call hung. **A test that pages forever found
+that**, which is the argument for writing it: the loop was an instance of the very
+cooperative-cancellation trap `HTTPTransport`'s doc comment warns implementers about.
+
 **The result is deduplicated by id** (added in review, PR #35). The loop appends a page before it
 can know the page repeats, so the cursor guard stops the *loop* without un-appending what it has
 already collected — and a picker offering the same model twice is a defect the guard looks like
@@ -3828,8 +3837,19 @@ deadline return regardless would mean abandoning a live task, trading a late ans
 request, so `HTTPTransport.send` carries the requirement in its doc comment and `DeadlineTests`
 pins that the error stays `.timedOut` even when an operation refuses to stop.
 
-**`URLSessionTransport` ships uncovered, deliberately.** It is a ~30-line adapter with no branch
-except the `as? HTTPURLResponse` cast. Covering it means a `URLProtocol` stub — a process-global
+**The transport refuses redirects, because the request carries a credential** (added in review,
+PR #35). `URLSession` follows redirects by default and carries custom headers across them, so a
+302 to another host — or to plain HTTP — would re-send `x-api-key` to wherever it pointed.
+`RedirectBlocker` returns `nil` from `willPerformHTTPRedirection`, which hands the 3xx back as the
+response instead of chasing it; D-143 then maps it to `.providerUnavailable(status:)` and D-144's
+5xx gate keeps it from being retried. Refusing every redirect is blunt and correct here: this
+module talks to one endpoint, and a redirect from it is already something to distrust.
+
+**What remains uncovered is `send` itself, deliberately.** Its only branch is the
+`as? HTTPURLResponse` cast; the rest is copying fields onto a `URLRequest` and back off an
+`HTTPURLResponse`. The redirect delegate the file now also owns *is* tested — D-142's own rule
+("if that file grows a branch, it needs a test") honoured rather than waived, and the reason the
+file is 90 lines rather than the 30 this decision first described. Covering it means a `URLProtocol` stub — a process-global
 registry, `@unchecked Sendable`, and ordering care under parallel Swift Testing runs — standing
 between the suite and a file whose only untested behaviour is "Foundation does what Foundation
 does". **If that file grows a branch, it needs a test, and that is the moment to pay for the

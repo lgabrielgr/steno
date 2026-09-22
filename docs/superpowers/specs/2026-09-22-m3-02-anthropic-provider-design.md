@@ -306,7 +306,9 @@ StenoKit/AI/
   AIProvider.swift                availableModels() ordering contract added to the doc (D-140)
   AIError.swift                   + .invalidRequest, .refused, .truncated, labels (D-143)
   Anthropic/
-    AnthropicProvider.swift       the conformance: auth, budgets, retry, orchestration
+    AnthropicProvider.swift       the conformance: auth, the model list, plumbing
+    AnthropicProvider+Draft.swift §7.3's call, D-144's retry, DraftFailure — its own
+                                  file because SwiftLint caps one at 400 lines
     AnthropicWire.swift           request builders + the internal Codable response types
                                   (D-141). Named `Anthropic*` at file scope rather than nested,
                                   because each needs its own CodingKeys and SwiftLint caps

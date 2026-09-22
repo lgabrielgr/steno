@@ -78,9 +78,9 @@ public struct AnthropicProvider: AIProvider {
 
     public let displayName = "Anthropic"
 
-    private let transport: any HTTPTransport
-    private let credentials: any CredentialStore
-    private let configuration: Configuration
+    let transport: any HTTPTransport
+    let credentials: any CredentialStore
+    let configuration: Configuration
 
     public init(
         transport: any HTTPTransport = URLSessionTransport(),
@@ -129,11 +129,22 @@ public struct AnthropicProvider: AIProvider {
             var collected: [AnthropicModel] = []
             var cursor: String?
 
-            // A bound rather than `while true`. Every termination condition
-            // below depends on a field the vendor controls, and a page that
-            // reports `has_more` forever would otherwise spin until the
-            // deadline — burning the user's budget instead of answering.
-            for _ in 0..<Self.maximumModelPages {
+            // **No page cap, and the deadline is the bound — but only because
+            // the loop checks cancellation.** An earlier version stopped after
+            // twenty pages, which turned a vendor that kept saying `has_more`
+            // into a *silently truncated* list: a picker missing the user's
+            // model, reported as success (PR #35 review).
+            //
+            // Removing the cap is only safe with the check below. Nothing else
+            // in this loop suspends in a way that throws on cancellation — an
+            // actor hop does not — so without it the deadline fires, the group
+            // waits for a child that never notices, and the whole call hangs.
+            // That is the same cooperative-cancellation trap `HTTPTransport`'s
+            // doc comment warns implementers about, and this loop was quietly
+            // an instance of it. A test that pages forever found it.
+            while true {
+                try Task.checkCancellation()
+
                 let request = AnthropicWire.modelsRequest(
                     baseURL: baseURL, apiKey: key, after: cursor)
                 let response = try await Self.send(request, on: transport)
@@ -150,37 +161,6 @@ public struct AnthropicProvider: AIProvider {
         }
     }
 
-    /// Summarize a window (§7.3), already validated against the ids the app
-    /// sent.
-    public func generateStandup(_ request: StandupRequest) async throws -> StandupDraft {
-        let started = ContinuousClock.now
-        do {
-            let (draft, usage) = try await attemptDraft(request)
-            record(
-                request,
-                started: started,
-                inputTokens: usage?.inputTokens,
-                outputTokens: usage?.outputTokens,
-                outcome: .succeeded
-            )
-            return draft
-        } catch {
-            // `DraftFailure` never escapes this method: it is unwrapped here
-            // for the usage it carries, and what leaves is an `AIError`, which
-            // is the contract §7.4 relies on.
-            let failure = error as? DraftFailure
-            let mapped = AnthropicErrors.error(forTransport: failure?.error ?? error)
-            record(
-                request,
-                started: started,
-                inputTokens: failure?.usage?.inputTokens,
-                outputTokens: failure?.usage?.outputTokens,
-                outcome: .failed(label: mapped.metricsLabel)
-            )
-            throw mapped
-        }
-    }
-
     /// Verify the stored credential (§7.1).
     ///
     /// The model list is the cheapest call that separates a rejected key (401,
@@ -190,138 +170,9 @@ public struct AnthropicProvider: AIProvider {
         _ = try await availableModels()
     }
 
-    // MARK: - The draft path
-
-    private static let maximumModelPages = 20
-
-    private func attemptDraft(
-        _ request: StandupRequest
-    ) async throws -> (StandupDraft, AnthropicUsage?) {
-        let key = try apiKey()
-        let body = try AnthropicWire.messagesBody(for: request)
-        let httpRequest = AnthropicWire.messagesRequest(
-            baseURL: configuration.baseURL, apiKey: key, body: body)
-        let transport = self.transport
-        let configuration = self.configuration
-        let cadence = request.cadence
-        let allowed = request.allowedTaskIDs
-
-        // Captured before the race starts, so the retry gate measures the
-        // budget the caller asked for rather than the time left in a clock the
-        // deadline task owns.
-        let deadline = ContinuousClock.now.advanced(by: request.timeout)
-
-        return try await withDeadline(request.timeout) {
-            var retried = false
-            while true {
-                do {
-                    let response = try await Self.send(httpRequest, on: transport)
-                    return try Self.draft(from: response.body, cadence: cadence, allowed: allowed)
-                } catch let error as AIError {
-                    // D-144: one retry, on 429/529/5xx only, and only when
-                    // `backoff + headroom` still fits in the budget. A
-                    // `retry-after` that cannot fit fails immediately with
-                    // `.rateLimited` so M3-03 can say something specific,
-                    // rather than after a wait it already knows is futile.
-                    guard !retried,
-                        let backoff = Self.backoff(for: error, configuration: configuration),
-                        ContinuousClock.now.advanced(by: backoff + configuration.retryHeadroom)
-                            < deadline
-                    else { throw error }
-
-                    retried = true
-                    try await Task.sleep(for: backoff)
-                }
-            }
-        }
-    }
-
-    /// How long to wait before the one permitted retry, or `nil` for a failure
-    /// that must not be retried.
-    private static func backoff(
-        for error: AIError, configuration: Configuration
-    ) -> Duration? {
-        switch error {
-        case .rateLimited(let retryAfter):
-            return retryAfter ?? configuration.retryBackoff
-        case .providerUnavailable(let status) where (500..<600).contains(status):
-            // **Gated on 5xx, not on the case.** `AnthropicErrors` files every
-            // non-2xx, non-4xx status here, which includes the 3xx a custom
-            // transport might surface without following it — and retrying a
-            // redirect means sending the same POST twice for a response that
-            // will never change. D-144 permits a retry for 429, 529 and 5xx,
-            // and this is that list rather than its enclosing case (PR #35
-            // review).
-            return configuration.retryBackoff
-        default:
-            // Everything else is either ours to fix (`.invalidRequest`,
-            // `.invalidCredential`), already out of time (`.timedOut`), a
-            // status no retry can change (3xx), or a failure a second
-            // identical request cannot change.
-            return nil
-        }
-    }
-
-    /// An `AIError` plus the usage the response reported before it failed.
-    ///
-    /// **Internal to the draft path and never thrown past `generateStandup`.**
-    /// A refusal, a truncation and a hallucinated id are all billed calls: the
-    /// API reports `usage` and then the draft fails. D-146 says the metrics
-    /// line keeps the token counts whenever the response carried them, and
-    /// without this wrapper the catch has nothing to keep — it would record
-    /// `nil` for the one class of failure that actually cost the user money
-    /// (PR #35 review).
-    ///
-    /// `internal` rather than `private`, with `draft(from:cadence:allowed:)`,
-    /// so that "the token counts survive the failure" is a test rather than a
-    /// claim: `record` writes to the unified log and cannot be read back
-    /// in-process, so the only way to assert D-146's rule is to assert the
-    /// value the catch is handed.
-    struct DraftFailure: Error {
-        let error: AIError
-        let usage: AnthropicUsage?
-    }
-
-    static func draft(
-        from body: Data, cadence: ReportCadence, allowed: Set<UUID>
-    ) throws -> (StandupDraft, AnthropicUsage?) {
-        let response = try decode(AnthropicMessagesResponse.self, from: body)
-        let usage = response.usage
-
-        switch response.stopReason {
-        case AnthropicWire.StopReason.refusal:
-            // A distinct reason, not `.undecodable`: the model declined, which
-            // says nothing about whether it can produce §7.3's schema.
-            throw DraftFailure(error: .invalidResponse(.refused), usage: usage)
-        case AnthropicWire.StopReason.maxTokens:
-            // The JSON is cut off mid-object, so decoding it would report
-            // `.undecodable` and blame the model for a budget the app set.
-            throw DraftFailure(error: .invalidResponse(.truncated), usage: usage)
-        default:
-            break
-        }
-
-        guard
-            let text = response.content.first(where: { $0.type == "text" })?.text,
-            !text.isEmpty
-        else {
-            throw DraftFailure(error: .invalidResponse(.emptyDraft), usage: usage)
-        }
-
-        do {
-            let draft = try StandupDraft.decode(Data(text.utf8), cadence: cadence)
-            // §7.3's hallucinated-id rejection runs here, inside the provider,
-            // so the next provider inherits it rather than re-deriving it
-            // (D-133).
-            return (try draft.validated(against: allowed), usage)
-        } catch let error as AIError {
-            throw DraftFailure(error: error, usage: usage)
-        }
-    }
-
     // MARK: - Plumbing
 
-    private static func send(
+    static func send(
         _ request: HTTPRequest, on transport: any HTTPTransport
     ) async throws -> HTTPResponse {
         let response: HTTPResponse
@@ -344,7 +195,7 @@ public struct AnthropicProvider: AIProvider {
     /// The `DecodingError` is dropped rather than described: its message quotes
     /// the coding path and, for a type mismatch, the value that failed — which
     /// on the draft path is the user's stand-up (§8, D-132).
-    private static func decode<T: Decodable>(_ type: T.Type, from body: Data) throws -> T {
+    static func decode<T: Decodable>(_ type: T.Type, from body: Data) throws -> T {
         do {
             return try JSONDecoder().decode(type, from: body)
         } catch {
@@ -357,7 +208,7 @@ public struct AnthropicProvider: AIProvider {
     /// `.oauth` resolves to `.notConfigured` too: §7.2 ships the API key path
     /// only, and a token this provider cannot send is indistinguishable, from
     /// the user's side, from no credential at all.
-    private func apiKey() throws -> String {
+    func apiKey() throws -> String {
         let stored: Credential?
         do {
             stored = try credentials.credential(for: id)
@@ -376,7 +227,7 @@ public struct AnthropicProvider: AIProvider {
     }
 
     /// §8's one metrics line, emitted for a draft and for nothing else (D-146).
-    private func record(
+    func record(
         _ request: StandupRequest,
         started: ContinuousClock.Instant,
         inputTokens: Int?,
