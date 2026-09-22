@@ -12,13 +12,25 @@
 
 ## Provenance of the code in this plan
 
-**Every code block below was generated from a tree that passed `make build && make test && make lint`** before this plan was written, and the three load-bearing tests were run against a stated mutation:
+**Every code block below was generated from a tree that passed `make build && make test && make lint`**, and every load-bearing test was run against a stated mutation and seen to fail.
+
+**Regenerated after review (PR #35).** The blocks first written here came from the pre-review
+tree, and six review findings then changed six of the files — so following the plan would have
+reintroduced the very defects this PR fixed. That is a real failure mode for a plan that doubles
+as a verification record, and Copilot caught it. The blocks below are taken from the tree as
+merged; the mutation table covers both rounds.
 
 | Mutation applied | Test that turned red |
 |---|---|
-| `URLError.cancelled` maps to `.network` instead of `.timedOut` | "a cancelled request timed out; it is not an offline device" |
-| `validated(against:)` dropped from the draft path | "a task id the app never sent is rejected inside the provider" |
+| `URLError.cancelled` maps to `.network` instead of `.timedOut` | `cancellationIsATimeout` |
+| `withDeadline` drops its `catch is CancellationError` | `cancellationStaysInsideTheContract` |
+| `validated(against:)` dropped from the draft path | `hallucinatedIDsFailLoudly` |
 | `familyRank` returns 2 for sonnet instead of 0 | 3 tests, in `ModelRankingTests` and `AnthropicProviderBudgetTests` |
+| `backoff(for:)` returns `nil` for `.providerUnavailable` | `overloadIsRetried` |
+| `DraftFailure` carries `usage: nil` | `failedDraftsKeepTheirUsage` |
+| `.sortedKeys` dropped from the request body | `theBodyIsDeterministic` |
+| `.daily` decoded regardless of cadence | `periodicCadenceRoundTrips`, `periodicDraftsAreValidated` |
+| `seen.insert` dedupe filter dropped from `ModelRanking.ordered` | `duplicatesAreCollapsed`, `aRepeatedCursorTerminates` |
 
 This matters because standalone type-checking of a snippet has shipped real defects in this repo — it proves syntax, not module-scope correctness, and `#expect` macros hide errors until they are compiled inside the test bundle. The blocks here are not transcriptions of intent; they compiled.
 
@@ -92,8 +104,9 @@ Expected: compile failure — `type 'AIError' has no member 'invalidRequest'`.
 In `StenoKit/AI/AIError.swift`, after `case invalidCredential`:
 
 ```swift
-    /// The provider rejected the *request* — a 400 it would not parse, or a 404
-    /// for a model id that was retired since the user picked it (D-143).
+    /// The provider rejected the *request*: a 400 it would not parse, a 404 for
+    /// a model id retired since the user picked it, or a 413 for a window too
+    /// large to send (D-143).
     ///
     /// **Separate from `.providerUnavailable`, which is where the obvious
     /// mapping would put a 404.** These failures are ours, not Anthropic's, and
@@ -101,6 +114,9 @@ In `StenoKit/AI/AIError.swift`, after `case invalidCredential`:
     /// model no longer exists to a status page instead of the picker. Carries
     /// nothing: the API's `error.message` can quote the request that provoked
     /// it, which on the draft path is the user's event log (§8).
+    ///
+    /// Because it spans all of those, its message names no single cause — see
+    /// `errorDescription`.
     case invalidRequest
 ```
 
@@ -129,8 +145,15 @@ In `errorDescription`, after the `.invalidCredential` arm:
 
 ```swift
         case .invalidRequest:
+            // **Names no single cause on purpose.** This one case covers 400,
+            // 404, 413 and 422, so "the selected model may no longer exist"
+            // — true only of the 404 — gave model-picker advice for a window
+            // too large to send. The case carries nothing that could tell them
+            // apart, and inventing a distinction the value does not hold is
+            // worse than naming both possibilities.
             return
-                "The provider couldn't accept this request. The selected model may no longer exist."
+                "The provider couldn't accept this request. The selected model may be unavailable, "
+                + "or the window may be too large to send."
 ```
 
 In `metricsLabel`, after the `.invalidCredential` arm:
@@ -219,6 +242,36 @@ func realFailuresPropagate() async {
         }
     }
 }
+
+@Test("a cancelled deadline surfaces .timedOut, never a raw CancellationError")
+func cancellationStaysInsideTheContract() async {
+    // M3-01's contract: a provider throws `AIError` and nothing else, because
+    // §7.4 "cannot switch on an error type it has never heard of". Cancelling
+    // the caller cancels both children of the race, and a cancelled
+    // `Task.sleep` throws `CancellationError` — from the deadline task before
+    // it reaches its own `throw`, and from anything inside the operation that
+    // sleeps. Either can win.
+    //
+    // The operation here does no mapping of its own, so this fails the moment
+    // `withDeadline` stops mapping. Mutation: remove its `catch is
+    // CancellationError`. Red.
+    let task = Task {
+        try await withDeadline(.seconds(60)) {
+            try await Task.sleep(for: .seconds(60))
+            return 1
+        }
+    }
+    task.cancel()
+
+    do {
+        _ = try await task.value
+        Issue.record("expected the cancelled deadline to fail")
+    } catch is AIError {
+        // The contract held.
+    } catch {
+        Issue.record("escaped as \(type(of: error)), which §7.4 cannot classify")
+    }
+}
 ```
 
 - [ ] **Step 2: Run and watch it fail**
@@ -236,10 +289,10 @@ import Foundation
 /// The seam every network call in this module goes through (D-142).
 ///
 /// **One method over plain values, rather than a `URLSession` the provider
-/// holds.** `make test` denies outbound IP (§9.4, D-012), so a provider that
-/// reached for `URLSession` directly could not be tested at all. This is the
-/// same shape `CredentialStore` uses so tests never touch the login keychain,
-/// and `StubFilePanels` uses so tests never open an `NSOpenPanel`.
+/// holds.** `make test` denies outbound IP entirely (§9.4, D-012), so a
+/// provider that reached for `URLSession` directly could not be tested at all.
+/// This is the same shape `CredentialStore` uses so tests never touch the login
+/// keychain, and `StubFilePanels` uses so tests never open an `NSOpenPanel`.
 ///
 /// **Values, not `URLRequest`/`HTTPURLResponse`.** Foundation's networking
 /// types are classes whose `Sendable` status is a poor thing to bet a Swift 6
@@ -306,8 +359,12 @@ import Foundation
 /// stub — a process-global registry, `@unchecked Sendable`, and ordering care
 /// under parallel Swift Testing runs — standing between the suite and a file
 /// whose only untested behaviour is "Foundation does what Foundation does".
-/// M3-04's "Test connection" is the first human check. If this file grows a
-/// branch, that is the moment to pay for the harness.
+/// If this file grows a branch, that is the moment to pay for the harness.
+///
+/// **Who closes it: M3-04**, whose task file carries `make verify-models` — a
+/// hidden `models-selftest` subcommand on `make verify-keychain`'s pattern
+/// (D-138) that runs this adapter against the real API. Until then the first
+/// thing to execute this code is a human clicking "Test connection".
 public struct URLSessionTransport: HTTPTransport {
     private let session: URLSession
 
@@ -376,6 +433,27 @@ import Foundation
 /// branch throws `.timedOut` itself, and `AnthropicErrors.error(forTransport:)`
 /// maps a stray cancellation the same way, because nothing else here cancels.
 func withDeadline<T: Sendable>(
+    _ duration: Duration,
+    operation: @escaping @Sendable () async throws -> T
+) async throws -> T {
+    do {
+        return try await race(duration, operation: operation)
+    } catch is CancellationError {
+        // **Cancelling the caller cancels both children**, and a cancelled
+        // `Task.sleep` throws `CancellationError` — from the deadline task
+        // before it reaches its `throw`, and from anything inside `operation`
+        // that sleeps. Either can win the race, so a mapping applied at one
+        // call site is a coin flip: M3-02's first attempt caught this in
+        // `availableModels` and a mutation survived, because the test happened
+        // to hit the path the transport had already mapped (PR #35 review).
+        //
+        // Mapping it here covers every caller and makes the contract
+        // deterministic: `withDeadline` throws `AIError` and nothing else.
+        throw AIError.timedOut
+    }
+}
+
+private func race<T: Sendable>(
     _ duration: Duration,
     operation: @escaping @Sendable () async throws -> T
 ) async throws -> T {
@@ -833,6 +911,24 @@ func rankingIsIndependentOfInputOrder() {
         ModelRanking.ordered(models).map(\.id) == ModelRanking.ordered(models.reversed()).map(\.id))
 }
 
+@Test("a model offered twice is listed once")
+func duplicatesAreCollapsed() {
+    // Overlapping pages are a thing cursor schemes do, and the provider's loop
+    // cannot un-append a page it has already collected. The picker must not
+    // offer the same model twice (PR #35 review).
+    //
+    // The two records differ in `display_name` so the assertion also says
+    // *which* survives: the first seen, taken before the sort.
+    let ordered = ModelRanking.ordered([
+        model("claude-sonnet-5", created: "2026-01-01T00:00:00Z"),
+        AnthropicModel(id: "claude-sonnet-5", displayName: "A Later Page"),
+        model("claude-haiku-4-5", created: "2025-10-01T00:00:00Z"),
+    ])
+
+    #expect(ordered.map(\.id) == ["claude-sonnet-5", "claude-haiku-4-5"])
+    #expect(ordered.first?.displayName == "claude-sonnet-5")
+}
+
 @Test("a timestamp with fractional seconds still parses")
 func timestampsToleratePrecision() {
     // Two formatters, because `ISO8601DateFormatter` fails outright on
@@ -841,6 +937,49 @@ func timestampsToleratePrecision() {
     #expect(AnthropicWire.timestamp("2026-01-01T00:00:00.123Z") != nil)
     #expect(AnthropicWire.timestamp("the first of January") == nil)
     #expect(AnthropicWire.timestamp(nil) == nil)
+}
+
+// MARK: - Decoding (the path the ranking tests above do not take)
+
+@Test("structured_outputs is read out of the nested capabilities tree")
+func capabilitiesDecodeFromTheWire() throws {
+    // The tests above build `AnthropicModel` through its memberwise init, so
+    // the custom `init(from:)` — where all the defensiveness lives — was never
+    // exercised (PR #35 review). This is the decode path a vendor response
+    // actually takes.
+    let json = """
+        {"data":[
+          {"id":"a","display_name":"Model A","created_at":"2026-01-01T00:00:00Z",
+           "capabilities":{"structured_outputs":{"supported":false}}},
+          {"id":"b","display_name":"Model B",
+           "capabilities":{"structured_outputs":{"supported":true}}},
+          {"id":"c"},
+          {"id":"d","capabilities":{"something_else":{"supported":false}}}
+        ],"has_more":false}
+        """
+
+    let page = try JSONDecoder().decode(AnthropicModelsPage.self, from: Data(json.utf8))
+
+    // Only an explicit `false` is a refusal; a missing or unrecognised shape
+    // says nothing, and D-140 drops nothing on "nothing".
+    #expect(page.data.map(\.supportsStructuredOutputs) == [false, true, nil, nil])
+    // `display_name` falls back to the id rather than failing the page.
+    #expect(page.data.map(\.displayName) == ["Model A", "Model B", "c", "d"])
+    #expect(page.data[0].createdAt != nil)
+    #expect(page.data[2].createdAt == nil)
+    #expect(page.hasMore == false)
+}
+
+@Test("a model whose timestamp will not parse still decodes")
+func aBadTimestampCostsRankingQualityAndNothingElse() throws {
+    // Returning `nil` rather than throwing is the whole point: the model still
+    // belongs in the picker, it just ranks by id within its family.
+    let json = #"{"data":[{"id":"a","created_at":"yesterday"}]}"#
+    let page = try JSONDecoder().decode(AnthropicModelsPage.self, from: Data(json.utf8))
+
+    #expect(page.data.count == 1)
+    #expect(page.data[0].createdAt == nil)
+    #expect(page.hasMore == nil)
 }
 ```
 
@@ -1128,9 +1267,22 @@ import Foundation
 /// strings puts `claude-sonnet-10` below `claude-sonnet-5`.
 enum ModelRanking {
     /// Rank, filter, and map one fetched page-set into what §7.1's picker shows.
+    ///
+    /// **Deduplicated by id, because paging can hand the same model twice.**
+    /// The provider's loop appends a page before it can know the page repeats —
+    /// so if the API ignores `after_id`, or simply returns overlapping pages as
+    /// cursor schemes are allowed to, the picker would offer the same model
+    /// twice. The cursor guard upstream stops the *loop*; it cannot un-append
+    /// what it has already collected (PR #35 review).
+    ///
+    /// First occurrence wins, and it is taken before the sort, so "first" means
+    /// the earlier page rather than something the ordering decided.
     static func ordered(_ models: [AnthropicModel]) -> [AIModel] {
-        models
+        var seen: Set<String> = []
+        return
+            models
             .filter { $0.supportsStructuredOutputs != false }
+            .filter { seen.insert($0.id).inserted }
             .sorted(by: precedes)
             .map { AIModel(id: $0.id, displayName: $0.displayName) }
     }
@@ -1276,11 +1428,12 @@ enum AnthropicFixture {
     static func request(
         timeout: Duration = .seconds(5),
         allowed: Set<UUID> = [taskID],
-        schema: String = #"{"type":"object"}"#
+        schema: String = #"{"type":"object"}"#,
+        cadence: ReportCadence = .daily
     ) -> StandupRequest {
         StandupRequest(
             modelID: "claude-sonnet-5",
-            cadence: .daily,
+            cadence: cadence,
             systemPrompt: "system",
             userPrompt: "user",
             outputSchema: AIOutputSchema(name: "daily", json: Data(schema.utf8)),
@@ -1311,6 +1464,26 @@ enum AnthropicFixture {
         ]
         let body = (try? JSONSerialization.data(withJSONObject: envelope)) ?? Data()
         return HTTPResponse(status: status, body: body)
+    }
+
+    /// A `/v1/messages` response whose text block is §7.3's `periodic` JSON.
+    ///
+    /// D17's two cadences "are not cosmetic variants of each other" (§7.3):
+    /// the sections differ and so does the cardinality of the task reference,
+    /// so the provider's cadence switch needs both sides exercised.
+    static func periodicDraftResponse(taskIDs: [UUID] = [taskID]) -> HTTPResponse {
+        let ids = taskIDs.map { "\"\($0.uuidString)\"" }.joined(separator: ",")
+        let draft = """
+            {"completed":[{"task_ids":[\(ids)],"text":"shipped the export encoder"}],\
+            "in_flight":[],"blockers_and_risks":[]}
+            """
+        let envelope: [String: Any] = [
+            "content": [["type": "text", "text": draft]],
+            "stop_reason": "end_turn",
+            "usage": ["input_tokens": 900, "output_tokens": 120],
+        ]
+        let body = (try? JSONSerialization.data(withJSONObject: envelope)) ?? Data()
+        return HTTPResponse(status: 200, body: body)
     }
 
     /// One page of `/v1/models`.
@@ -1402,9 +1575,11 @@ func theBodyIsMinimal() async throws {
     _ = try await AnthropicFixture.provider(transport).generateStandup(AnthropicFixture.request())
 
     let body = try #require(await transport.received.first?.body)
-    let json = try #require(try JSONSerialization.jsonObject(with: body) as? [String: Any])
+    let json = try #require(
+        try JSONSerialization.jsonObject(with: body) as? [String: Any])
 
-    #expect(Set(json.keys) == ["model", "max_tokens", "system", "messages", "output_config"])
+    #expect(
+        Set(json.keys) == ["model", "max_tokens", "system", "messages", "output_config"])
     #expect(json["model"] as? String == "claude-sonnet-5")
     #expect(json["max_tokens"] as? Int == 1024)
 }
@@ -1412,10 +1587,20 @@ func theBodyIsMinimal() async throws {
 @Test("the schema reaches the API as the value M3-03 authored")
 func theSchemaIsTransmittedWhole() async throws {
     let schema = #"{"type":"object","properties":{"today":{"type":"array"}},"required":["today"]}"#
-    let transport = StubHTTPTransport(answers: [.respond(AnthropicFixture.draftResponse())])
+    var request = AnthropicFixture.request()
+    request = StandupRequest(
+        modelID: request.modelID,
+        cadence: request.cadence,
+        systemPrompt: request.systemPrompt,
+        userPrompt: request.userPrompt,
+        outputSchema: AIOutputSchema(name: "daily", json: Data(schema.utf8)),
+        allowedTaskIDs: request.allowedTaskIDs,
+        maxOutputTokens: request.maxOutputTokens,
+        timeout: request.timeout
+    )
 
-    _ = try await AnthropicFixture.provider(transport)
-        .generateStandup(AnthropicFixture.request(schema: schema))
+    let transport = StubHTTPTransport(answers: [.respond(AnthropicFixture.draftResponse())])
+    _ = try await AnthropicFixture.provider(transport).generateStandup(request)
 
     let body = try #require(await transport.received.first?.body)
     let json = try JSONSerialization.jsonObject(with: body) as? [String: Any]
@@ -1429,26 +1614,52 @@ func theSchemaIsTransmittedWhole() async throws {
 
 @Test("a schema that is not a JSON object fails before any request is sent")
 func aBrokenSchemaIsCaughtLocally() async {
+    let request = StandupRequest(
+        modelID: "claude-sonnet-5",
+        cadence: .daily,
+        systemPrompt: "system",
+        userPrompt: "user",
+        outputSchema: AIOutputSchema(name: "daily", json: Data("not a schema".utf8)),
+        allowedTaskIDs: [AnthropicFixture.taskID],
+        maxOutputTokens: 1024,
+        timeout: .seconds(5)
+    )
     let transport = StubHTTPTransport()
 
     await #expect(throws: AIError.invalidRequest) {
-        try await AnthropicFixture.provider(transport)
-            .generateStandup(AnthropicFixture.request(schema: "not a schema"))
+        try await AnthropicFixture.provider(transport).generateStandup(request)
     }
     #expect(await transport.received.isEmpty)
 }
 
-@Test("two calls with equal inputs produce equal bytes")
+@Test("the body is serialized with its keys in sorted order")
 func theBodyIsDeterministic() async throws {
-    // `JSONSerialization`'s unsorted key order is hash order, which differs
-    // between processes. Mutation: drop `.sortedKeys`.
-    let first = StubHTTPTransport(answers: [.respond(AnthropicFixture.draftResponse())])
-    let second = StubHTTPTransport(answers: [.respond(AnthropicFixture.draftResponse())])
+    // **An exact byte sequence, not two serializations compared.** The earlier
+    // version of this test ran `messagesBody` twice in one process and compared
+    // the results — which cannot detect a missing `.sortedKeys` at all, because
+    // unsorted dictionary iteration is stable *within* a process and both calls
+    // produce the same order either way (PR #35 review). It was a test that
+    // could not fail for the mutation its own comment named.
+    //
+    // §10.2 already pays for this lesson once: hash order differs between
+    // processes, so a body that is not explicitly sorted is not reproducible.
+    // Mutation: drop `.sortedKeys`. Red — the nested objects reorder too.
+    let transport = StubHTTPTransport(answers: [.respond(AnthropicFixture.draftResponse())])
+    _ = try await AnthropicFixture.provider(transport).generateStandup(AnthropicFixture.request())
 
-    _ = try await AnthropicFixture.provider(first).generateStandup(AnthropicFixture.request())
-    _ = try await AnthropicFixture.provider(second).generateStandup(AnthropicFixture.request())
+    let body = try #require(await transport.received.first?.body)
+    let expected = """
+        {"max_tokens":1024,"messages":[{"content":"user","role":"user"}],\
+        "model":"claude-sonnet-5",\
+        "output_config":{"format":{"schema":{"type":"object"},"type":"json_schema"}},\
+        "system":"system"}
+        """
 
-    #expect(await first.received.first?.body == second.received.first?.body)
+    // The failable initializer rather than `String(decoding:)`, per SwiftLint's
+    // `optional_data_string_conversion` — which is the better assertion anyway:
+    // a body that is not valid UTF-8 fails here rather than becoming replacement
+    // characters that then compare unequal for an unrelated-looking reason.
+    #expect(String(bytes: body, encoding: .utf8) == expected)
 }
 
 // MARK: - The draft path (D-143)
@@ -1456,8 +1667,8 @@ func theBodyIsDeterministic() async throws {
 @Test("a valid draft decodes and is returned")
 func aGoodResponseBecomesADraft() async throws {
     let transport = StubHTTPTransport(answers: [.respond(AnthropicFixture.draftResponse())])
-    let draft = try await AnthropicFixture.provider(transport)
-        .generateStandup(AnthropicFixture.request())
+    let draft = try await AnthropicFixture.provider(transport).generateStandup(
+        AnthropicFixture.request())
 
     guard case .daily(let daily) = draft else {
         Issue.record("expected a daily draft")
@@ -1527,28 +1738,108 @@ func garbageIsUndecodable() async {
     }
 }
 
-// MARK: - §8
+@Test("a periodic window decodes into the periodic draft, not the daily one")
+func periodicCadenceRoundTrips() async throws {
+    // §7.3: the two cadences "are not cosmetic variants of each other — the
+    // sections differ, and so does the cardinality of the task reference." The
+    // provider switches on cadence to pick the decode, and only `.daily` was
+    // covered (PR #35 review). Mutation: decode `.daily` regardless of cadence.
+    // Red — a periodic body has no `since_last_standup`.
+    let transport = StubHTTPTransport(answers: [.respond(AnthropicFixture.periodicDraftResponse())])
 
-@Test("the metrics line for a draft carries metadata and no payload")
-func theMetricsLineIsMetadataOnly() {
-    // D-146 emits one line per draft. `AIMetricsLog.line(for:)` is the string
-    // `record` writes, and `AISecretsTests` pins it character for character;
-    // this asserts the values M3-02 supplies reach it.
-    let metrics = AIRequestMetrics(
-        providerID: "anthropic",
-        modelID: "claude-sonnet-5",
-        latency: .milliseconds(1234),
-        inputTokens: 120,
-        outputTokens: 45,
-        outcome: .failed(label: AIError.invalidRequest.metricsLabel)
-    )
+    let draft = try await AnthropicFixture.provider(transport)
+        .generateStandup(AnthropicFixture.request(cadence: .periodic))
 
-    let line = AIMetricsLog.line(for: metrics)
-    #expect(
-        line
-            == "ai provider=anthropic model=claude-sonnet-5 ms=1234 in=120 out=45 outcome=invalidRequest"
-    )
-    #expect(CredentialPatterns.matches(in: line).isEmpty)
+    guard case .periodic(let periodic) = draft else {
+        Issue.record("expected a periodic draft")
+        return
+    }
+    #expect(periodic.completed.first?.text == "shipped the export encoder")
+    #expect(periodic.completed.first?.taskIDs == [AnthropicFixture.taskID])
+    #expect(periodic.inFlight.isEmpty)
+}
+
+@Test("a hallucinated id in a periodic bullet is rejected too")
+func periodicDraftsAreValidated() async {
+    // `task_ids` is plural here and `allTaskIDs` flattens it — a guard that
+    // only walked the daily shape would let a themed bullet smuggle one in.
+    let transport = StubHTTPTransport(answers: [
+        .respond(
+            AnthropicFixture.periodicDraftResponse(
+                taskIDs: [AnthropicFixture.taskID, AnthropicFixture.otherID]))
+    ])
+
+    await #expect(throws: AIError.unknownTaskIDs(count: 1)) {
+        try await AnthropicFixture.provider(transport)
+            .generateStandup(AnthropicFixture.request(cadence: .periodic))
+    }
+}
+
+// MARK: - The contract, and what §8 keeps when it breaks
+
+@Test("cancelling a model-list fetch still surfaces an AIError")
+func cancellationDoesNotEscapeTheContract() async {
+    // M3-01's contract: an implementation throws `AIError` and nothing else,
+    // because §7.4 "cannot switch on an error type it has never heard of".
+    // Cancelling the caller cancels the deadline's child tasks, and `Task.sleep`
+    // then throws a bare `CancellationError` past every mapping inside the
+    // group — `generateStandup` caught that and `availableModels` did not
+    // (PR #35 review). Mutation: drop the catch in `availableModels`. Red.
+    let transport = StubHTTPTransport(
+        answers: [.respond(AnthropicFixture.modelsResponse(ids: ["claude-sonnet-5"]))],
+        delay: .seconds(60))
+    let provider = AnthropicFixture.provider(transport)
+
+    let task = Task { try await provider.availableModels() }
+    task.cancel()
+
+    do {
+        _ = try await task.value
+        Issue.record("expected the cancelled fetch to fail")
+    } catch is AIError {
+        // The contract held.
+    } catch {
+        Issue.record("escaped as \(type(of: error)), which §7.4 cannot classify")
+    }
+}
+
+@Test("a refusal keeps the token counts it was billed for")
+func failedDraftsKeepTheirUsage() throws {
+    // D-146: the metrics line keeps the token counts whenever the response
+    // carried them. A refusal, a truncation and a hallucinated id are all
+    // billed calls — the API reports `usage` and *then* the draft fails — so
+    // recording `nil` would lose the numbers for the one class of failure that
+    // actually cost the user money (PR #35 review).
+    //
+    // Mutation: return `nil` for `usage` in `DraftFailure`. Red.
+    let body = AnthropicFixture.draftResponse(stopReason: "refusal").body
+
+    do {
+        _ = try AnthropicProvider.draft(
+            from: body, cadence: .daily, allowed: [AnthropicFixture.taskID])
+        Issue.record("expected a refusal to fail")
+    } catch let failure as AnthropicProvider.DraftFailure {
+        #expect(failure.error == .invalidResponse(.refused))
+        #expect(failure.usage?.inputTokens == 120)
+        #expect(failure.usage?.outputTokens == 45)
+    }
+}
+
+@Test("a hallucinated id keeps its usage too, not just a refusal")
+func validationFailuresKeepTheirUsage() throws {
+    // The `StandupDraft.decode` / `validated(against:)` pair throws a plain
+    // `AIError`, so it needs its own wrap — a fix applied to the `stop_reason`
+    // branches alone would leave this path recording nothing.
+    let body = AnthropicFixture.draftResponse(taskID: AnthropicFixture.otherID).body
+
+    do {
+        _ = try AnthropicProvider.draft(
+            from: body, cadence: .daily, allowed: [AnthropicFixture.taskID])
+        Issue.record("expected a hallucinated id to fail")
+    } catch let failure as AnthropicProvider.DraftFailure {
+        #expect(failure.error == .unknownTaskIDs(count: 1))
+        #expect(failure.usage?.inputTokens == 120)
+    }
 }
 ```
 
@@ -1665,7 +1956,31 @@ public struct AnthropicProvider: AIProvider {
         let transport = self.transport
         let baseURL = configuration.baseURL
 
-        return try await withDeadline(configuration.settingsTimeout) {
+        // **The catch is not redundant with `send`'s.** Cancelling the *caller*
+        // cancels this deadline's child tasks, and `Task.sleep` then throws a
+        // bare `CancellationError` straight out of the group — past every
+        // mapping inside it. `generateStandup` already had a catch-all for the
+        // same reason; a mapping applied to one of two sibling paths is the
+        // defect this repo keeps re-learning (PR #35 review).
+        do {
+            return try await Self.fetchModels(
+                transport: transport,
+                baseURL: baseURL,
+                key: key,
+                timeout: configuration.settingsTimeout
+            )
+        } catch {
+            throw AnthropicErrors.error(forTransport: error)
+        }
+    }
+
+    private static func fetchModels(
+        transport: any HTTPTransport,
+        baseURL: URL,
+        key: String,
+        timeout: Duration
+    ) async throws -> [AIModel] {
+        try await withDeadline(timeout) {
             var collected: [AnthropicModel] = []
             var cursor: String?
 
@@ -1705,12 +2020,16 @@ public struct AnthropicProvider: AIProvider {
             )
             return draft
         } catch {
-            let mapped = AnthropicErrors.error(forTransport: error)
+            // `DraftFailure` never escapes this method: it is unwrapped here
+            // for the usage it carries, and what leaves is an `AIError`, which
+            // is the contract §7.4 relies on.
+            let failure = error as? DraftFailure
+            let mapped = AnthropicErrors.error(forTransport: failure?.error ?? error)
             record(
                 request,
                 started: started,
-                inputTokens: nil,
-                outputTokens: nil,
+                inputTokens: failure?.usage?.inputTokens,
+                outputTokens: failure?.usage?.outputTokens,
                 outcome: .failed(label: mapped.metricsLabel)
             )
             throw mapped
@@ -1790,20 +2109,41 @@ public struct AnthropicProvider: AIProvider {
         }
     }
 
-    private static func draft(
+    /// An `AIError` plus the usage the response reported before it failed.
+    ///
+    /// **Internal to the draft path and never thrown past `generateStandup`.**
+    /// A refusal, a truncation and a hallucinated id are all billed calls: the
+    /// API reports `usage` and then the draft fails. D-146 says the metrics
+    /// line keeps the token counts whenever the response carried them, and
+    /// without this wrapper the catch has nothing to keep — it would record
+    /// `nil` for the one class of failure that actually cost the user money
+    /// (PR #35 review).
+    ///
+    /// `internal` rather than `private`, with `draft(from:cadence:allowed:)`,
+    /// so that "the token counts survive the failure" is a test rather than a
+    /// claim: `record` writes to the unified log and cannot be read back
+    /// in-process, so the only way to assert D-146's rule is to assert the
+    /// value the catch is handed.
+    struct DraftFailure: Error {
+        let error: AIError
+        let usage: AnthropicUsage?
+    }
+
+    static func draft(
         from body: Data, cadence: ReportCadence, allowed: Set<UUID>
     ) throws -> (StandupDraft, AnthropicUsage?) {
         let response = try decode(AnthropicMessagesResponse.self, from: body)
+        let usage = response.usage
 
         switch response.stopReason {
         case AnthropicWire.StopReason.refusal:
             // A distinct reason, not `.undecodable`: the model declined, which
             // says nothing about whether it can produce §7.3's schema.
-            throw AIError.invalidResponse(.refused)
+            throw DraftFailure(error: .invalidResponse(.refused), usage: usage)
         case AnthropicWire.StopReason.maxTokens:
             // The JSON is cut off mid-object, so decoding it would report
             // `.undecodable` and blame the model for a budget the app set.
-            throw AIError.invalidResponse(.truncated)
+            throw DraftFailure(error: .invalidResponse(.truncated), usage: usage)
         default:
             break
         }
@@ -1812,13 +2152,18 @@ public struct AnthropicProvider: AIProvider {
             let text = response.content.first(where: { $0.type == "text" })?.text,
             !text.isEmpty
         else {
-            throw AIError.invalidResponse(.emptyDraft)
+            throw DraftFailure(error: .invalidResponse(.emptyDraft), usage: usage)
         }
 
-        let draft = try StandupDraft.decode(Data(text.utf8), cadence: cadence)
-        // §7.3's hallucinated-id rejection runs here, inside the provider, so
-        // the next provider inherits it rather than re-deriving it (D-133).
-        return (try draft.validated(against: allowed), response.usage)
+        do {
+            let draft = try StandupDraft.decode(Data(text.utf8), cadence: cadence)
+            // §7.3's hallucinated-id rejection runs here, inside the provider,
+            // so the next provider inherits it rather than re-deriving it
+            // (D-133).
+            return (try draft.validated(against: allowed), usage)
+        } catch let error as AIError {
+            throw DraftFailure(error: error, usage: usage)
+        }
     }
 
     // MARK: - Plumbing
@@ -2093,12 +2438,19 @@ func pagingFollowsTheCursor() async throws {
     #expect(second.url.query?.contains("after_id=claude-opus-5") == true)
 }
 
-@Test("a page that repeats its cursor ends the loop instead of spinning")
+@Test("a page that repeats its cursor ends the loop and offers no duplicate")
 func aRepeatedCursorTerminates() async throws {
-    // Every termination condition depends on a field the vendor controls. A
-    // page that reports `has_more` forever would otherwise burn the user's
-    // budget instead of answering. Mutation: drop the `last != cursor` guard.
-    // Red — the run walks to the page cap and the count assertion fails.
+    // Two separate properties, and the first version of this test asserted the
+    // defect as if it were the second. Every termination condition depends on a
+    // field the vendor controls, so a page reporting `has_more` forever would
+    // burn the user's budget instead of answering — the cursor guard stops that
+    // after two requests. But the loop appends each page *before* it can know
+    // the page repeats, so stopping the loop does not un-append: this asserted
+    // `models.count == 2` and pinned a duplicated picker entry as intended
+    // behaviour (PR #35 review). `ModelRanking.ordered` now dedupes by id.
+    //
+    // Mutations: drop the `last != cursor` guard (red on the request count);
+    // drop the `seen.insert` filter (red on the model list).
     let repeated = AnthropicFixture.modelsResponse(
         ids: ["claude-sonnet-5"], hasMore: true, lastID: "cursor")
     let transport = StubHTTPTransport(
@@ -2107,7 +2459,7 @@ func aRepeatedCursorTerminates() async throws {
 
     let models = try await AnthropicFixture.provider(transport).availableModels()
 
-    #expect(models.count == 2)
+    #expect(models.map(\.id) == ["claude-sonnet-5"])
     #expect(await transport.received.count == 2)
 }
 
@@ -2128,10 +2480,32 @@ func testConnectionSeparatesItsFailures() async {
 
 @Test("a key with access to nothing is an empty list, not an error")
 func anEmptyListIsLegitimate() async throws {
-    let transport = StubHTTPTransport(answers: [
-        .respond(AnthropicFixture.modelsResponse(ids: []))
-    ])
+    let transport = StubHTTPTransport(answers: [.respond(AnthropicFixture.modelsResponse(ids: []))])
     #expect(try await AnthropicFixture.provider(transport).availableModels().isEmpty)
+}
+
+// MARK: - §8
+
+@Test("the metrics line for a draft carries metadata and no payload")
+func theMetricsLineIsMetadataOnly() {
+    // D-146 emits one line per draft. `AIMetricsLog.line(for:)` is the string
+    // `record` writes, and `AISecretsTests` pins it character for character;
+    // this asserts the values M3-02 supplies reach it.
+    let metrics = AIRequestMetrics(
+        providerID: "anthropic",
+        modelID: "claude-sonnet-5",
+        latency: .milliseconds(1234),
+        inputTokens: 120,
+        outputTokens: 45,
+        outcome: .failed(label: AIError.invalidRequest.metricsLabel)
+    )
+
+    let line = AIMetricsLog.line(for: metrics)
+    #expect(
+        line
+            == "ai provider=anthropic model=claude-sonnet-5 ms=1234 in=120 out=45 outcome=invalidRequest"
+    )
+    #expect(CredentialPatterns.matches(in: line).isEmpty)
 }
 ```
 

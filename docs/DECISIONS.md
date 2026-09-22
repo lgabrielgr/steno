@@ -3824,9 +3824,10 @@ harness.**
 **The deferral has an owner, not just a comment.** A note saying "nothing covers this today" is a
 bug filed against whoever reads it next and finds no one named, so M3-04's task file carries the
 work: `make verify-models`, a hidden `models-selftest` subcommand on the D-138 pattern, which
-executes the real adapter and prints the ranked list. It closes this *and* D-140's unconfirmed
-cursor field names in one target. Until then the check is a `curl`, written out in that task
-file.
+executes the real adapter and prints the ranked list. It covers this *and* re-checks the
+`/v1/models` shape that D-140 records as confirmed on 2026-09-22 — a one-off confirmation catches
+an error today, and only a repeatable one catches vendor drift tomorrow. Until the target exists,
+the check is a `curl`, written out in that task file.
 
 ### D-143 — Three new `AIError` cases, because the honest mapping needs them
 
