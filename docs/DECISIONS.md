@@ -3735,10 +3735,18 @@ it), and `limit=1000` returns 200 rather than rejecting. The response also carri
 `max_input_tokens`, `max_tokens` and nine further capability subtrees, all ignored — which is what
 the defensive `init(from:)` is for.
 
-**Still unconfirmed: `after_id` as the request parameter.** It was not exercised, because a
-single page answers every other question. If the name is wrong the API ignores it, page two
-repeats page one, and the `last != cursor` guard ends the loop — so the failure mode is duplicate
-entries in the picker, not a hang. M3-04's `make verify-models` walks it for real. Three conditions end the loop — no `has_more`, no
+**The cursor round-trip is confirmed too.** `?limit=3&after_id=claude-opus-5` returns a page
+beginning `claude-sonnet-5` — a different model from page one's first — so the parameter advances
+the window rather than being ignored. Nothing in the paging path now rests on documentation
+alone.
+
+That answer carries one more fact worth recording: **the account's model list contains a sonnet**,
+so D-140's ranking resolves to its intended tier on real data rather than falling through to
+haiku or to the unranked remainder. The ordering rule had until then only been exercised against
+fixtures the same decision authored.
+
+What no single call can settle is drift: a vendor may rename a field in a year. That is what
+M3-04's `make verify-models` is for — a repeatable check rather than a one-off. Three conditions end the loop — no `has_more`, no
 `last_id`, or a `last_id` equal to the cursor just used — plus a hard cap of 20 pages, because
 every one of those conditions depends on a field the vendor controls and a page that reported
 `has_more` forever would burn the user's budget instead of answering.

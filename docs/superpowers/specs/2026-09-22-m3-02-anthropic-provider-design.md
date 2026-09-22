@@ -384,12 +384,11 @@ Snippets in *this* document are signatures and JSON shapes, and are not the plan
    quiet degradation rather than a failure: the list is still complete, still fetched, and the
    user can still pick. The ranking is one pure function with one test file, which is the
    cheapest possible place to revise it.
-3. **The `/v1/models` response shape was confirmed against the live API on 2026-09-22**, after
-   review — `has_more`, `last_id`, `data[].{id, display_name, created_at}`,
-   `capabilities.structured_outputs.supported`, and `limit=1000` accepted. What remains
-   unconfirmed is `after_id` as the *request* parameter: a wrong name there means page two
-   repeats page one, the `last != cursor` guard ends the loop, and the picker shows duplicates
-   rather than hanging. M3-04's `make verify-models` walks a real multi-page fetch.
+3. **The `/v1/models` path was confirmed against the live API on 2026-09-22**, after review, and
+   this risk is closed: `has_more`, `last_id`, `data[].{id, display_name, created_at}`, the
+   `capabilities.structured_outputs.supported` nesting, `limit=1000` accepted, and `after_id`
+   advancing the window. The residue is drift, not error — a vendor can rename a field later, and
+   only a repeatable check catches that. M3-04's `make verify-models` is the repeatable check.
 4. **20 seconds is reasoned, not measured** (D-144). Nothing in this task can measure it, since
    the suite has no network. M3-03 is where a real draft is timed, and if the number is wrong
    it is one constant in the provider's config.
