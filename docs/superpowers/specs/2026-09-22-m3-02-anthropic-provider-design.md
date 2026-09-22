@@ -360,12 +360,41 @@ rank, return `.network` from the cancellation branch, drop the `has_more` loop, 
 test whose input is already in the expected order proves nothing, and a deadline test against a
 transport that answers immediately proves less.
 
-**Plan-phase rule:** the implementation plan's code blocks are generated from a built tree, not
+**Plan-phase rule:** the implementation plan's code blocks were generated from a built tree, not
 typed into the plan and type-checked standalone — including every `#expect` inside its macro.
-Snippets in *this* document are signatures and JSON shapes, and are not the plan's blocks.
+That rule is what made the plan worth writing, and it is also why the plan no longer exists in
+the repository: see "Why this task has no plan document" below. Snippets in *this* document are
+signatures and JSON shapes, and were never the plan's blocks.
 
 **Gates:** `make build && make test && make lint`, the mutation results in the PR body, and the
 `docs/tasks/README.md` row for M3-02 ticked (plus any earlier row that merged unticked).
+
+## Why this task has no plan document
+
+Every task from M0 onward has a sibling in `docs/superpowers/plans/`. This one does not, and the
+gap is a decision rather than an omission.
+
+The plan was written, and it did its job: generated from a tree that had already been built and
+tested — this repo's answer to plan snippets that type-check alone and then fail inside `#expect`
+— it caught four defects in this design before any of it was committed, including a claim about
+the schema that was simply false and a configuration field nothing would ever have read. That
+value is banked in the implementation.
+
+**What it could not do was stay true.** Review changed six files across several rounds, and each
+change meant regenerating 2,800 lines of embedded code and re-checking every claim the plan made
+about how the code was verified. Three review findings were about the plan drifting from the tree
+or from its own provenance note, and four more were the same fact corrected in one copy while its
+duplicates stood — with the plan, the spec, `DECISIONS.md` and the PR body each holding a version.
+A plan that duplicates a tree which now exists is a stale-claim generator, and its only reader
+would be someone implementing work that is already merged.
+
+So the plan was removed before merge and this spec is the surviving record of intent, with
+`DECISIONS.md` D-140 through D-146 holding the reasoning and the git history holding the order
+the work was done in.
+
+**This is not a precedent for skipping the plan.** Write it, build from it, let it find the
+defects — then decide whether a document whose reader has already finished the job is worth the
+cost of keeping honest.
 
 ## Out of scope
 
