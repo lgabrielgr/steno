@@ -24,7 +24,7 @@ public enum AIError: Error, Equatable, Sendable {
 
     /// The provider rejected the *request*: a 400 it would not parse, a 404 for
     /// a model id retired since the user picked it, or a 413 for a window too
-    /// large to send (D-143).
+    /// large to send (D-144).
     ///
     /// **Separate from `.providerUnavailable`, which is where the obvious
     /// mapping would put a 404.** These failures are ours, not Anthropic's, and

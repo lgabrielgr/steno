@@ -2,11 +2,11 @@ import Foundation
 
 @testable import StenoKit
 
-/// The D-142 test double: an `HTTPTransport` that answers from a script.
+/// The D-143 test double: an `HTTPTransport` that answers from a script.
 ///
 /// **Recording the request is half its job.** `make test` denies outbound IP
 /// (§9.4, D-012), so this is the only way to assert what the provider *sent* —
-/// that the body carries exactly D-141's five keys, that the schema arrives as
+/// that the body carries exactly D-142's five keys, that the schema arrives as
 /// the value M3-03 authored, that `x-api-key` is present, and that no request
 /// is made at all when the credential store is empty.
 ///

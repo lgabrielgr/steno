@@ -1,6 +1,6 @@
 import Foundation
 
-/// `AnthropicProvider`'s draft path: §7.3's call, D-144's retry, and the
+/// `AnthropicProvider`'s draft path: §7.3's call, D-145's retry, and the
 /// failure wrapper that keeps §8's token counts.
 ///
 /// **Split from the main file only because SwiftLint caps a file at 400 lines**
@@ -66,7 +66,7 @@ extension AnthropicProvider {
                     let response = try await Self.send(httpRequest, on: transport)
                     return try Self.draft(from: response.body, cadence: cadence, allowed: allowed)
                 } catch let error as AIError {
-                    // D-144: one retry, on 429/529/5xx only, and only when
+                    // D-145: one retry, on 429/529/5xx only, and only when
                     // `backoff + headroom` still fits in the budget. A
                     // `retry-after` that cannot fit fails immediately with
                     // `.rateLimited` so M3-03 can say something specific,
@@ -97,7 +97,7 @@ extension AnthropicProvider {
             // non-2xx, non-4xx status here, which includes the 3xx a custom
             // transport might surface without following it — and retrying a
             // redirect means sending the same POST twice for a response that
-            // will never change. D-144 permits a retry for 429, 529 and 5xx,
+            // will never change. D-145 permits a retry for 429, 529 and 5xx,
             // and this is that list rather than its enclosing case (PR #35
             // review).
             return configuration.retryBackoff
@@ -114,7 +114,7 @@ extension AnthropicProvider {
     ///
     /// **Internal to the draft path and never thrown past `generateStandup`.**
     /// A refusal, a truncation and a hallucinated id are all billed calls: the
-    /// API reports `usage` and then the draft fails. D-146 says the metrics
+    /// API reports `usage` and then the draft fails. D-147 says the metrics
     /// line keeps the token counts whenever the response carried them, and
     /// without this wrapper the catch has nothing to keep — it would record
     /// `nil` for the one class of failure that actually cost the user money
@@ -123,7 +123,7 @@ extension AnthropicProvider {
     /// `internal` rather than `private`, with `draft(from:cadence:allowed:)`,
     /// so that "the token counts survive the failure" is a test rather than a
     /// claim: `record` writes to the unified log and cannot be read back
-    /// in-process, so the only way to assert D-146's rule is to assert the
+    /// in-process, so the only way to assert D-147's rule is to assert the
     /// value the catch is handed.
     struct DraftFailure: Error {
         let error: AIError

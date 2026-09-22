@@ -3,7 +3,7 @@ import Testing
 
 @testable import StenoKit
 
-// D-140. The ranking is the whole of §7.1's "mid-tier default" and the whole of
+// D-141. The ranking is the whole of §7.1's "mid-tier default" and the whole of
 // its "not hardcoded", so it is tested as a pure function over inputs whose
 // order disagrees with the expected order — a fixture already sorted the way
 // the assertion expects proves only that `sorted(by:)` exists.
@@ -145,7 +145,7 @@ func capabilitiesDecodeFromTheWire() throws {
     let page = try JSONDecoder().decode(AnthropicModelsPage.self, from: Data(json.utf8))
 
     // Only an explicit `false` is a refusal; a missing or unrecognised shape
-    // says nothing, and D-140 drops nothing on "nothing".
+    // says nothing, and D-141 drops nothing on "nothing".
     #expect(page.data.map(\.supportsStructuredOutputs) == [false, true, nil, nil])
     // `display_name` falls back to the id rather than failing the page.
     #expect(page.data.map(\.displayName) == ["Model A", "Model B", "c", "d"])

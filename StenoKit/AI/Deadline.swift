@@ -1,11 +1,11 @@
 import Foundation
 
 /// Run `operation` against a wall clock, throwing `AIError.timedOut` if the
-/// clock wins (D-145).
+/// clock wins (D-146).
 ///
 /// **A wall clock, not `URLSession`'s request timeout.** §7.4's fallback waits
 /// on this: "if the API is slow, the user is standing in a meeting". The
-/// retry loop runs *inside* the deadline, which is what makes D-144's budget
+/// retry loop runs *inside* the deadline, which is what makes D-145's budget
 /// cover backoff rather than resetting it on the second attempt.
 ///
 /// **What this cannot do is return while the operation refuses to stop.**

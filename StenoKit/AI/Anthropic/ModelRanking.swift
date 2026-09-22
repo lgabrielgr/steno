@@ -1,7 +1,7 @@
 import Foundation
 
 /// §7.1's mid-tier default, chosen from a list that is fetched rather than
-/// compiled in (D-140).
+/// compiled in (D-141).
 ///
 /// §7.1 sets two rules that pull against each other: the list "must be fetched
 /// at runtime … not hardcoded", and the default should be "a mid-tier model …

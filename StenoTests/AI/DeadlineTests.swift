@@ -3,7 +3,7 @@ import Testing
 
 @testable import StenoKit
 
-// D-145. §7.4's fallback waits on this, so the two things asserted are that the
+// D-146. §7.4's fallback waits on this, so the two things asserted are that the
 // clock actually wins and that losing it is `.timedOut` — never `.network`.
 
 @Test("work that finishes inside the budget returns its value")

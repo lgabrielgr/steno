@@ -3,11 +3,11 @@ import Testing
 
 @testable import StenoKit
 
-// D-140 through D-146, end to end over `StubHTTPTransport`. `make test` denies
+// D-141 through D-147, end to end over `StubHTTPTransport`. `make test` denies
 // outbound IP (§9.4, D-012), so every assertion here is about what the provider
 // sent and what it made of what came back.
 
-// D-143 and D-141: what the provider sends, and what it makes of the answer.
+// D-144 and D-142: what the provider sends, and what it makes of the answer.
 
 // MARK: - Credentials
 
@@ -47,11 +47,11 @@ func requestsCarryTheirHeaders() async throws {
     #expect(sent.url.path.hasSuffix("/v1/models"))
 }
 
-// MARK: - The request body (D-141)
+// MARK: - The request body (D-142)
 
 @Test("the body carries exactly five keys, and no tuning parameters")
 func theBodyIsMinimal() async throws {
-    // D-141: the model id comes from a runtime list, so a parameter that 400s
+    // D-142: the model id comes from a runtime list, so a parameter that 400s
     // on one model would make that model unusable from a picker offering it.
     // Mutation: add `"temperature": 0` to the envelope. Red.
     let transport = StubHTTPTransport(answers: [.respond(AnthropicFixture.draftResponse())])
@@ -145,7 +145,7 @@ func theBodyIsDeterministic() async throws {
     #expect(String(bytes: body, encoding: .utf8) == expected)
 }
 
-// MARK: - The draft path (D-143)
+// MARK: - The draft path (D-144)
 
 @Test("a valid draft decodes and is returned")
 func aGoodResponseBecomesADraft() async throws {
@@ -288,7 +288,7 @@ func cancellationDoesNotEscapeTheContract() async {
 
 @Test("a refusal keeps the token counts it was billed for")
 func failedDraftsKeepTheirUsage() throws {
-    // D-146: the metrics line keeps the token counts whenever the response
+    // D-147: the metrics line keeps the token counts whenever the response
     // carried them. A refusal, a truncation and a hallucinated id are all
     // billed calls — the API reports `usage` and *then* the draft fails — so
     // recording `nil` would lose the numbers for the one class of failure that

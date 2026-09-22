@@ -3,10 +3,10 @@ import Testing
 
 @testable import StenoKit
 
-// D-144, D-145 and D-140: the budget §7.4 waits on, the retry that is worth
+// D-145, D-146 and D-141: the budget §7.4 waits on, the retry that is worth
 // one attempt, and the runtime model list §7.1 forbids compiling in.
 
-// MARK: - Budget and retries (D-144, D-145)
+// MARK: - Budget and retries (D-145, D-146)
 
 @Test("a transport that hangs loses the deadline, and it is not a network error")
 func aHangIsATimeout() async {
@@ -57,7 +57,7 @@ func onlyServerFailuresAreRetried() async {
     // `.providerUnavailable`, so gating the retry on the *case* retried 3xx
     // too — sending the same POST twice for a response no retry can change
     // (PR #35 review, found in code that had not changed since the first
-    // round). D-144's list is 429, 529 and 5xx.
+    // round). D-145's list is 429, 529 and 5xx.
     //
     // Mutation: gate on `case .providerUnavailable` without the status range.
     // Red on the request count.
@@ -113,7 +113,7 @@ func transportErrorsAreMapped() async {
     }
 }
 
-// MARK: - The model list (D-140)
+// MARK: - The model list (D-141)
 
 @Test("the list is fetched, ranked, and returned with the default first")
 func theListIsOrdered() async throws {
@@ -193,7 +193,7 @@ func anEmptyListIsLegitimate() async throws {
 
 @Test("the metrics line for a draft carries metadata and no payload")
 func theMetricsLineIsMetadataOnly() {
-    // D-146 emits one line per draft. `AIMetricsLog.line(for:)` is the string
+    // D-147 emits one line per draft. `AIMetricsLog.line(for:)` is the string
     // `record` writes, and `AISecretsTests` pins it character for character;
     // this asserts the values M3-02 supplies reach it.
     let metrics = AIRequestMetrics(

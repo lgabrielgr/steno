@@ -1,6 +1,6 @@
 import Foundation
 
-/// Every vendor failure, mapped onto `AIError` and nothing else (D-143).
+/// Every vendor failure, mapped onto `AIError` and nothing else (D-144).
 ///
 /// **Pure functions over a status code and a header dictionary.** No response
 /// body reaches this file, which is what makes §8's "never full payloads" a
@@ -37,7 +37,7 @@ enum AnthropicErrors {
     /// Map an error thrown by the transport itself.
     ///
     /// `URLError.cancelled` is `.timedOut`, not `.network`: the only thing that
-    /// cancels a request in this module is `withDeadline` (D-145), and telling
+    /// cancels a request in this module is `withDeadline` (D-146), and telling
     /// a user with a working connection that they are offline sends them to fix
     /// the wrong thing.
     static func error(forTransport error: any Error) -> AIError {
@@ -59,7 +59,7 @@ enum AnthropicErrors {
     ///
     /// The HTTP-date form is ignored rather than parsed. It would need a
     /// formatter and a clock to become a `Duration`, and this header's only
-    /// consumer is D-144's retry gate, which treats a missing value as "use the
+    /// consumer is D-145's retry gate, which treats a missing value as "use the
     /// default backoff" — a correct outcome for a header shape this API does
     /// not use in practice.
     static func retryAfter(in headers: [String: String]) -> Duration? {
