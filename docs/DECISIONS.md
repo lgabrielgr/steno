@@ -3763,10 +3763,13 @@ haiku or to the unranked remainder. The ordering rule had until then only been e
 fixtures the same decision authored.
 
 What no single call can settle is drift: a vendor may rename a field in a year. That is what
-M3-04's `make verify-models` is for — a repeatable check rather than a one-off. Three conditions end the loop — no `has_more`, no
-`last_id`, or a `last_id` equal to the cursor just used — plus a hard cap of 20 pages, because
-every one of those conditions depends on a field the vendor controls and a page that reported
-`has_more` forever would burn the user's budget instead of answering.
+M3-04's `make verify-models` is for — a repeatable check rather than a one-off.
+
+Three conditions end the loop — no `has_more`, no `last_id`, or a `last_id` equal to the cursor
+just used. **There is no page cap; the settings deadline is the only other bound**, which is why
+the loop checks cancellation (see the amendment above). Every one of those three conditions
+depends on a field the vendor controls, so a page reporting `has_more` forever ends as
+`.timedOut` rather than as a short list presented as the whole truth.
 
 **Rejected: a preferred-ID hint list.** Precise today, stale on exactly the schedule §7.1 warns
 about, and a reviewer meeting `claude-sonnet-5` in the source cannot tell from the line whether

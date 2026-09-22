@@ -169,12 +169,16 @@ error mapping over `(status, headers)` is a pure function — which is what make
 table in D-143 a table test rather than a fixture exercise. `URLSessionTransport` is where
 `URLRequest` gets built and is the only place Foundation's networking types appear.
 
-**`URLSessionTransport` is deliberately not covered.** It is a ~30-line adapter with no branch
-except the `as? HTTPURLResponse` cast. Covering it means a `URLProtocol` stub, which needs a
-process-global registry, `@unchecked Sendable`, and careful ordering under parallel Swift
-Testing runs — real machinery, standing between the suite and a file whose only untested
-behaviour is "Foundation does what Foundation does". The risk is accepted and recorded in
-"Risks".
+**`URLSessionTransport.send` is deliberately not covered.** Its only branch is the
+`as? HTTPURLResponse` cast; the rest copies fields onto a `URLRequest` and back off an
+`HTTPURLResponse`. Covering it means a `URLProtocol` stub, which needs a process-global
+registry, `@unchecked Sendable`, and careful ordering under parallel Swift Testing runs — real
+machinery, standing between the suite and a file whose only untested behaviour is "Foundation
+does what Foundation does". The risk is accepted and recorded in "Risks".
+
+**The file itself is not uncovered**, and is ~90 lines rather than the ~30 this design first
+estimated: review added `RedirectBlocker`, which refuses every redirect so that `x-api-key`
+never follows one, and that *is* tested. D-142 carries the reasoning.
 
 ## D-143 — Three new error cases, because the honest mapping needs them
 
