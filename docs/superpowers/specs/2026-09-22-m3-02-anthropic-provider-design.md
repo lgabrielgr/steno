@@ -388,7 +388,9 @@ Snippets in *this* document are signatures and JSON shapes, and are not the plan
    this risk is closed: `has_more`, `last_id`, `data[].{id, display_name, created_at}`, the
    `capabilities.structured_outputs.supported` nesting, `limit=1000` accepted, and `after_id`
    advancing the window. The residue is drift, not error — a vendor can rename a field later, and
-   only a repeatable check catches that. M3-04's `make verify-models` is the repeatable check.
+   only a repeatable check catches that. M3-04's `make verify-models` is the repeatable check,
+   and `ModelRanking.ordered` dedupes by id so that a future paging change costs at worst a short
+   list rather than a picker with the same model in it twice.
 4. **20 seconds is reasoned, not measured** (D-144). Nothing in this task can measure it, since
    the suite has no network. M3-03 is where a real draft is timed, and if the number is wrong
    it is one constant in the provider's config.

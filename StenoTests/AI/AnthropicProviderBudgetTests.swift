@@ -120,12 +120,19 @@ func pagingFollowsTheCursor() async throws {
     #expect(second.url.query?.contains("after_id=claude-opus-5") == true)
 }
 
-@Test("a page that repeats its cursor ends the loop instead of spinning")
+@Test("a page that repeats its cursor ends the loop and offers no duplicate")
 func aRepeatedCursorTerminates() async throws {
-    // Every termination condition depends on a field the vendor controls. A
-    // page that reports `has_more` forever would otherwise burn the user's
-    // budget instead of answering. Mutation: drop the `last != cursor` guard.
-    // Red — the run hangs to the page cap and the count assertion fails.
+    // Two separate properties, and the first version of this test asserted the
+    // defect as if it were the second. Every termination condition depends on a
+    // field the vendor controls, so a page reporting `has_more` forever would
+    // burn the user's budget instead of answering — the cursor guard stops that
+    // after two requests. But the loop appends each page *before* it can know
+    // the page repeats, so stopping the loop does not un-append: this asserted
+    // `models.count == 2` and pinned a duplicated picker entry as intended
+    // behaviour (PR #35 review). `ModelRanking.ordered` now dedupes by id.
+    //
+    // Mutations: drop the `last != cursor` guard (red on the request count);
+    // drop the `seen.insert` filter (red on the model list).
     let repeated = AnthropicFixture.modelsResponse(
         ids: ["claude-sonnet-5"], hasMore: true, lastID: "cursor")
     let transport = StubHTTPTransport(
@@ -134,7 +141,7 @@ func aRepeatedCursorTerminates() async throws {
 
     let models = try await AnthropicFixture.provider(transport).availableModels()
 
-    #expect(models.count == 2)
+    #expect(models.map(\.id) == ["claude-sonnet-5"])
     #expect(await transport.received.count == 2)
 }
 

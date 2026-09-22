@@ -95,6 +95,24 @@ func rankingIsIndependentOfInputOrder() {
         ModelRanking.ordered(models).map(\.id) == ModelRanking.ordered(models.reversed()).map(\.id))
 }
 
+@Test("a model offered twice is listed once")
+func duplicatesAreCollapsed() {
+    // Overlapping pages are a thing cursor schemes do, and the provider's loop
+    // cannot un-append a page it has already collected. The picker must not
+    // offer the same model twice (PR #35 review).
+    //
+    // The two records differ in `display_name` so the assertion also says
+    // *which* survives: the first seen, taken before the sort.
+    let ordered = ModelRanking.ordered([
+        model("claude-sonnet-5", created: "2026-01-01T00:00:00Z"),
+        AnthropicModel(id: "claude-sonnet-5", displayName: "A Later Page"),
+        model("claude-haiku-4-5", created: "2025-10-01T00:00:00Z"),
+    ])
+
+    #expect(ordered.map(\.id) == ["claude-sonnet-5", "claude-haiku-4-5"])
+    #expect(ordered.first?.displayName == "claude-sonnet-5")
+}
+
 @Test("a timestamp with fractional seconds still parses")
 func timestampsToleratePrecision() {
     // Two formatters, because `ISO8601DateFormatter` fails outright on

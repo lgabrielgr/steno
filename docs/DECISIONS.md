@@ -3727,6 +3727,13 @@ nothing — a vendor response that renames a field must not empty the user's pic
 **Paging** follows the Models endpoint's `after_id` cursor scheme, requesting `limit=1000` and
 re-requesting while `has_more` is true.
 
+**The result is deduplicated by id** (added in review, PR #35). The loop appends a page before it
+can know the page repeats, so the cursor guard stops the *loop* without un-appending what it has
+already collected — and a picker offering the same model twice is a defect the guard looks like
+it prevents and does not. `ModelRanking.ordered` takes the first occurrence, before the sort.
+This also covers the overlapping pages a cursor scheme is allowed to return, which no guard on
+the cursor value would catch at all.
+
 **Confirmed against the live API on 2026-09-22**, which `make test` cannot do (§9.4): `has_more`
 and `last_id` are top-level as decoded, `data[]` carries `id`, `display_name` and `created_at`,
 `capabilities.structured_outputs.supported` nests exactly as `AnthropicCapabilities` expects, a
@@ -3738,7 +3745,8 @@ the defensive `init(from:)` is for.
 **The cursor round-trip is confirmed too.** `?limit=3&after_id=claude-opus-5` returns a page
 beginning `claude-sonnet-5` — a different model from page one's first — so the parameter advances
 the window rather than being ignored. Nothing in the paging path now rests on documentation
-alone.
+alone. (That confirmation is what made the duplicate above hypothetical rather than live; the
+dedupe is there because "hypothetical today" is not a property the next API version preserves.)
 
 That answer carries one more fact worth recording: **the account's model list contains a sonnet**,
 so D-140's ranking resolves to its intended tier on real data rather than falling through to

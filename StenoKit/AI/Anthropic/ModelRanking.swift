@@ -22,9 +22,22 @@ import Foundation
 /// strings puts `claude-sonnet-10` below `claude-sonnet-5`.
 enum ModelRanking {
     /// Rank, filter, and map one fetched page-set into what §7.1's picker shows.
+    ///
+    /// **Deduplicated by id, because paging can hand the same model twice.**
+    /// The provider's loop appends a page before it can know the page repeats —
+    /// so if the API ignores `after_id`, or simply returns overlapping pages as
+    /// cursor schemes are allowed to, the picker would offer the same model
+    /// twice. The cursor guard upstream stops the *loop*; it cannot un-append
+    /// what it has already collected (PR #35 review).
+    ///
+    /// First occurrence wins, and it is taken before the sort, so "first" means
+    /// the earlier page rather than something the ordering decided.
     static func ordered(_ models: [AnthropicModel]) -> [AIModel] {
-        models
+        var seen: Set<String> = []
+        return
+            models
             .filter { $0.supportsStructuredOutputs != false }
+            .filter { seen.insert($0.id).inserted }
             .sorted(by: precedes)
             .map { AIModel(id: $0.id, displayName: $0.displayName) }
     }

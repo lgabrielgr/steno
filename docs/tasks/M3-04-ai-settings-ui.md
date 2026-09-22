@@ -53,8 +53,8 @@ model picker, and a working "Test connection".
     `last_id`, the three `data[]` fields, the `structured_outputs` nesting, `limit=1000`, and
     `after_id` advancing the window are each verified against the live API. What a one-off check
     cannot cover is drift: a renamed field a year from now fails silently, and the paging loop's
-    guards turn that into duplicates or a short list rather than an error. A repeatable target is
-    the point.
+    guards turn that into a short list rather than an error (duplicates are handled — the ranking
+    dedupes by id). A repeatable target is the point.
 
   A `models-selftest` subcommand that reads the stored key, calls `availableModels()`, and prints
   the ranked list closes both: it exercises the real transport end to end and prints enough to
