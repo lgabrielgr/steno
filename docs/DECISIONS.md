@@ -3725,7 +3725,20 @@ such a model would fail every draft. A missing or unrecognised `capabilities` sh
 nothing — a vendor response that renames a field must not empty the user's picker.
 
 **Paging** follows the Models endpoint's `after_id` cursor scheme, requesting `limit=1000` and
-re-requesting while `has_more` is true. Three conditions end the loop — no `has_more`, no
+re-requesting while `has_more` is true.
+
+**Confirmed against the live API on 2026-09-22**, which `make test` cannot do (§9.4): `has_more`
+and `last_id` are top-level as decoded, `data[]` carries `id`, `display_name` and `created_at`,
+`capabilities.structured_outputs.supported` nests exactly as `AnthropicCapabilities` expects, a
+timestamp arrives as `2026-09-21T16:24:00Z` (no fractional seconds, so the first formatter takes
+it), and `limit=1000` returns 200 rather than rejecting. The response also carries `type`,
+`max_input_tokens`, `max_tokens` and nine further capability subtrees, all ignored — which is what
+the defensive `init(from:)` is for.
+
+**Still unconfirmed: `after_id` as the request parameter.** It was not exercised, because a
+single page answers every other question. If the name is wrong the API ignores it, page two
+repeats page one, and the `last != cursor` guard ends the loop — so the failure mode is duplicate
+entries in the picker, not a hang. M3-04's `make verify-models` walks it for real. Three conditions end the loop — no `has_more`, no
 `last_id`, or a `last_id` equal to the cursor just used — plus a hard cap of 20 pages, because
 every one of those conditions depends on a field the vendor controls and a page that reported
 `has_more` forever would burn the user's budget instead of answering.

@@ -49,17 +49,19 @@ model picker, and a working "Test connection".
   - **`URLSessionTransport` has no test at all** (D-142). Its only untested behaviour is
     "Foundation does what Foundation does", so a `URLProtocol` harness was judged not worth its
     cost — but that leaves the real adapter first executed by a human in this task.
-  - **The `/v1/models` cursor field names came from documentation, not a live call.**
-    `after_id` / `has_more` / `last_id` is the Models endpoint's scheme, and the paging loop is
-    written to terminate on anything it does not recognise rather than spin. Nothing has
-    confirmed it against the API.
+  - **One page of `/v1/models` was confirmed by hand on 2026-09-22; a multi-page walk was not.**
+    `has_more`, `last_id`, the three `data[]` fields and the `structured_outputs` nesting are all
+    verified, and `limit=1000` returns 200. `after_id` — the *request* parameter that drives the
+    loop — has never been sent. If its name is wrong the API ignores it, page two repeats page
+    one, and the `last != cursor` guard stops the loop, so the symptom is duplicates in the
+    picker rather than a hang.
 
   A `models-selftest` subcommand that reads the stored key, calls `availableModels()`, and prints
   the ranked list closes both: it exercises the real transport end to end and prints enough to
   check D-140's ordering against what the API actually returns. Model it on
   `KeychainSelftest` — hidden from `CLIUsage.text`, handled before the store opens.
 
-  **Until it exists, the check is manual:**
+  **Until it exists, the single-page check is manual:**
 
   ```
   curl -s "https://api.anthropic.com/v1/models?limit=3" \
