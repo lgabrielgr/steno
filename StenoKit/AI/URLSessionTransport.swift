@@ -2,7 +2,7 @@ import Foundation
 
 /// The one place in this module where Foundation's networking types appear.
 ///
-/// **`send` is deliberately uncovered by `make test`** (D-142) — though
+/// **`send` is deliberately uncovered by `make test`** (D-143) — though
 /// `RedirectBlocker`, below, is not. Its only branch is the
 /// `as? HTTPURLResponse` cast, and covering it means a `URLProtocol`
 /// stub — a process-global registry, `@unchecked Sendable`, and ordering care
@@ -19,7 +19,7 @@ public struct URLSessionTransport: HTTPTransport {
 
     /// **No timeout is set on the session**, and that is not an omission.
     /// `URLSessionConfiguration.timeoutIntervalForRequest` is an inactivity
-    /// timer that can outlast any budget while bytes trickle; D-144's budget is
+    /// timer that can outlast any budget while bytes trickle; D-145's budget is
     /// a wall clock, and `withDeadline` is what enforces it.
     public init(session: URLSession = .shared) {
         self.session = session
@@ -70,7 +70,7 @@ public struct URLSessionTransport: HTTPTransport {
 ///
 /// Returning `nil` from this delegate method hands the 3xx back as the
 /// response rather than chasing it, which is why `AnthropicErrors` maps a
-/// redirect to `.providerUnavailable(status:)` — and why D-144's retry gate
+/// redirect to `.providerUnavailable(status:)` — and why D-145's retry gate
 /// checks for 5xx rather than matching that case, so the request is not
 /// repeated either.
 ///

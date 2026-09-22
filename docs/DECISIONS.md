@@ -3688,7 +3688,7 @@ experience rather than pre-empted.
 the first two red, re-gating `canBackUpNow` on `isEnabled` turns the fourth red, and dropping its
 store gate turns the fifth red.
 
-### D-140 — The model list is returned ordered, and element zero is the default
+### D-141 — The model list is returned ordered, and element zero is the default
 
 §7.1 sets two rules that pull against each other. The list "must be fetched at runtime via the
 Anthropic `/v1/models` endpoint, not hardcoded", and the default selection should be "a mid-tier
@@ -3758,7 +3758,7 @@ alone. (That confirmation is what made the duplicate above hypothetical rather t
 dedupe is there because "hypothetical today" is not a property the next API version preserves.)
 
 That answer carries one more fact worth recording: **the account's model list contains a sonnet**,
-so D-140's ranking resolves to its intended tier on real data rather than falling through to
+so D-141's ranking resolves to its intended tier on real data rather than falling through to
 haiku or to the unranked remainder. The ordering rule had until then only been exercised against
 fixtures the same decision authored.
 
@@ -3782,7 +3782,7 @@ order, and the recency case uses `claude-sonnet-10` against `claude-sonnet-5`, w
 sort gets backwards. Confirmed by mutation: inverting `familyRank`'s sonnet return turns three
 tests red across two files.
 
-### D-141 — The minimal request body, because the user picks the model
+### D-142 — The minimal request body, because the user picks the model
 
 The model id is whatever the user chose from a runtime list, so the provider cannot assume which
 parameters that model accepts. The current API is full of parameters that are fine on one model
@@ -3812,7 +3812,7 @@ That is not a defect in M3-01's type, which exists "where a provider's API wants
 `theSchemaIsTransmittedWhole`, `aBrokenSchemaIsCaughtLocally` (which also asserts nothing was
 sent), and `theBodyIsDeterministic`.
 
-### D-142 — `HTTPTransport` over value types, not `URLProtocol` and not `URLSession`
+### D-143 — `HTTPTransport` over value types, not `URLProtocol` and not `URLSession`
 
 `make test` denies outbound IP entirely (D-012), so every test of this provider runs against a
 double. The seam is a one-method protocol over plain `HTTPRequest`/`HTTPResponse` values, which
@@ -3822,7 +3822,7 @@ login keychain, `StubFilePanels` so tests never open an `NSOpenPanel`.
 **Values rather than `URLRequest`/`HTTPURLResponse`**, for two reasons. `HTTPURLResponse` is a
 Foundation class whose `Sendable` status is a poor thing to bet a Swift 6 module on, and — more
 usefully — error mapping over `(status, headers)` is then a pure function, which is what makes
-D-143's table a table test rather than a fixture exercise.
+D-144's table a table test rather than a fixture exercise.
 
 **Header names are lowercased by the initializers, not by a doc comment** (amended in review,
 PR #35). Both types *said* their keys were lowercased and neither enforced it, while
@@ -3835,7 +3835,7 @@ now runs in both initializers.
 **The transport must be cancellation-aware, and that is a contract rather than an enforcement.**
 `withDeadline` cancels the operation and returns, but Swift cancellation is cooperative and a
 task group awaits its children — so a transport ignoring cancellation keeps the deadline blocked
-past D-144's budget and §7.4's fallback arrives late. `URLSession` honours it. Making the
+past D-145's budget and §7.4's fallback arrives late. `URLSession` honours it. Making the
 deadline return regardless would mean abandoning a live task, trading a late answer for a leaked
 request, so `HTTPTransport.send` carries the requirement in its doc comment and `DeadlineTests`
 pins that the error stays `.timedOut` even when an operation refuses to stop.
@@ -3844,13 +3844,13 @@ pins that the error stays `.timedOut` even when an operation refuses to stop.
 PR #35). `URLSession` follows redirects by default and carries custom headers across them, so a
 302 to another host — or to plain HTTP — would re-send `x-api-key` to wherever it pointed.
 `RedirectBlocker` returns `nil` from `willPerformHTTPRedirection`, which hands the 3xx back as the
-response instead of chasing it; D-143 then maps it to `.providerUnavailable(status:)` and D-144's
+response instead of chasing it; D-144 then maps it to `.providerUnavailable(status:)` and D-145's
 5xx gate keeps it from being retried. Refusing every redirect is blunt and correct here: this
 module talks to one endpoint, and a redirect from it is already something to distrust.
 
 **What remains uncovered is `send` itself, deliberately.** Its only branch is the
 `as? HTTPURLResponse` cast; the rest is copying fields onto a `URLRequest` and back off an
-`HTTPURLResponse`. The redirect delegate the file now also owns *is* tested — D-142's own rule
+`HTTPURLResponse`. The redirect delegate the file now also owns *is* tested — D-143's own rule
 ("if that file grows a branch, it needs a test") honoured rather than waived, and the reason the
 file is 90 lines rather than the 30 this decision first described. Covering it means a `URLProtocol` stub — a process-global
 registry, `@unchecked Sendable`, and ordering care under parallel Swift Testing runs — standing
@@ -3862,11 +3862,11 @@ harness.**
 bug filed against whoever reads it next and finds no one named, so M3-04's task file carries the
 work: `make verify-models`, a hidden `models-selftest` subcommand on the D-138 pattern, which
 executes the real adapter and prints the ranked list. It covers this *and* re-checks the
-`/v1/models` shape that D-140 records as confirmed on 2026-09-22 — a one-off confirmation catches
+`/v1/models` shape that D-141 records as confirmed on 2026-09-22 — a one-off confirmation catches
 an error today, and only a repeatable one catches vendor drift tomorrow. Until the target exists,
 the check is a `curl`, written out in that task file.
 
-### D-143 — Three new `AIError` cases, because the honest mapping needs them
+### D-144 — Three new `AIError` cases, because the honest mapping needs them
 
 `AIError` (D-132) had no case for a request the provider rejects as malformed, and none for a
 response that arrived intact but says the model declined or ran out of room. Added:
@@ -3879,7 +3879,7 @@ response that arrived intact but says the model declined or ran out of room. Add
 | 500, 529, any other 5xx | `.providerUnavailable(status:)` |
 | 400, 404, 413, any other 4xx | `.invalidRequest` |
 | `URLError` — offline, DNS, TLS | `.network` |
-| deadline lost, `URLError.cancelled` | `.timedOut` (D-145) |
+| deadline lost, `URLError.cancelled` | `.timedOut` (D-146) |
 | no credential stored | `.notConfigured` |
 | `stop_reason: "refusal"` | `.invalidResponse(.refused)` |
 | `stop_reason: "max_tokens"` | `.invalidResponse(.truncated)` |
@@ -3912,7 +3912,7 @@ prints the protocol. No version bump.
 existing audit — whose label count assertion rose from 8 to 9 and would otherwise have let a new
 case join the enum and skip every check in the file.
 
-### D-144 — 20 seconds for a draft, 10 for the two Settings calls
+### D-145 — 20 seconds for a draft, 10 for the two Settings calls
 
 M3-02's task file is explicit that this is the decision it owes M3-03: "if the API is slow, the
 user is standing in a meeting; §7.4's fallback must engage promptly rather than after a long
@@ -3962,11 +3962,11 @@ real draft; if the number is wrong it is one constant.
 well as the error. Confirmed by mutation: returning `nil` from `backoff(for:)` for
 `.providerUnavailable` turns `overloadIsRetried` red.
 
-### D-145 — The deadline races the work, and losing it is `.timedOut`
+### D-146 — The deadline races the work, and losing it is `.timedOut`
 
 `withDeadline` runs the operation against `Task.sleep` in a throwing task group; the first result
 wins and the loser is cancelled. The retry loop runs *inside* the deadline, which is what makes
-D-144's budget cover the backoff rather than resetting on the second attempt.
+D-145's budget cover the backoff rather than resetting on the second attempt.
 
 **The subtle part is which error the loser throws.** Cancelling an in-flight `URLSession` task
 surfaces as `URLError.cancelled`, which sits in the same error domain as the genuine
@@ -3991,7 +3991,7 @@ own, so it fails the moment `withDeadline` stops mapping. Confirmed by mutation:
 `URLError` branch to `.network` turns the first red, and removing `withDeadline`'s
 `catch is CancellationError` turns the third red.
 
-### D-146 — Only `generateStandup` emits §8's metrics line
+### D-147 — Only `generateStandup` emits §8's metrics line
 
 `AIRequestMetrics` requires a `modelID`, and §8 asks for "token counts, latency, model". A model
 list has no model and no token usage; a connection test has neither. Emitting a line for them

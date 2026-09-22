@@ -23,7 +23,7 @@ mutation-tested audits.
 
 ## What this task decides
 
-Seven things §7.1 leaves open. Each gets a `DECISIONS.md` entry, D-140 through D-146.
+Seven things §7.1 leaves open. Each gets a `DECISIONS.md` entry, D-141 through D-147.
 
 | Question | Decision |
 |---|---|
@@ -43,7 +43,7 @@ amendment in this same PR, not a silent divergence (CLAUDE.md).
 
 ---
 
-## D-140 — The model list is returned ordered, and the first element is the default
+## D-141 — The model list is returned ordered, and the first element is the default
 
 §7.1 sets two rules that pull against each other. The list "must be fetched at runtime via the
 Anthropic `/v1/models` endpoint, not hardcoded", and the default selection should be "a
@@ -103,7 +103,7 @@ meaningless, since the current models nearly all report 1M/128K, which makes the
 arbitrary. **Rejected: no default at all** — it implements §7.1's sentence by ignoring it, and
 leaves first run with a picker and no selection.
 
-## D-141 — The minimal request body, because the user picks the model
+## D-142 — The minimal request body, because the user picks the model
 
 The model ID is whatever the user chose from a runtime list, so the provider cannot assume which
 parameters that model accepts. The current API is full of parameters that are fine on one model
@@ -132,7 +132,7 @@ Headers: `x-api-key`, `anthropic-version: 2023-06-01`, `content-type: applicatio
 
 A parameter that 400s on one model would make that model unusable from a picker that offers it,
 with an error the user cannot act on. The tuning those parameters buy is not worth that: the
-workload is summarizing a factual log, and D-140 already defaults to the tier that does it
+workload is summarizing a factual log, and D-141 already defaults to the tier that does it
 cheaply.
 
 `AIOutputSchema.name` is unused by this provider — Anthropic's `json_schema` format takes a
@@ -146,7 +146,7 @@ breakable of the two. The parse is also what catches a schema that is not a JSON
 before a network call. Body keys are sorted, because `JSONSerialization`'s unsorted order is hash
 order and differs between processes — which would make a body assertion flake.
 
-## D-142 — `HTTPTransport` over value types, not `URLProtocol` and not `URLSession`
+## D-143 — `HTTPTransport` over value types, not `URLProtocol` and not `URLSession`
 
 `make test` denies outbound IP entirely (D-012), so every test of this provider runs against a
 double. The seam is a one-method protocol the provider depends on:
@@ -166,7 +166,7 @@ tests never touch the login keychain, `StubFilePanels` so tests never open an `N
 **Plain values rather than `URLRequest`/`HTTPURLResponse`**, for two reasons. `HTTPURLResponse`
 is a Foundation class whose `Sendable` status is a poor thing to bet a Swift 6 module on, and
 error mapping over `(status, headers)` is a pure function — which is what makes the whole mapping
-table in D-143 a table test rather than a fixture exercise. `URLSessionTransport` is where
+table in D-144 a table test rather than a fixture exercise. `URLSessionTransport` is where
 `URLRequest` gets built and is the only place Foundation's networking types appear.
 
 **`URLSessionTransport.send` is deliberately not covered.** Its only branch is the
@@ -178,9 +178,9 @@ does what Foundation does". The risk is accepted and recorded in "Risks".
 
 **The file itself is not uncovered**, and is ~90 lines rather than the ~30 this design first
 estimated: review added `RedirectBlocker`, which refuses every redirect so that `x-api-key`
-never follows one, and that *is* tested. D-142 carries the reasoning.
+never follows one, and that *is* tested. D-143 carries the reasoning.
 
-## D-143 — Three new error cases, because the honest mapping needs them
+## D-144 — Three new error cases, because the honest mapping needs them
 
 `AIError` (D-132) has no case for a request the provider rejects as malformed, and no case for a
 response that arrived intact but says the model declined or ran out of room. Three additions:
@@ -204,7 +204,7 @@ Full mapping:
 | 500, 529, any other 5xx | `.providerUnavailable(status:)` |
 | 400, 404, 413, any other 4xx | `.invalidRequest` |
 | `URLError` — offline, DNS, TLS, connection lost | `.network` |
-| deadline lost, `URLError.cancelled` | `.timedOut` (D-145) |
+| deadline lost, `URLError.cancelled` | `.timedOut` (D-146) |
 | no credential in the store | `.notConfigured` |
 | `stop_reason: "refusal"` | `.invalidResponse(.refused)` |
 | `stop_reason: "max_tokens"` | `.invalidResponse(.truncated)` |
@@ -229,7 +229,7 @@ This extends a decision record; §7.1 prints the protocol, not the error type, s
 is unchanged. `metricsLabel` and `errorDescription` grow the matching arms, and `AIError`'s
 existing exhaustiveness tests grow with them.
 
-## D-144 — 20 seconds for a draft, 10 for the Settings calls
+## D-145 — 20 seconds for a draft, 10 for the Settings calls
 
 The task file is explicit that this is the decision M3-02 owes M3-03: "If the API is slow, the
 user is standing in a meeting; §7.4's fallback must engage promptly rather than after a long
@@ -263,7 +263,7 @@ who clicked "Test connection" is watching, and a fast honest `.network` beats a 
 `StandupRequest.timeout` stays caller-supplied, as M3-01 designed it. This task supplies the
 value as a documented constant on the provider's config, which M3-03 passes.
 
-## D-145 — The deadline races the work, and losing it is `.timedOut`
+## D-146 — The deadline races the work, and losing it is `.timedOut`
 
 ```swift
 func withDeadline<T: Sendable>(
@@ -284,7 +284,7 @@ So cancellation is disambiguated by the deadline that caused it, not by inspecti
 the deadline branch throws `.timedOut`, and `URLError.cancelled` arriving through the operation
 branch maps to `.timedOut` as well, since nothing else in this provider cancels.
 
-## D-146 — Only `generateStandup` emits §8's metrics line
+## D-147 — Only `generateStandup` emits §8's metrics line
 
 `AIRequestMetrics` requires a `modelID`, and §8 asks for "token counts, latency, model". A model
 list has no model and no token usage; a connection test has neither either. Emitting a line for
@@ -304,22 +304,22 @@ log line even on the error branches.
 
 ```
 StenoKit/AI/
-  HTTPTransport.swift             protocol + HTTPRequest/HTTPResponse values (D-142)
-  URLSessionTransport.swift       the adapter; the one place URLRequest exists (D-142)
-  Deadline.swift                  withDeadline (D-145)
-  AIProvider.swift                availableModels() ordering contract added to the doc (D-140)
-  AIError.swift                   + .invalidRequest, .refused, .truncated, labels (D-143)
+  HTTPTransport.swift             protocol + HTTPRequest/HTTPResponse values (D-143)
+  URLSessionTransport.swift       the adapter; the one place URLRequest exists (D-143)
+  Deadline.swift                  withDeadline (D-146)
+  AIProvider.swift                availableModels() ordering contract added to the doc (D-141)
+  AIError.swift                   + .invalidRequest, .refused, .truncated, labels (D-144)
   Anthropic/
     AnthropicProvider.swift       the conformance: auth, the model list, plumbing
-    AnthropicProvider+Draft.swift §7.3's call, D-144's retry, DraftFailure — its own
+    AnthropicProvider+Draft.swift §7.3's call, D-145's retry, DraftFailure — its own
                                   file because SwiftLint caps one at 400 lines
     AnthropicWire.swift           request builders + the internal Codable response types
-                                  (D-141). Named `Anthropic*` at file scope rather than nested,
+                                  (D-142). Named `Anthropic*` at file scope rather than nested,
                                   because each needs its own CodingKeys and SwiftLint caps
                                   nesting at one level. No type for the API's error envelope:
                                   its `message` can quote the request (§8).
-    AnthropicErrors.swift         status + URLError -> AIError, pure (D-143)
-    ModelRanking.swift            ordered(_:) -> [AIModel], pure (D-140)
+    AnthropicErrors.swift         status + URLError -> AIError, pure (D-144)
+    ModelRanking.swift            ordered(_:) -> [AIModel], pure (D-141)
 
 StenoTests/AI/
   StubHTTPTransport.swift         scripted responses, recorded requests
@@ -340,13 +340,13 @@ constructs it); no signature on it mentions a wire type, which is the acceptance
 
 **The transport double** scripts a queue of `HTTPResponse`s or thrown `URLError`s, records every
 `HTTPRequest` it received, and can hold before answering so the deadline is exercised. Recording
-the request is what makes the §8 and D-141 assertions possible — that the body contains exactly
+the request is what makes the §8 and D-142 assertions possible — that the body contains exactly
 five keys, that the schema arrives as the value M3-03 authored, that `x-api-key` is present, and that no request
 is sent at all when the store holds no credential.
 
 | Area | What is asserted |
 |---|---|
-| Error mapping | A table over every row of D-143's table, including `retry-after` present / absent / non-integer |
+| Error mapping | A table over every row of D-144's table, including `retry-after` present / absent / non-integer |
 | Ranking | Input order disagrees with expected order; recency within a family; haiku above opus; `structured_outputs: false` dropped; unknown `capabilities` shape drops nothing; paging accumulates across two pages |
 | Budget | A held transport loses the deadline and throws `.timedOut`, not `.network`; a 529 retries once and succeeds; a 400 retries zero times; a `retry-after` longer than the budget fails immediately |
 | Draft path | §7.3's literal JSON decodes; a hallucinated `task_id` throws `.unknownTaskIDs`; `stop_reason: refusal` and `max_tokens` map to their reasons |
@@ -389,7 +389,7 @@ A plan that duplicates a tree which now exists is a stale-claim generator, and i
 would be someone implementing work that is already merged.
 
 So the plan was removed before merge and this spec is the surviving record of intent, with
-`DECISIONS.md` D-140 through D-146 holding the reasoning and the git history holding the order
+`DECISIONS.md` D-141 through D-147 holding the reasoning and the git history holding the order
 the work was done in.
 
 **This is not a precedent for skipping the plan.** Write it, build from it, let it find the
@@ -405,16 +405,16 @@ cost of keeping honest.
 - **Settings UI** — M3-04. The ordered list and `testConnection`'s two distinguishable failures
   are what this task owes it.
 - **Streaming.** Nothing in §7 needs it (task file); the draft is short and appears at once.
-- **Prompt caching, `thinking`, `effort`, batch.** D-141.
+- **Prompt caching, `thinking`, `effort`, batch.** D-142.
 - **A second provider.** §7.1's abstraction is exercised by this one plus `StubAIProvider`.
 
 ## Risks
 
-1. **`URLSessionTransport` ships uncovered** (D-142). Its failure mode is total and immediate —
+1. **`URLSessionTransport` ships uncovered** (D-143). Its failure mode is total and immediate —
    nothing works — rather than subtle, and M3-04's "Test connection" is the first human check.
    If it grows a branch, it needs a test, and that is the moment to pay for the `URLProtocol`
    harness.
-2. **The family-word ranking is a heuristic against a vendor's naming** (D-140). A future
+2. **The family-word ranking is a heuristic against a vendor's naming** (D-141). A future
    line named neither `sonnet` nor `haiku` ranks last and stops being the default, which is a
    quiet degradation rather than a failure: the list is still complete, still fetched, and the
    user can still pick. The ranking is one pure function with one test file, which is the
@@ -426,6 +426,6 @@ cost of keeping honest.
    only a repeatable check catches that. M3-04's `make verify-models` is the repeatable check,
    and `ModelRanking.ordered` dedupes by id so that a future paging change costs at worst a short
    list rather than a picker with the same model in it twice.
-4. **20 seconds is reasoned, not measured** (D-144). Nothing in this task can measure it, since
+4. **20 seconds is reasoned, not measured** (D-145). Nothing in this task can measure it, since
    the suite has no network. M3-03 is where a real draft is timed, and if the number is wrong
    it is one constant in the provider's config.

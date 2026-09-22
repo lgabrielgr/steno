@@ -4,8 +4,8 @@ import Foundation
 ///
 /// **Transport and nothing else.** The prompt, the two schemas and §7.4's
 /// fallback are M3-03's; the picker and the key field are M3-04's. What this
-/// type owes them is the ordered model list (D-140), a timeout the fallback can
-/// wait on (D-144), and the guarantee that every failure arrives as an
+/// type owes them is the ordered model list (D-141), a timeout the fallback can
+/// wait on (D-145), and the guarantee that every failure arrives as an
 /// `AIError` — §7.4 cannot degrade on an error type it has never heard of.
 ///
 /// **No signature here mentions an `AnthropicWire` type**, which is §7.1's
@@ -15,12 +15,12 @@ import Foundation
 /// state to protect, and `AIProvider: Sendable` (D-131) is satisfied by the
 /// stored `Sendable` dependencies.
 public struct AnthropicProvider: AIProvider {
-    /// The numbers D-144 decided, in one place so M3-03 can read them and a
+    /// The numbers D-145 decided, in one place so M3-03 can read them and a
     /// test can shrink them.
     public struct Configuration: Sendable {
         public var baseURL: URL
 
-        /// D-144: the tighter budget for `availableModels` and
+        /// D-145: the tighter budget for `availableModels` and
         /// `testConnection`. A user who clicked "Test connection" is watching,
         /// and a fast honest `.network` beats a slow correct one.
         public var settingsTimeout: Duration
@@ -56,7 +56,7 @@ public struct AnthropicProvider: AIProvider {
         )
     }
 
-    /// D-144's draft budget: the wall clock M3-03 puts in
+    /// D-145's draft budget: the wall clock M3-03 puts in
     /// `StandupRequest.timeout`, covering attempt, backoff and retry.
     ///
     /// **A published constant rather than a field on `Configuration`**, because
@@ -94,7 +94,7 @@ public struct AnthropicProvider: AIProvider {
 
     // MARK: - AIProvider
 
-    /// Every model this key may use, ordered (D-140): element zero is the
+    /// Every model this key may use, ordered (D-141): element zero is the
     /// recommended default.
     public func availableModels() async throws -> [AIModel] {
         let key = try apiKey()
@@ -226,7 +226,7 @@ public struct AnthropicProvider: AIProvider {
         return key
     }
 
-    /// §8's one metrics line, emitted for a draft and for nothing else (D-146).
+    /// §8's one metrics line, emitted for a draft and for nothing else (D-147).
     func record(
         _ request: StandupRequest,
         started: ContinuousClock.Instant,

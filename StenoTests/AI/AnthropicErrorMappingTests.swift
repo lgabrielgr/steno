@@ -3,7 +3,7 @@ import Testing
 
 @testable import StenoKit
 
-// D-143's table, asserted row by row. §7.4 switches on these, and M3-04 shows
+// D-144's table, asserted row by row. §7.4 switches on these, and M3-04 shows
 // them, so a status mapped to the wrong case is a sentence in front of the user
 // telling them to fix the wrong thing.
 
@@ -45,7 +45,7 @@ func rateLimitCarriesItsInterval() {
 
 @Test("a retry-after this module cannot read becomes nil, not zero")
 func unreadableRetryAfterIsAbsent() {
-    // The HTTP-date form is ignored rather than parsed (D-143). `nil` means
+    // The HTTP-date form is ignored rather than parsed (D-144). `nil` means
     // "use the default backoff"; a zero would mean "retry immediately", which
     // is the opposite of what the header asked for.
     #expect(AnthropicErrors.retryAfter(in: ["retry-after": "Wed, 21 Oct 2026 07:28:00 GMT"]) == nil)
@@ -56,7 +56,7 @@ func unreadableRetryAfterIsAbsent() {
 
 @Test("a cancelled request timed out; it is not an offline device")
 func cancellationIsATimeout() {
-    // The load-bearing row (D-145). `URLError.cancelled` sits in the same
+    // The load-bearing row (D-146). `URLError.cancelled` sits in the same
     // domain as the genuine connectivity failures, so mapping the domain — the
     // obvious mapping — tells a user with a working connection that they are
     // offline. Mutation: return `.network` for `.cancelled`. Red.

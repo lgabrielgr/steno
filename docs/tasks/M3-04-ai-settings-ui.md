@@ -46,7 +46,7 @@ model picker, and a working "Test connection".
   PR #35). D-138 set the precedent: what `make test` cannot reach gets a hidden CLI subcommand
   and a `make` target, so a human can run it on a signed build. M3-02 left two things in exactly
   that position and added no such target:
-  - **`URLSessionTransport` has no test at all** (D-142). Its only untested behaviour is
+  - **`URLSessionTransport` has no test at all** (D-143). Its only untested behaviour is
     "Foundation does what Foundation does", so a `URLProtocol` harness was judged not worth its
     cost — but that leaves the real adapter first executed by a human in this task.
   - **`/v1/models` was confirmed by hand on 2026-09-22 — shape, paging and all.** `has_more`,
@@ -58,7 +58,7 @@ model picker, and a working "Test connection".
 
   A `models-selftest` subcommand that reads the stored key, calls `availableModels()`, and prints
   the ranked list closes both: it exercises the real transport end to end and prints enough to
-  check D-140's ordering against what the API actually returns. Model it on
+  check D-141's ordering against what the API actually returns. Model it on
   `KeychainSelftest` — hidden from `CLIUsage.text`, handled before the store opens.
 
   **Until it exists, the check is manual:**

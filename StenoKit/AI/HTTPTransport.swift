@@ -1,6 +1,6 @@
 import Foundation
 
-/// The seam every network call in this module goes through (D-142).
+/// The seam every network call in this module goes through (D-143).
 ///
 /// **One method over plain values, rather than a `URLSession` the provider
 /// holds.** `make test` denies outbound IP entirely (§9.4, D-012), so a
@@ -14,7 +14,7 @@ import Foundation
 /// pure function, which is what makes `AnthropicErrors` a table test rather
 /// than a fixture exercise.
 public protocol HTTPTransport: Sendable {
-    /// **Must be cancellation-aware.** `withDeadline` enforces D-144's budget by
+    /// **Must be cancellation-aware.** `withDeadline` enforces D-145's budget by
     /// cancelling this call and returning, but Swift cancellation is
     /// cooperative and a task group waits for its children: an implementation
     /// that ignores cancellation keeps the deadline blocked past its budget,

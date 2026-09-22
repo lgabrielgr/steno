@@ -22,7 +22,7 @@ enum AnthropicWire {
     /// `anthropic-version`, the only value this module has ever sent.
     static let apiVersion = "2023-06-01"
 
-    /// `stop_reason` values this module acts on (D-143).
+    /// `stop_reason` values this module acts on (D-144).
     enum StopReason {
         static let refusal = "refusal"
         static let maxTokens = "max_tokens"
@@ -30,7 +30,7 @@ enum AnthropicWire {
 
     // MARK: - Requests
 
-    /// `GET /v1/models`, one page (D-140).
+    /// `GET /v1/models`, one page (D-141).
     static func modelsRequest(baseURL: URL, apiKey: String, after cursor: String?) -> HTTPRequest {
         let endpoint = baseURL.appendingPathComponent("v1/models")
         var components = URLComponents(url: endpoint, resolvingAgainstBaseURL: false)
@@ -50,7 +50,7 @@ enum AnthropicWire {
         )
     }
 
-    /// `POST /v1/messages` (D-141).
+    /// `POST /v1/messages` (D-142).
     static func messagesRequest(baseURL: URL, apiKey: String, body: Data) -> HTTPRequest {
         HTTPRequest(
             method: .post,
@@ -64,7 +64,7 @@ enum AnthropicWire {
         )
     }
 
-    /// §7.3's request body, and nothing else (D-141).
+    /// §7.3's request body, and nothing else (D-142).
     ///
     /// Five keys: `model`, `max_tokens`, `system`, `messages`,
     /// `output_config`. No `thinking`, no `effort`, no sampling parameters, no
@@ -145,7 +145,7 @@ struct AnthropicModelsPage: Decodable {
     }
 }
 
-/// One model, reduced to the three things D-140 ranks on.
+/// One model, reduced to the three things D-141 ranks on.
 ///
 /// **Decoded defensively, field by field.** A vendor response that grows a
 /// field, renames one inside `capabilities`, or returns a timestamp in a shape
@@ -156,7 +156,7 @@ struct AnthropicModel: Decodable, Equatable, Sendable {
     let displayName: String
     let createdAt: Date?
 
-    /// `nil` when the response said nothing about it. D-140 filters on an
+    /// `nil` when the response said nothing about it. D-141 filters on an
     /// explicit `false` only, so an unrecognised `capabilities` shape drops
     /// nothing.
     let supportsStructuredOutputs: Bool?
@@ -194,7 +194,7 @@ struct AnthropicModel: Decodable, Equatable, Sendable {
     }
 }
 
-/// The subtree of `capabilities` D-140 reads, and no more.
+/// The subtree of `capabilities` D-141 reads, and no more.
 struct AnthropicCapabilities: Decodable {
     let structuredOutputs: AnthropicCapabilityFlag?
 
