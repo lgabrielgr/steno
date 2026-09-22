@@ -30,6 +30,17 @@ public protocol AIProvider: Sendable {
     var displayName: String { get }
 
     /// §7.1: fetched at runtime, never hardcoded, so a new model needs no release.
+    ///
+    /// **Ordered by the provider's own preference, and element zero is its
+    /// recommended default.** §7.1 asks for a mid-tier default *and* forbids a
+    /// compiled-in model id, and no vendor's list endpoint reports a tier — so
+    /// the choice has to live with whoever knows that vendor's naming. Putting
+    /// it in the order rather than in a second method keeps `AIModel` at two
+    /// fields (D-129) and gives M3-04 a picker it can render top-down and
+    /// preselect at index zero.
+    ///
+    /// An empty result is legitimate — a key with access to nothing — and is
+    /// not an error.
     func availableModels() async throws -> [AIModel]
 
     /// Summarize a window.

@@ -85,7 +85,7 @@ something better than paper. **M2 is the true MVP; M6 is the finish line.**
 > Exit: polished summary; failure falls back cleanly to M2 output.
 
 - [x] [M3-01](M3-01-ai-provider-protocol.md) — `AIProvider` protocol, credential enum, Keychain storage — PR #33
-- [ ] [M3-02](M3-02-anthropic-provider.md) — Anthropic provider with a runtime-fetched model list
+- [x] [M3-02](M3-02-anthropic-provider.md) — Anthropic provider with a runtime-fetched model list — PR #35
 - [ ] [M3-03](M3-03-summarization-call.md) — both output schemas, prompt constraints, degradation path
 - [ ] [M3-04](M3-04-ai-settings-ui.md) — provider, key, model picker, Test connection
 

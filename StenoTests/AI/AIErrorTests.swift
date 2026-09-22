@@ -32,6 +32,7 @@ extension AIError {
     static let everyCase: [AIError] = [
         .notConfigured,
         .invalidCredential,
+        .invalidRequest,
         .network,
         .timedOut,
         .rateLimited(retryAfter: .seconds(30)),
@@ -40,6 +41,8 @@ extension AIError {
         .invalidResponse(.undecodable),
         .invalidResponse(.schemaViolation),
         .invalidResponse(.emptyDraft),
+        .invalidResponse(.refused),
+        .invalidResponse(.truncated),
         .unknownTaskIDs(count: 3),
     ]
 }
@@ -49,5 +52,9 @@ func theErrorAuditIsComplete() {
     // A parameterized test over a short list runs quietly: drop a case from
     // `everyCase` and nothing reports it. Distinct labels are the proxy — each
     // case has exactly one, so the label set names the cases covered.
-    #expect(Set(AIError.everyCase.map(\.metricsLabel)).count == 8)
+    // Nine, not eight, since M3-02's `.invalidRequest` (D-143). The two new
+    // `InvalidResponseReason` cases share the `invalidResponse` label by
+    // design — the label names the case, and the reason is what §8's line
+    // deliberately does not carry.
+    #expect(Set(AIError.everyCase.map(\.metricsLabel)).count == 9)
 }

@@ -3687,3 +3687,337 @@ experience rather than pre-empted.
 `backUpNowIsUnavailableWithoutAStore`. Each was confirmed by mutation: reverting the guard turns
 the first two red, re-gating `canBackUpNow` on `isEnabled` turns the fourth red, and dropping its
 store gate turns the fifth red.
+
+### D-140 — The model list is returned ordered, and element zero is the default
+
+§7.1 sets two rules that pull against each other. The list "must be fetched at runtime via the
+Anthropic `/v1/models` endpoint, not hardcoded", and the default selection should be "a mid-tier
+model … this is not a reasoning-heavy workload, and cost per stand-up should stay negligible."
+The wire response carries `id`, `display_name`, `created_at`, `max_input_tokens`, `max_tokens`
+and a `capabilities` tree. It carries no tier and no pricing. **Nothing on the wire
+distinguishes mid-tier from top-tier**, so the two rules cannot both be satisfied literally.
+
+`AnthropicProvider.availableModels()` returns the fetched list **ordered by the provider's own
+preference**, and `AIProvider`'s doc comment now says element zero is the recommended default.
+Ranking is `(familyRank, createdAt descending, id ascending)`, where `familyRank` is 0 for an id
+containing `sonnet`, 1 for `haiku`, 2 otherwise.
+
+No model id is compiled in as the source of the picker's contents, which is the acceptance
+criterion, and a `claude-sonnet-6` is preferred the day it appears with no release. What *is*
+compiled in is a preference among family words — the honest description of what §7.1 asks for,
+since it names a tier and the tier is not on the wire.
+
+**Haiku ranks above the rest rather than below.** The fallback from "no sonnet exists" should
+move toward §7.1's cost sentence, not away from it; summarizing a factual log is the workload
+Haiku is for.
+
+**The `id ascending` tiebreak is not decoration.** It makes the order total, so the result does
+not depend on the sort's stability when two models share a timestamp — or, more often, when
+neither carries one.
+
+**Ranking runs on the wire record, not on `AIModel`.** `AIModel` is two fields by D-129 and
+carries no `created_at`, and sorting ids as strings puts `claude-sonnet-10` below
+`claude-sonnet-5`. `ModelRanking.ordered(_:)` therefore takes `[AnthropicModel]`.
+
+**One filter, and only one:** a model whose `capabilities.structured_outputs.supported` is
+present and explicitly `false` is dropped, because §7.3 needs a schema-constrained response and
+such a model would fail every draft. A missing or unrecognised `capabilities` shape drops
+nothing — a vendor response that renames a field must not empty the user's picker.
+
+**Paging** follows the Models endpoint's `after_id` cursor scheme, requesting `limit=1000` and
+re-requesting while `has_more` is true.
+
+**The loop is bounded by the deadline, not by a page count** (amended in review, PR #35). It
+first stopped after twenty pages, which turned a vendor that kept saying `has_more` into a
+silently truncated list — a picker missing the user's model, reported as success. Removing the
+cap required `try Task.checkCancellation()` at the top of each iteration: nothing else in the
+loop throws on cancellation (an actor hop does not), so without it the deadline fired, the task
+group waited for a child that never noticed, and the call hung. **A test that pages forever found
+that**, which is the argument for writing it: the loop was an instance of the very
+cooperative-cancellation trap `HTTPTransport`'s doc comment warns implementers about.
+
+**The result is deduplicated by id** (added in review, PR #35). The loop appends a page before it
+can know the page repeats, so the cursor guard stops the *loop* without un-appending what it has
+already collected — and a picker offering the same model twice is a defect the guard looks like
+it prevents and does not. `ModelRanking.ordered` takes the first occurrence, before the sort.
+This also covers the overlapping pages a cursor scheme is allowed to return, which no guard on
+the cursor value would catch at all.
+
+**Confirmed against the live API on 2026-09-22**, which `make test` cannot do (§9.4): `has_more`
+and `last_id` are top-level as decoded, `data[]` carries `id`, `display_name` and `created_at`,
+`capabilities.structured_outputs.supported` nests exactly as `AnthropicCapabilities` expects, a
+timestamp arrives as `2026-09-21T16:24:00Z` (no fractional seconds, so the first formatter takes
+it), and `limit=1000` returns 200 rather than rejecting. The response also carries `type`,
+`max_input_tokens`, `max_tokens` and nine further capability subtrees, all ignored — which is what
+the defensive `init(from:)` is for.
+
+**The cursor round-trip is confirmed too.** `?limit=3&after_id=claude-opus-5` returns a page
+beginning `claude-sonnet-5` — a different model from page one's first — so the parameter advances
+the window rather than being ignored. Nothing in the paging path now rests on documentation
+alone. (That confirmation is what made the duplicate above hypothetical rather than live; the
+dedupe is there because "hypothetical today" is not a property the next API version preserves.)
+
+That answer carries one more fact worth recording: **the account's model list contains a sonnet**,
+so D-140's ranking resolves to its intended tier on real data rather than falling through to
+haiku or to the unranked remainder. The ordering rule had until then only been exercised against
+fixtures the same decision authored.
+
+What no single call can settle is drift: a vendor may rename a field in a year. That is what
+M3-04's `make verify-models` is for — a repeatable check rather than a one-off.
+
+Three conditions end the loop — no `has_more`, no `last_id`, or a `last_id` equal to the cursor
+just used. **There is no page cap; the settings deadline is the only other bound**, which is why
+the loop checks cancellation (see the amendment above). Every one of those three conditions
+depends on a field the vendor controls, so a page reporting `has_more` forever ends as
+`.timedOut` rather than as a short list presented as the whole truth.
+
+**Rejected: a preferred-ID hint list.** Precise today, stale on exactly the schedule §7.1 warns
+about, and a reviewer meeting `claude-sonnet-5` in the source cannot tell from the line whether
+it is a hint or the picker's contents. **Rejected: ranking on `max_input_tokens`.** Data-driven
+but meaningless — the current models nearly all report 1M/128K, so "the middle" is arbitrary.
+**Rejected: no default at all.** It implements §7.1's sentence by ignoring it.
+
+**Falsified by** `ModelRankingTests` — the sonnet-first case feeds its input in the opposite
+order, and the recency case uses `claude-sonnet-10` against `claude-sonnet-5`, which a string
+sort gets backwards. Confirmed by mutation: inverting `familyRank`'s sonnet return turns three
+tests red across two files.
+
+### D-141 — The minimal request body, because the user picks the model
+
+The model id is whatever the user chose from a runtime list, so the provider cannot assume which
+parameters that model accepts. The current API is full of parameters that are fine on one model
+and a 400 on another: `budget_tokens` is removed on the newer models, `thinking: {"type":
+"disabled"}` is rejected above effort `high` on Opus 5, `effort` errors on Sonnet 4.5 and
+Haiku 4.5, and the sampling parameters are gone across several families.
+
+**The body carries `model`, `max_tokens`, `system`, `messages` and `output_config.format`, and
+nothing else.** No `anthropic-beta` header either — nothing used here is in beta, and an
+unrecognised beta value is itself a 400.
+
+A parameter that 400s on one model would make that model unusable from a picker that offers it,
+with an error the user cannot act on. The tuning those parameters buy is not worth that: §7.1
+already puts this workload at the tier that does it cheaply.
+
+**The schema is transmitted as the JSON value M3-03 authored** — parsed once and re-serialized
+as part of the body, not spliced in as bytes. Semantic identity, not byte identity: an `Encoder`
+cannot emit raw bytes, and hand-splicing a body around them would be fussier and more breakable
+than the property is worth. The parse is also what catches a schema that is not a JSON object,
+locally, before any network call. Keys are sorted, because `JSONSerialization`'s unsorted order
+is hash order and differs between processes — which would make a body assertion flake.
+
+`AIOutputSchema.name` goes unused: Anthropic's `json_schema` format takes a schema, not a name.
+That is not a defect in M3-01's type, which exists "where a provider's API wants one".
+
+**Falsified by** `theBodyIsMinimal` (an exact key-set assertion, so a sixth key fails it),
+`theSchemaIsTransmittedWhole`, `aBrokenSchemaIsCaughtLocally` (which also asserts nothing was
+sent), and `theBodyIsDeterministic`.
+
+### D-142 — `HTTPTransport` over value types, not `URLProtocol` and not `URLSession`
+
+`make test` denies outbound IP entirely (D-012), so every test of this provider runs against a
+double. The seam is a one-method protocol over plain `HTTPRequest`/`HTTPResponse` values, which
+is the shape the repo already uses for this problem — `CredentialStore` so tests never touch the
+login keychain, `StubFilePanels` so tests never open an `NSOpenPanel`.
+
+**Values rather than `URLRequest`/`HTTPURLResponse`**, for two reasons. `HTTPURLResponse` is a
+Foundation class whose `Sendable` status is a poor thing to bet a Swift 6 module on, and — more
+usefully — error mapping over `(status, headers)` is then a pure function, which is what makes
+D-143's table a table test rather than a fixture exercise.
+
+**Header names are lowercased by the initializers, not by a doc comment** (amended in review,
+PR #35). Both types *said* their keys were lowercased and neither enforced it, while
+`URLSessionTransport` happened to lowercase on the way in — so the promise held for the shipped
+transport and for nothing else. `AnthropicErrors` looks `retry-after` up by that exact key, so a
+second transport returning `Retry-After` would have dropped the server's retry interval and used
+the default backoff instead: a wrong wait, with nothing to notice it. `HTTPHeaders.normalized`
+now runs in both initializers.
+
+**The transport must be cancellation-aware, and that is a contract rather than an enforcement.**
+`withDeadline` cancels the operation and returns, but Swift cancellation is cooperative and a
+task group awaits its children — so a transport ignoring cancellation keeps the deadline blocked
+past D-144's budget and §7.4's fallback arrives late. `URLSession` honours it. Making the
+deadline return regardless would mean abandoning a live task, trading a late answer for a leaked
+request, so `HTTPTransport.send` carries the requirement in its doc comment and `DeadlineTests`
+pins that the error stays `.timedOut` even when an operation refuses to stop.
+
+**The transport refuses redirects, because the request carries a credential** (added in review,
+PR #35). `URLSession` follows redirects by default and carries custom headers across them, so a
+302 to another host — or to plain HTTP — would re-send `x-api-key` to wherever it pointed.
+`RedirectBlocker` returns `nil` from `willPerformHTTPRedirection`, which hands the 3xx back as the
+response instead of chasing it; D-143 then maps it to `.providerUnavailable(status:)` and D-144's
+5xx gate keeps it from being retried. Refusing every redirect is blunt and correct here: this
+module talks to one endpoint, and a redirect from it is already something to distrust.
+
+**What remains uncovered is `send` itself, deliberately.** Its only branch is the
+`as? HTTPURLResponse` cast; the rest is copying fields onto a `URLRequest` and back off an
+`HTTPURLResponse`. The redirect delegate the file now also owns *is* tested — D-142's own rule
+("if that file grows a branch, it needs a test") honoured rather than waived, and the reason the
+file is 90 lines rather than the 30 this decision first described. Covering it means a `URLProtocol` stub — a process-global
+registry, `@unchecked Sendable`, and ordering care under parallel Swift Testing runs — standing
+between the suite and a file whose only untested behaviour is "Foundation does what Foundation
+does". **If that file grows a branch, it needs a test, and that is the moment to pay for the
+harness.**
+
+**The deferral has an owner, not just a comment.** A note saying "nothing covers this today" is a
+bug filed against whoever reads it next and finds no one named, so M3-04's task file carries the
+work: `make verify-models`, a hidden `models-selftest` subcommand on the D-138 pattern, which
+executes the real adapter and prints the ranked list. It covers this *and* re-checks the
+`/v1/models` shape that D-140 records as confirmed on 2026-09-22 — a one-off confirmation catches
+an error today, and only a repeatable one catches vendor drift tomorrow. Until the target exists,
+the check is a `curl`, written out in that task file.
+
+### D-143 — Three new `AIError` cases, because the honest mapping needs them
+
+`AIError` (D-132) had no case for a request the provider rejects as malformed, and none for a
+response that arrived intact but says the model declined or ran out of room. Added:
+`.invalidRequest`, `.invalidResponse(.refused)`, `.invalidResponse(.truncated)`.
+
+| Wire | `AIError` |
+|---|---|
+| 401, 403 | `.invalidCredential` |
+| 429 | `.rateLimited(retryAfter:)`, from `retry-after` when it is integer seconds |
+| 500, 529, any other 5xx | `.providerUnavailable(status:)` |
+| 400, 404, 413, any other 4xx | `.invalidRequest` |
+| `URLError` — offline, DNS, TLS | `.network` |
+| deadline lost, `URLError.cancelled` | `.timedOut` (D-145) |
+| no credential stored | `.notConfigured` |
+| `stop_reason: "refusal"` | `.invalidResponse(.refused)` |
+| `stop_reason: "max_tokens"` | `.invalidResponse(.truncated)` |
+
+**Its message names no single cause** (amended in review, PR #35). The case spans 400, 404, 413
+and 422, so "the selected model may no longer exist" — true only of the 404 — gave model-picker
+advice for a window too large to send. It carries nothing that could tell those apart, and
+inventing a distinction the value does not hold would be worse than naming both possibilities.
+
+**404 belongs with 400, not with `.providerUnavailable`.** The two 404s this app can provoke are
+a model id retired since the user picked it and a typo'd path — both ours. Routing them to "the
+provider is unavailable right now" would send a user whose selected model no longer exists to a
+status page instead of the picker.
+
+**`.refused` and `.truncated` earn their place the same way.** Without them a refusal decodes as
+`.undecodable` and a truncated draft as `.schemaViolation`, which files two provider-side
+outcomes under the label §7.3 reserves for a model that broke the schema — and makes a real
+hallucination indistinguishable from the app under-provisioning `maxOutputTokens` in §8's
+metrics.
+
+**D-132's rule is intact.** No new case carries a `String`; `.invalidRequest` carries nothing.
+The API's `error.message` — which can quote the request, and on the draft path that is the
+user's event log — is never decoded into a value at all: there is no wire type for the error
+envelope, and the mapping functions take a status code and a header dictionary.
+
+**This extends a decision record, not the spec.** REQUIREMENTS.md never names `AIError`; §7.1
+prints the protocol. No version bump.
+
+**Falsified by** `AnthropicErrorMappingTests`, a table over every row, plus `AIErrorTests`'
+existing audit — whose label count assertion rose from 8 to 9 and would otherwise have let a new
+case join the enum and skip every check in the file.
+
+### D-144 — 20 seconds for a draft, 10 for the two Settings calls
+
+M3-02's task file is explicit that this is the decision it owes M3-03: "if the API is slow, the
+user is standing in a meeting; §7.4's fallback must engage promptly rather than after a long
+hang."
+
+| Call | Budget | Retries |
+|---|---|---|
+| `generateStandup` | 20s (`AnthropicProvider.recommendedDraftTimeout`) | one, on 429 / 529 / 5xx |
+| `availableModels` | 10s | none |
+| `testConnection` | 10s | none |
+
+Twenty seconds is the wall clock for the whole operation — attempt, backoff, retry, parse — not
+`URLSession`'s `timeoutIntervalForRequest`, which is an inactivity timer and can outlast any
+budget while bytes trickle. Streaming is out of scope, so the whole draft lands in one response
+and a Sonnet-class summarization typically takes 5–15s. Twelve seconds would cut off legitimate
+periodic windows; thirty is most of the time the user has before they speak.
+
+**One retry, not two, and only for 429, 529 and 5xx.** A 529 is Anthropic briefly overloaded, and
+dropping to raw events for something a one-second wait would fix is a worse stand-up than the
+user could have had.
+
+**The gate is on the status, not on the error case** (amended in review, PR #35).
+`AnthropicErrors` files every non-2xx, non-4xx status under `.providerUnavailable` — which
+includes the 3xx a transport might surface without following it — so matching the case alone
+retried redirects, sending the same POST twice for a response no retry can change. The list above
+is the list the code now checks. The
+backoff is `retry-after` when present and integer-valued, one second otherwise, and the retry
+runs only if `backoff + 2s` of budget remains — a retry certain to be cancelled mid-flight is a
+slower failure, not a second chance. A `retry-after` that cannot fit fails immediately with
+`.rateLimited(retryAfter:)`, so M3-03 can say something specific rather than after a wait it
+already knows is futile. 4xx is never retried.
+
+**The Settings calls get no retry** because they are interactive: a user who clicked "Test
+connection" is watching, and a fast honest `.network` beats a slow correct one.
+
+**The budget is a published constant, not a `Configuration` field.** M3-01 put `timeout` on
+`StandupRequest` and deliberately left it without a default so that "a task that never made a
+network call" could not pre-empt this decision; a field on the provider's configuration would be
+one the provider never reads, which is a bug filed against whoever next changes it and finds the
+value ignored.
+
+**Not measured.** Nothing in this task can measure it — the suite has no network. M3-03 times a
+real draft; if the number is wrong it is one constant.
+
+**Falsified by** `aHangIsATimeout`, `overloadIsRetried`, `retriesAreNotALoop`,
+`ourOwnMistakesAreNotRetried` and `futileWaitsAreNotTaken`, each asserting the request *count* as
+well as the error. Confirmed by mutation: returning `nil` from `backoff(for:)` for
+`.providerUnavailable` turns `overloadIsRetried` red.
+
+### D-145 — The deadline races the work, and losing it is `.timedOut`
+
+`withDeadline` runs the operation against `Task.sleep` in a throwing task group; the first result
+wins and the loser is cancelled. The retry loop runs *inside* the deadline, which is what makes
+D-144's budget cover the backoff rather than resetting on the second attempt.
+
+**The subtle part is which error the loser throws.** Cancelling an in-flight `URLSession` task
+surfaces as `URLError.cancelled`, which sits in the same error domain as the genuine
+connectivity failures — so mapping it by domain, the obvious mapping, reports `.network` for a
+request that timed out, and §7.4 then tells a user with a working connection that they are
+offline. The deadline branch throws `.timedOut` itself, and
+`AnthropicErrors.error(forTransport:)` maps a stray `URLError.cancelled` or `CancellationError`
+the same way, because nothing else in this module cancels.
+
+**Amended in review (PR #35).** The first version mapped cancellation in `generateStandup` and
+not in `availableModels`, and a mutation *survived* the test written for it — cancelling the
+caller cancels both children of the race, so whether a raw `CancellationError` escapes is a
+coin flip between the deadline task's sleep and the operation's, and the test happened to hit the
+path the transport had already mapped. **The mapping now lives in `withDeadline` itself**, which
+covers every caller and makes the contract deterministic: a cancelled deadline throws
+`AIError.timedOut`, never `CancellationError`. `availableModels` keeps a catch-all too, because a
+mapping applied to one of two sibling paths is the defect this repo keeps re-learning.
+
+**Falsified by** `cancellationIsATimeout`, `aHangIsATimeout` and
+`cancellationStaysInsideTheContract` — the last driving an operation that does no mapping of its
+own, so it fails the moment `withDeadline` stops mapping. Confirmed by mutation: collapsing the
+`URLError` branch to `.network` turns the first red, and removing `withDeadline`'s
+`catch is CancellationError` turns the third red.
+
+### D-146 — Only `generateStandup` emits §8's metrics line
+
+`AIRequestMetrics` requires a `modelID`, and §8 asks for "token counts, latency, model". A model
+list has no model and no token usage; a connection test has neither. Emitting a line for them
+means inventing a `modelID` — `"-"`, `"none"` — in a field D-137 built to hold one word from a
+fixed vocabulary, and writing rows no reading of §8 asks for.
+
+So `generateStandup` records one line per call, success or failure: latency across the whole
+budgeted operation, tokens from `usage` when the response carried it and `nil` when it did not,
+outcome from `AIError.metricsLabel`. `availableModels` and `testConnection` log nothing.
+
+D-137's rule is inherited whole. There is no path by which a draft, a prompt, or an API error
+message reaches a log line even on the error branches: the mapping functions take a status code
+and a header dictionary, the error envelope is never decoded, and the `DecodingError` from a
+failed parse is dropped rather than described — its message quotes the value that failed, which
+on the draft path is the user's stand-up.
+
+**Amended in review (PR #35): the failure line keeps its token counts.** The first version
+recorded `nil` for both on every failure, which is wrong for exactly the class of failure that
+costs money — a refusal, a truncation and a hallucinated id are all *billed* calls, where the API
+reports `usage` and then the draft fails. An internal `DraftFailure` now carries the decoded
+usage to the catch; it never escapes `generateStandup`, so the public contract is still `AIError`
+alone. `DraftFailure` and `draft(from:cadence:allowed:)` are `internal` rather than `private` so
+that this is a test rather than a claim: `record` writes to the unified log and cannot be read
+back in-process.
+
+**Falsified by** `failedDraftsKeepTheirUsage` and `validationFailuresKeepTheirUsage` — two,
+because the `stop_reason` branches and the `decode`/`validated` pair are separate throw sites and
+a fix applied to one would leave the other recording nothing. Confirmed by mutation: passing
+`usage: nil` in the refusal branch turns the first red.

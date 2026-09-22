@@ -22,6 +22,21 @@ public enum AIError: Error, Equatable, Sendable {
     /// The provider rejected the credential. Not retryable.
     case invalidCredential
 
+    /// The provider rejected the *request*: a 400 it would not parse, a 404 for
+    /// a model id retired since the user picked it, or a 413 for a window too
+    /// large to send (D-143).
+    ///
+    /// **Separate from `.providerUnavailable`, which is where the obvious
+    /// mapping would put a 404.** These failures are ours, not Anthropic's, and
+    /// "the provider is unavailable right now" would send a user whose selected
+    /// model no longer exists to a status page instead of the picker. Carries
+    /// nothing: the API's `error.message` can quote the request that provoked
+    /// it, which on the draft path is the user's event log (§8).
+    ///
+    /// Because it spans all of those, its message names no single cause — see
+    /// `errorDescription`.
+    case invalidRequest
+
     /// Offline, DNS failure, TLS failure — the request never reached the provider.
     case network
 
@@ -55,6 +70,23 @@ public enum InvalidResponseReason: Equatable, Sendable {
     case undecodable
     case schemaViolation
     case emptyDraft
+
+    /// The model declined the request (`stop_reason: "refusal"`).
+    ///
+    /// Distinct from `.undecodable`, which is where a refusal lands without
+    /// this case — a well-formed answer that is not a draft would otherwise be
+    /// reported as garbage from the provider, and §8's metrics would stop
+    /// distinguishing a decline from a broken response.
+    case refused
+
+    /// The answer was cut off by `max_tokens`.
+    ///
+    /// Distinct from `.schemaViolation` for the same reason in the other
+    /// direction: truncated JSON breaks §7.3's schema, but the cause is a
+    /// budget the app set, not a model that invented a shape. Filing it under
+    /// `.schemaViolation` would make a real hallucination indistinguishable
+    /// from the app under-provisioning `maxOutputTokens`.
+    case truncated
 }
 
 extension AIError: LocalizedError {
@@ -64,6 +96,16 @@ extension AIError: LocalizedError {
             return "No credential is set for this provider. Add an API key in Settings."
         case .invalidCredential:
             return "The provider rejected this credential."
+        case .invalidRequest:
+            // **Names no single cause on purpose.** This one case covers 400,
+            // 404, 413 and 422, so "the selected model may no longer exist"
+            // — true only of the 404 — gave model-picker advice for a window
+            // too large to send (PR #35 review). The case carries nothing that
+            // could tell them apart, and inventing a distinction the value does
+            // not hold is worse than naming both possibilities.
+            return
+                "The provider couldn't accept this request. The selected model may be unavailable, "
+                + "or the window may be too large to send."
         case .network:
             return "Couldn't reach the provider. Check your connection."
         case .timedOut:
@@ -91,6 +133,7 @@ extension AIError {
         switch self {
         case .notConfigured: return "notConfigured"
         case .invalidCredential: return "invalidCredential"
+        case .invalidRequest: return "invalidRequest"
         case .network: return "network"
         case .timedOut: return "timedOut"
         case .rateLimited: return "rateLimited"
