@@ -384,11 +384,18 @@ pass every row. It is paired with the success case for that reason, and the whol
 verified by mutation — inverting the fallback selection must turn rows red — before any claim
 that it works.
 
-**What this task cannot verify, stated plainly rather than implied.** Acceptance criteria 3
-(verbatim survival of names and error strings), 4 (register is not elevated) and 5 (8–12 grouped
-bullets for a long periodic window) are properties of a prompt in front of a live model. `make
-test` denies the network by design, and this task ships no CLI seam to reach around it, so **no
-live model has seen this prompt**. What the suite proves is that each constraint is present in
+**What the automated suite cannot verify, stated plainly rather than implied.** Acceptance
+criteria 3 (verbatim survival of names and error strings), 4 (register is not elevated) and 5
+(8–12 grouped bullets for a long periodic window) are properties of a prompt in front of a live
+model. `make test` denies the network by design, and this task ships no CLI seam to reach around
+it, so **the suite has never sent this prompt anywhere**.
+
+> **Verified by hand before merge, 2026-09-23.** The user planted an API key in the login
+> keychain and a model id in `UserDefaults` directly — the two things M3-04's pane will write —
+> ran the real draft path against their own event log, and confirmed all three: register held,
+> technical vocabulary survived, and a periodic window grouped rather than enumerated. The key
+> was removed afterwards. This is a human observation on one run, not a repeatable check; the
+> repeatable one arrives with M3-04's Settings pane and `make verify-models`. What the suite proves is that each constraint is present in
 the bytes that will be sent, that the ticket-key half of criterion 3 holds by construction
 (D-150), and that every failure of the live call degrades correctly. The remaining verification
 lands in M3-04 alongside the key field and `make verify-models`. The PR body says this in these
