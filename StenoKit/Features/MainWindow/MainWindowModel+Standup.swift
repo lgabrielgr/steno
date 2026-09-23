@@ -8,6 +8,35 @@ import Foundation
 /// — and reloads when it says to. The same split `MainWindowModel+Notes` makes
 /// for FR-2, for the same reason.
 extension MainWindowModel {
+    /// §7.3's call, as `StandupDraftModel` takes it (D-148).
+    ///
+    /// **Assembled here because this is where the concrete provider is
+    /// chosen** — which is also why `StandupSummarizer` takes its timeout as a
+    /// parameter instead of reading one vendor's constant from inside a
+    /// vendor-neutral type (§7.1).
+    ///
+    /// **Built per call, and the model id read per call.** M3-04's picker
+    /// writes `aiSelectedModelID` while this model is alive, and a summarizer
+    /// captured at launch would go on sending the model the user had just
+    /// changed away from until the app was relaunched.
+    ///
+    /// With no key in the Keychain the provider throws `.notConfigured` and the
+    /// draft stays exactly as M2-02 rendered it. That is every launch until
+    /// M3-04 ships the key field — §7.4 working, rather than a gap.
+    ///
+    /// `static`, so `init` can call it before `self` exists.
+    static func standupPolish(
+        settings: AppSettings
+    ) -> @MainActor (GatheredWindow) async -> SummarizedStandup {
+        { window in
+            await StandupSummarizer(
+                provider: AnthropicProvider(credentials: KeychainCredentialStore()),
+                modelID: settings.aiSelectedModelID,
+                timeout: AnthropicProvider.recommendedDraftTimeout
+            ).summarize(window)
+        }
+    }
+
     /// FR-4 needs exactly one project to report on.
     ///
     /// D16 — "each meeting covers exactly one project" — and `lastStandupAt` is

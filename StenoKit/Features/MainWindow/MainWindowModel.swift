@@ -178,7 +178,8 @@ public final class MainWindowModel: MainWindowActions {
             service: NoteService(context: context, now: now, save: save), now: now)
         self.standupDraft = StandupDraftModel(
             service: StandupService(context: context, now: now, save: save, copy: copy),
-            undoService: StandupUndoService(context: context, save: save))
+            undoService: StandupUndoService(context: context, save: save),
+            polish: Self.standupPolish(settings: settings))
         // Hazard for whoever adds an onboarding test here: `settings` above
         // defaults to `AppSettings()` over `UserDefaults.standard`, so a
         // `MainWindowModel()` built with defaults points this service at the
