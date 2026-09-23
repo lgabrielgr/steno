@@ -64,12 +64,60 @@ public final class StandupDraftModel {
     /// that identity has to survive the commit rather than be re-derived.
     public private(set) var committedReport: StandupReport?
 
+    /// Whether §7.3's call is still in flight (D-148).
+    ///
+    /// Drives the sheet's "Polishing…" affordance and nothing else. **Copy is
+    /// deliberately live while this is true**: the text on screen is M2-02's
+    /// raw report, which is a usable stand-up, and §7.4's promise is that the
+    /// user is never left holding nothing while a network call decides.
+    public private(set) var isPolishing = false
+
+    /// The model that produced the text now on screen, or `nil` for the raw
+    /// report (D-151).
+    ///
+    /// Set in exactly one place — `install(_:)` — and never cleared while the
+    /// draft stands, so editing AI text keeps the report marked AI-generated.
+    /// That is the honest record: it *was* AI-generated, and FR-4 step 6
+    /// intends the user to polish it.
+    public private(set) var aiModelUsed: String?
+
+    /// The text as last installed, against which "has the user typed?" is
+    /// answered.
+    ///
+    /// **A stored string rather than a dirty flag.** A user who types and then
+    /// undoes back to the original still receives the upgrade, which is what
+    /// they would expect, and it costs one comparison.
+    private var pristineText = ""
+
+    private var polishTask: Task<Void, Never>?
+
     private let service: StandupService
     private let undoService: StandupUndoService
+    private let polish: @MainActor (GatheredWindow) async -> SummarizedStandup
 
-    public init(service: StandupService, undoService: StandupUndoService) {
+    /// - Parameter polish: §7.3's call, injected as a closure for the reason
+    ///   `service` and `copy` are injected — a seam the headless suite can
+    ///   drive without a provider, a credential, or a network (§9.4).
+    ///
+    ///   **`@MainActor`, like `copy`.** The work inside it is one string build
+    ///   and then a suspension on the network, so nothing blocks; isolating the
+    ///   closure is what lets the composition root capture `AppSettings` and
+    ///   read the selected model at call time rather than at launch.
+    ///
+    ///   **The default performs no polish**, returning the same raw report the
+    ///   caller already rendered. That is not a stub: it is exactly what an
+    ///   unconfigured install does, and it is what every launch does until
+    ///   M3-04 ships the key field and the model picker.
+    public init(
+        service: StandupService,
+        undoService: StandupUndoService,
+        polish: @escaping @MainActor (GatheredWindow) async -> SummarizedStandup = {
+            SummarizedStandup(markdown: StandupSummarizer.rawMarkdown(for: $0), modelUsed: nil)
+        }
+    ) {
         self.service = service
         self.undoService = undoService
+        self.polish = polish
     }
 
     /// Copy is live only with a window to commit, and only once.
@@ -90,13 +138,48 @@ public final class StandupDraftModel {
     /// `MainWindowModel.prepareStandup()`, which gathers and renders and does
     /// nothing else — which is what makes "generating a preview has zero side
     /// effects" true by construction rather than by care.
+    /// **Starting the polish is this method's job, not a second call the
+    /// caller must remember** (D-148). A step that cannot be forgotten beats
+    /// one documented as required, and every path into the sheet goes through
+    /// here.
     public func begin(window: GatheredWindow, text: String) {
+        polishTask?.cancel()
         self.window = window
         self.text = text
+        pristineText = text
         phase = .editing
         committedReport = nil
         lastError = nil
         notice = nil
+        aiModelUsed = nil
+        isPolishing = true
+        polishTask = Task { [weak self] in
+            let result = await self?.polish(window)
+            guard let self, let result else { return }
+            install(result)
+        }
+    }
+
+    /// The AI draft, if it is still wanted (D-148).
+    ///
+    /// Four conditions, and each one is a way the result stops being wanted:
+    /// the task was cancelled, the sheet moved past `.editing`, the user typed,
+    /// or the summarizer fell back.
+    ///
+    /// **Nothing is installed when `modelUsed` is `nil`.** The fallback markdown
+    /// is byte-identical to the text `begin` already installed — same pure
+    /// functions, same frozen window — so assigning it would be a no-op that
+    /// relied on that coincidence. Skipping it makes the no-op a fact about the
+    /// branch instead.
+    private func install(_ result: SummarizedStandup) {
+        isPolishing = false
+        guard !Task.isCancelled, phase == .editing, text == pristineText,
+            let model = result.modelUsed
+        else { return }
+
+        text = result.markdown
+        pristineText = result.markdown
+        aiModelUsed = model
     }
 
     /// The sheet closing, by Cancel, Esc, or Close.
@@ -106,12 +189,17 @@ public final class StandupDraftModel {
     /// worth preserving — and a draft surviving into the next Copy would let
     /// one project's edited prose be filed against another project's window.
     public func dismiss() {
+        polishTask?.cancel()
+        polishTask = nil
+        isPolishing = false
         window = nil
         text = ""
+        pristineText = ""
         phase = .editing
         committedReport = nil
         lastError = nil
         notice = nil
+        aiModelUsed = nil
     }
 
     /// FR-4 step 7. Never throws — a sheet has nowhere to propagate to.
@@ -124,13 +212,20 @@ public final class StandupDraftModel {
     @discardableResult
     public func commit(to project: Project) -> Bool {
         guard let window, phase == .editing else { return false }
+        // The window is about to be reported; a draft that arrived after this
+        // could not be installed anyway (`install` requires `.editing`), and
+        // leaving the call in flight would keep "Polishing…" on screen above a
+        // stand-up that has already been copied.
+        polishTask?.cancel()
+        isPolishing = false
         // Read once so the clipboard and `markdownBody` are provably the same
         // string. Not a concurrency guard — this method is synchronous and
         // `@MainActor`, with no suspension point for a keystroke to land in.
         let draft = text
 
         do {
-            let result = try service.commit(draft, of: window, for: project)
+            let result = try service.commit(
+                draft, of: window, for: project, modelUsed: aiModelUsed)
             phase = .copied
             committedReport = result.report
             lastError = nil

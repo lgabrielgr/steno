@@ -18,7 +18,7 @@ func regeneratingAfterUndoReproducesTheWindow() throws {
 
     let before = try fixture.gatherer(nowOffset: 0).gather(for: fixture.alpha)
     let report = try fixture.standupService(nowOffset: 300)
-        .commit("the draft as copied", of: before, for: fixture.alpha)
+        .commit("the draft as copied", of: before, for: fixture.alpha, modelUsed: nil)
         .report
 
     try fixture.standupUndoService().undo(report, for: fixture.alpha)
@@ -45,7 +45,7 @@ func undoingTheFirstReportKeepsTheFrozenCutoff() throws {
     #expect(fixture.alpha.lastStandupAt == nil, "precondition: never reported")
     let before = try fixture.gatherer(nowOffset: 0).gather(for: fixture.alpha)
     let report = try fixture.standupService(nowOffset: 300)
-        .commit("the draft as copied", of: before, for: fixture.alpha)
+        .commit("the draft as copied", of: before, for: fixture.alpha, modelUsed: nil)
         .report
 
     try fixture.standupUndoService().undo(report, for: fixture.alpha)
@@ -81,7 +81,7 @@ func undoneReportEventsNeverReachALaterSummary() throws {
 
     let window = try fixture.gatherer(nowOffset: 300).gather(for: fixture.alpha)
     let report = try fixture.standupService(nowOffset: 900)
-        .commit("the draft as copied", of: window, for: fixture.alpha)
+        .commit("the draft as copied", of: window, for: fixture.alpha, modelUsed: nil)
         .report
     try fixture.standupUndoService().undo(report, for: fixture.alpha)
 

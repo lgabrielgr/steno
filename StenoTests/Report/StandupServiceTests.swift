@@ -26,7 +26,7 @@ func copyPersistsTheEditedText() throws {
     let window = try windowWithOneTask(fixture)
 
     _ = try fixture.standupService(nowOffset: 900)
-        .commit(editedDraft, of: window, for: fixture.alpha)
+        .commit(editedDraft, of: window, for: fixture.alpha, modelUsed: nil)
 
     let reports = try fixture.reportsInStore()
     #expect(reports.count == 1)
@@ -49,7 +49,7 @@ func copyAppendsAnEventPerTask() throws {
     #expect(window.tasks.count == 2, "precondition: both tasks are in the window")
 
     _ = try fixture.standupService(nowOffset: 900)
-        .commit(editedDraft, of: window, for: fixture.alpha)
+        .commit(editedDraft, of: window, for: fixture.alpha, modelUsed: nil)
 
     let reported = try fixture.eventsInStore(kind: .standupReported)
     #expect(Set(reported.map(\.taskID)) == Set([first.id, second.id]))
@@ -64,7 +64,7 @@ func copyAdvancesTheClockToTheWindowEnd() throws {
     let window = try windowWithOneTask(fixture)
 
     _ = try fixture.standupService(nowOffset: 900)
-        .commit(editedDraft, of: window, for: fixture.alpha)
+        .commit(editedDraft, of: window, for: fixture.alpha, modelUsed: nil)
 
     // D-076. `lastStandupAt` must be the generate instant, so anything captured
     // between generating and copying falls into the next window rather than
@@ -81,7 +81,7 @@ func reportRecordsTheWindowItCopied() throws {
     let window = try windowWithOneTask(fixture)
 
     _ = try fixture.standupService(nowOffset: 900)
-        .commit(editedDraft, of: window, for: fixture.alpha)
+        .commit(editedDraft, of: window, for: fixture.alpha, modelUsed: nil)
 
     // M2-04 recovers the previous `lastStandupAt` from `windowStart`, so these
     // two are the undo mechanism, not decoration.
@@ -101,7 +101,7 @@ func failedSaveWritesNothing() throws {
 
     #expect(throws: Boom.self) {
         _ = try fixture.standupService(nowOffset: 900, save: { _ in throw Boom() })
-            .commit(editedDraft, of: window, for: fixture.alpha)
+            .commit(editedDraft, of: window, for: fixture.alpha, modelUsed: nil)
     }
 
     // Read through independent contexts: the context that attempted the write
@@ -124,7 +124,7 @@ func failedCopyDoesNotLeakIntoALaterSave() throws {
 
     #expect(throws: Boom.self) {
         _ = try fixture.standupService(nowOffset: 900, save: { _ in throw Boom() })
-            .commit(editedDraft, of: window, for: fixture.alpha)
+            .commit(editedDraft, of: window, for: fixture.alpha, modelUsed: nil)
     }
 
     // This is what `context.rollback()` is actually for, and the only assertion
@@ -149,7 +149,7 @@ func refusedClipboardStillCommits() throws {
     let window = try windowWithOneTask(fixture)
 
     let result = try fixture.standupService(nowOffset: 900, copy: { _ in false })
-        .commit(editedDraft, of: window, for: fixture.alpha)
+        .commit(editedDraft, of: window, for: fixture.alpha, modelUsed: nil)
 
     // Not reversible: the compensation for an appended Event is a delete, which
     // §3.3 forbids. So it is reported, and M2-04's undo is the recovery.
@@ -172,7 +172,7 @@ func theEditedTextReachesTheClipboard() throws {
             return true
         }
     )
-    .commit(editedDraft, of: window, for: fixture.alpha)
+    .commit(editedDraft, of: window, for: fixture.alpha, modelUsed: nil)
 
     #expect(copied == editedDraft)
     #expect(result.didReachClipboard)
@@ -187,7 +187,7 @@ func copyingOneProjectLeavesTheOtherAlone() throws {
     let window = try windowWithOneTask(fixture)
 
     _ = try fixture.standupService(nowOffset: 900)
-        .commit(editedDraft, of: window, for: fixture.alpha)
+        .commit(editedDraft, of: window, for: fixture.alpha, modelUsed: nil)
 
     #expect(try fixture.reloadThroughASecondContext(fixture.beta)?.lastStandupAt == nil)
     let reported = try fixture.eventsInStore(kind: .standupReported)
@@ -205,7 +205,7 @@ func mismatchedWindowIsRefused() throws {
         // Alpha's window, Beta's project: without the guard this advances one
         // project's clock against the other's window.
         _ = try fixture.standupService(nowOffset: 900)
-            .commit(editedDraft, of: window, for: fixture.beta)
+            .commit(editedDraft, of: window, for: fixture.beta, modelUsed: nil)
     }
 
     #expect(try fixture.reportsInStore().isEmpty)
@@ -220,7 +220,7 @@ func eventsCarryTheirReportID() throws {
     let window = try windowWithOneTask(fixture)
 
     let result = try fixture.standupService(nowOffset: 900)
-        .commit(editedDraft, of: window, for: fixture.alpha)
+        .commit(editedDraft, of: window, for: fixture.alpha, modelUsed: nil)
 
     // M2-04 redacts exactly the events belonging to the report being undone.
     let reported = try fixture.eventsInStore(kind: .standupReported)
@@ -237,7 +237,7 @@ func successfulCopyPostsOnce() throws {
     let counter = WriteCounter()
 
     _ = try fixture.standupService(nowOffset: 900)
-        .commit(editedDraft, of: window, for: fixture.alpha)
+        .commit(editedDraft, of: window, for: fixture.alpha, modelUsed: nil)
 
     #expect(counter.posts == 1)
 }
@@ -251,7 +251,7 @@ func emptyWindowCopiesCleanly() throws {
     #expect(window.tasks.isEmpty, "precondition: nothing happened in this window")
 
     _ = try fixture.standupService(nowOffset: 900)
-        .commit(editedDraft, of: window, for: fixture.alpha)
+        .commit(editedDraft, of: window, for: fixture.alpha, modelUsed: nil)
 
     // "Nothing to report since yesterday" is a thing people say at stand-ups,
     // and D-074 renders it as three `_None_` sections rather than a blank
@@ -259,4 +259,29 @@ func emptyWindowCopiesCleanly() throws {
     #expect(try fixture.reportsInStore().count == 1)
     #expect(try fixture.eventsInStore(kind: .standupReported).isEmpty)
     #expect(try fixture.reloadThroughASecondContext(fixture.alpha)?.lastStandupAt == window.end)
+}
+
+@MainActor
+@Test("wasAIGenerated is derived from modelUsed, in both directions")
+func theAIFlagFollowsTheModel() throws {
+    let fixture = try ReportFixture()
+    let window = try windowWithOneTask(fixture)
+
+    _ = try fixture.standupService(nowOffset: 900)
+        .commit(editedDraft, of: window, for: fixture.alpha, modelUsed: "claude-test-1")
+
+    let reported = try #require(fixture.reportsInStore().first)
+    #expect(reported.modelUsed == "claude-test-1")
+    // D-151: derived rather than passed beside it, so the two fields cannot
+    // disagree about what produced the text the user copied.
+    #expect(reported.wasAIGenerated)
+
+    let second = try ReportFixture()
+    let secondWindow = try windowWithOneTask(second)
+    _ = try second.standupService(nowOffset: 900)
+        .commit(editedDraft, of: secondWindow, for: second.alpha, modelUsed: nil)
+
+    let fallback = try #require(second.reportsInStore().first)
+    #expect(fallback.modelUsed == nil)
+    #expect(fallback.wasAIGenerated == false)
 }
