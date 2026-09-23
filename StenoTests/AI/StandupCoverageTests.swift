@@ -63,8 +63,12 @@ func onlyTheUsersOwnWordsCount() async {
     // D-072's reasoning, applied here: `created` and `statusChanged` bodies are
     // strings the app wrote. A draft omitting a task whose only window activity
     // was the app's own bookkeeping has lost nothing of the user's.
+    // `.done` rather than the fixture's default `.inProgress`: a live task is
+    // required coverage on its status alone, which would make this test pass
+    // for a reason unrelated to the events it is actually about.
     let machine = DraftFixture.task(
         "moved columns and nothing else",
+        status: .done,
         events: [
             DraftFixture.event("Task created", kind: .created),
             DraftFixture.event("To Do → In Progress", kind: .statusChanged),
@@ -219,4 +223,65 @@ func aBlankThemedBulletIsNotCoverage() async {
 
     #expect(result.modelUsed == nil)
     #expect(result.markdown.contains("spent all morning on this"))
+}
+
+@Test("a quiet in-progress task cannot be dropped")
+func anOmittedLiveTaskDegrades() async {
+    // `RawReportSections` puts every `.inProgress` task under *Today* whether
+    // or not anything was written about it — `aQuietOpenTaskSurvives` pins that
+    // in the gatherer. An AI report that skipped it would say less about the
+    // window than the fallback it replaced.
+    let quiet = DraftFixture.task("ship the thing", status: .inProgress)
+    let noted = DraftFixture.task("other work", events: [DraftFixture.event("found the race")])
+    let window = DraftFixture.window(tasks: [quiet, noted])
+    let draft = StandupDraft.daily(
+        DailyDraft(
+            sinceLastStandup: [DailyBullet(taskID: noted.id, text: "found the race")],
+            today: [], blockers: []))
+
+    let result = await summarizer(provider: StubAIProvider(draft: .success(draft))).summarize(
+        window)
+
+    #expect(result.modelUsed == nil)
+    #expect(result.markdown.contains("ship the thing"))
+}
+
+@Test("a quiet blocked task cannot be dropped, reason or no reason")
+func anOmittedReasonlessBlockerDegrades() async {
+    // The twin of `anOmittedBlockerDegrades`, with `blockedReason` nil — the
+    // case a `blockedReason != nil` test cannot see. `aQuietBlockedTaskSurvives`
+    // is the gatherer's matching pin.
+    let quiet = DraftFixture.task("waiting on someone", status: .blocked)
+    let noted = DraftFixture.task("other work", events: [DraftFixture.event("found the race")])
+    let window = DraftFixture.window(tasks: [quiet, noted])
+    let draft = StandupDraft.daily(
+        DailyDraft(
+            sinceLastStandup: [DailyBullet(taskID: noted.id, text: "found the race")],
+            today: [], blockers: []))
+
+    let result = await summarizer(provider: StubAIProvider(draft: .success(draft))).summarize(
+        window)
+
+    #expect(result.modelUsed == nil)
+    #expect(result.markdown.contains("waiting on someone"))
+}
+
+@Test("a quiet done or todo task may still be omitted")
+func aQuietFinishedTaskMayBeOmitted() async {
+    // The limit, asserted so that tightening the rule further is a deliberate
+    // act rather than a drift. These are where §7.3's pressure to condense a
+    // long periodic window into 8–12 bullets actually bites.
+    let done = DraftFixture.task("finished quietly", status: .done)
+    let todo = DraftFixture.task("not started", status: .todo)
+    let noted = DraftFixture.task("real work", events: [DraftFixture.event("found the race")])
+    let window = DraftFixture.window(.periodic, tasks: [done, todo, noted])
+    let draft = StandupDraft.periodic(
+        PeriodicDraft(
+            completed: [ThemedBullet(taskIDs: [noted.id], text: "found the race")],
+            inFlight: [], blockersAndRisks: []))
+
+    let result = await summarizer(provider: StubAIProvider(draft: .success(draft))).summarize(
+        window)
+
+    #expect(result.modelUsed == modelID)
 }

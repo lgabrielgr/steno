@@ -4257,9 +4257,35 @@ version rather than in the finding that prompted it.**
    *Blockers*, so the AI path could drop a blocker the fallback would have spoken. A blocker
    nobody mentions is the worst thing this product can do to a stand-up.
 
+3. **A quiet live task was omissible.** `RawReportSections` puts every `.inProgress` task under
+   *Today* and every `.blocked` task under *Blockers* whether or not anything was written about
+   them — *Today* is a statement about current status, not about recorded words, and the gatherer
+   pins both cases (`aQuietOpenTaskSurvives`, `aQuietBlockedTaskSurvives`). An authored-events
+   test sees nothing to lose there, so the AI path could drop a task the user is working on right
+   now and be marked successful.
+
+**The rule these three amendments converge on is not "did the user type something" but "would
+§7.4's report have spoken this task".** The AI path may never say less about the window than the
+deterministic path it replaces. Stated that way the first version was wrong on its face, and it
+took three rounds of review to see it.
+
+**Its limit is deliberate and is asserted, not merely left open.** A quiet `.done` or `.todo` task
+may still be omitted. The original argument holds for exactly those — `RawReportSections.progressed`
+has its own accepted gap — and they are where §7.3's pressure to condense a long `periodic` window
+into 8–12 themed bullets actually bites. Demanding every row of a forty-task window be accounted
+for would contradict the instruction the prompt gives and buy silent fallbacks with it.
+`aQuietFinishedTaskMayBeOmitted` pins that limit, so tightening it further is a deliberate act
+rather than a drift.
+
+**Every tightening costs polish.** Coverage failure discards the whole AI report, not the missing
+bullet, so each carrier added here makes §7.4's raw report appear more often. That trade was made
+knowingly and with the user's decision, on the grounds that a stand-up missing a live task is
+worse than a stand-up that reads a little rougher.
+
 **Falsified by** `droppedWorkDegrades`, `aQuietTaskMayBeOmitted`, `onlyTheUsersOwnWordsCount`,
 `themedBulletsCountAsCoverage`, `aBlankBulletIsNotCoverage`, `aBlankThemedBulletIsNotCoverage`,
-`anOmittedBlockerDegrades` and `aReportedBlockerIsFine`. Mutation-verified in both directions, which is the part that
+`anOmittedBlockerDegrades`, `aReportedBlockerIsFine`, `anOmittedLiveTaskDegrades`,
+`anOmittedReasonlessBlockerDegrades` and `aQuietFinishedTaskMayBeOmitted`. Mutation-verified in both directions, which is the part that
 matters here: removing the guard turns the first red, and widening it to "every task must appear"
 turns the second red — the check that the fix did not overshoot into the failure mode above.
 The blank-bullet mutation also had to be run against *both* arms of `reportedTaskIDs`: the daily

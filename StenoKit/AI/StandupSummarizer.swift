@@ -145,22 +145,39 @@ public struct StandupSummarizer: Sendable {
         return window.tasks.filter { !reported.contains($0.id) && carriesUserWords($0) }.count
     }
 
-    /// Whether omitting this task would lose something the user actually said.
+    /// Whether the fallback would say something about this task that a draft
+    /// omitting it would not.
     ///
-    /// **Two carriers, not one.** Authored events are the obvious half. The
-    /// other is `blockedReason`, which `GatheredTask` sources *independently of
-    /// the window* — deliberately, so that "a task blocked last week, still
-    /// blocked, with nothing new said since" still reports its reason, which is
-    /// exactly the case where `events` is empty (D-069). `RawReportSections`
-    /// puts every currently-blocked task under *Blockers* with that reason, so
-    /// without this clause an AI draft could drop a standing blocker and be
-    /// marked successful while the fallback it replaced would have spoken it
-    /// (PR #37 review).
+    /// **Four carriers, and each one was a separate round of review.** The rule
+    /// is not "did the user type something" but "would §7.4's report have
+    /// spoken this task", because the AI path may never say less about the
+    /// window than the deterministic path it replaces.
+    ///
+    /// - **Authored events.** The obvious half: words the user typed.
+    /// - **A blocked reason.** `GatheredTask` sources it *independently of the
+    ///   window* (D-069), precisely so "blocked last week, still blocked,
+    ///   nothing new said" reports its reason — the case where `events` is
+    ///   empty.
+    /// - **Currently in progress.** `RawReportSections` puts every
+    ///   `.inProgress` task under *Today* whether or not anything was written
+    ///   about it, because *Today* is a statement about current status rather
+    ///   than about recorded words (`aQuietOpenTaskSurvives`).
+    /// - **Currently blocked.** Likewise under *Blockers*, with or without a
+    ///   reason (`aQuietBlockedTaskSurvives`).
+    ///
+    /// **A quiet `.done` or `.todo` task may still be omitted**, and that limit
+    /// is deliberate rather than an oversight to close later. D-156's original
+    /// argument stands for them — `RawReportSections.progressed` has its own
+    /// accepted gap — and they are where §7.3's pressure to condense a long
+    /// `periodic` window into 8–12 themed bullets actually bites. Requiring
+    /// every row of a forty-task window to be accounted for would collide with
+    /// the instruction the prompt gives, and buy silent fallbacks with it.
     ///
     /// A blocker nobody mentions is the worst thing this product can do to a
-    /// stand-up.
+    /// stand-up; a live task nobody mentions is the second worst.
     private static func carriesUserWords(_ task: GatheredTask) -> Bool {
-        task.blockedReason != nil || task.events.contains { $0.kind.isUserAuthored }
+        if task.status == .inProgress || task.status == .blocked { return true }
+        return task.blockedReason != nil || task.events.contains { $0.kind.isUserAuthored }
     }
 
     /// §7.4's raw report for this window: M2-02's two pure functions, unchanged.
