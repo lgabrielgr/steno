@@ -4187,3 +4187,26 @@ nothing; erring low costs the feature.
 **This is arithmetic, not measurement** — no live call has been made (see the PR body). The metrics
 label `.truncated` is where an error in it would surface, and M3-04's live run is where it would
 first be seen.
+
+### D-155 — No report history, and why the cheap-to-add argument does not decide it
+
+A pointer, not a decision made here: §12's **Q(M3) is resolved in REQUIREMENTS.md v1.21 — no
+report history.** Recorded because the question was raised in M3-03's PR and answered during its
+review, so a reader of this log would otherwise find the resolution only by diffing the spec.
+
+The question framed itself as an economic one — "cheap to add now, awkward to retrofit" — and
+that framing is what had to be rejected rather than answered. Cost is not the test; §2.1 is. A
+browsable archive of past stand-ups is a record of *what was reported*, which is a different
+product from a record of *what was done*. It invites comparing weeks against each other, and the
+next three requests after that are the performance-tracking, self-review and promo-packet
+tooling §2.1 exists to refuse. Steno's value "comes as much from what it refuses to do as from
+what it does" (CLAUDE.md), and this is one of the refusals.
+
+**Nothing is deleted and nothing is prevented.** `StandupReport` rows persist — FR-4.1's undo
+needs them and §10's export carries them — so the decision is about surfaces, not storage, and
+the data to build a history view remains available if the user ever asks for one. That
+asymmetry is why "awkward to retrofit" was overstated: what would be retrofitted is a view over
+rows that were there all along.
+
+§2.1's non-goal list gains the line, so a future task proposing it is declined with a pointer
+rather than re-argued.
