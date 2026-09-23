@@ -30,7 +30,9 @@ M3-04 adds a pane and the AI path lights up with no further wiring.
 
 ## What this task decides
 
-Seven things §7.3 and §7.4 leave open. Each gets a `DECISIONS.md` entry, D-148 through D-154.
+Seven things §7.3 and §7.4 leave open. Each gets a `DECISIONS.md` entry, D-148 through D-154 —
+joined by **D-156**, which review added: a draft that omits a task the user wrote notes on
+degrades, and one that skips a task nobody said anything about does not.
 The log's maximum before this task is D-147.
 
 | Question | Decision |

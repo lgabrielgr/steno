@@ -4212,3 +4212,36 @@ rows that were there all along.
 
 §2.1's non-goal list gains the line, so a future task proposing it is declined with a pointer
 rather than re-argued.
+
+### D-156 — A draft that drops the user's own words degrades; one that skips a quiet task does not
+
+Found in PR #37's review. `StandupDraft.validated(against:)` rejects task ids the app never sent
+and says nothing about ids the model never used, so a structurally valid daily response covering
+four of twelve tasks passed every check, was marked `wasAIGenerated`, and was copied.
+
+**The obvious fix is wrong, and would have been worse than the defect.** Validating against
+`Set(window.tasks.map(\.id))` — every task in the window must appear — is *stricter than the
+fallback it degrades to*. `RawReportSections.progressed` records its own accepted gap: a task now
+`.todo` whose only window event is a status change appears under no daily heading, because a bare
+title under *Since last stand-up* would assert progress that did not happen. Full-coverage
+validation would therefore reject a draft for omitting exactly what M2-02 omits, and hand the
+user the rougher report for being equally faithful. §7.3's "one line per task" constrains how a
+bullet is written; it does not promise every row in the window earns one.
+
+**The rule is authored events.** §7.3 permits a thin bullet — "if a task's events are too thin to
+summarize, output the raw note rather than padding" — and nowhere permits silence. So: a task
+with at least one user-authored event inside the window that no bullet mentions means the draft
+lost work the user typed, and §7.4's report, which carries it, is better. Both cadences; a themed
+`periodic` bullet listing several `task_ids` covers all of them, which is the grouping §7.3
+licenses rather than an omission.
+
+`InvalidResponseReason` gains `.incompleteDraft` rather than reusing `.emptyDraft`. "The model
+answered about half the window" is a different fact about a provider from "the model answered
+with nothing", and §8's metrics stop distinguishing them if they share a label. It carries a
+count and never the ids — §8 keeps task identity out of the log, the rule `unknownTaskIDs`
+already follows.
+
+**Falsified by** `droppedWorkDegrades`, `aQuietTaskMayBeOmitted`, `onlyTheUsersOwnWordsCount` and
+`themedBulletsCountAsCoverage`. Mutation-verified in both directions, which is the part that
+matters here: removing the guard turns the first red, and widening it to "every task must appear"
+turns the second red — the check that the fix did not overshoot into the failure mode above.
