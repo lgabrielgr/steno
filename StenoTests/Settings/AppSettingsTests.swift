@@ -80,3 +80,37 @@ func anUndecodableChordIsNotErased() throws {
     #expect(settings.hotkeyChord == nil)
     #expect(defaults.data(forKey: AppSettings.hotkeyChordKey) == Data([0x01, 0x02]))
 }
+
+// MARK: - §7.1's selected model (PR #37 review)
+
+@Test("the selected model round-trips and clears")
+@MainActor
+func theSelectedModelRoundTrips() throws {
+    let (settings, defaults) = try scratch()
+
+    #expect(settings.aiSelectedModelID == nil)
+
+    settings.aiSelectedModelID = "claude-test-1"
+    #expect(settings.aiSelectedModelID == "claude-test-1")
+    #expect(defaults.string(forKey: AppSettings.aiSelectedModelIDKey) == "claude-test-1")
+
+    settings.aiSelectedModelID = nil
+    #expect(settings.aiSelectedModelID == nil)
+    // Removed rather than blanked: a key left behind with an empty value is a
+    // setting `defaults read` shows as present and the app treats as absent.
+    #expect(defaults.object(forKey: AppSettings.aiSelectedModelIDKey) == nil)
+}
+
+@Test("an empty model id reads as no selection")
+@MainActor
+func anEmptyModelIDIsNoSelection() throws {
+    let (settings, defaults) = try scratch()
+
+    // `UserDefaults` will happily store one, and a model id of "" reaches the
+    // API as a 400 the user cannot explain.
+    defaults.set("", forKey: AppSettings.aiSelectedModelIDKey)
+    #expect(settings.aiSelectedModelID == nil)
+
+    settings.aiSelectedModelID = ""
+    #expect(defaults.object(forKey: AppSettings.aiSelectedModelIDKey) == nil)
+}

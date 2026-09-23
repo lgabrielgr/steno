@@ -27,7 +27,7 @@ private func copiedReport(
     try fixture.setLastStandup(lastStandupAt, on: project)
     let window = try fixture.gatherer(nowOffset: gatherAt).gather(for: project)
     return try fixture.standupService(nowOffset: copyAt, save: save)
-        .commit("the draft as copied", of: window, for: project).report
+        .commit("the draft as copied", of: window, for: project, modelUsed: nil).report
 }
 
 /// One in-progress task with a note, so every window has something in it.

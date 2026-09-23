@@ -47,13 +47,13 @@ public enum RawReportSections {
     private static func daily(_ tasks: [GatheredTask]) -> [ReportSection] {
         [
             ReportSection(
-                title: "Since last stand-up",
+                title: ReportHeadings.sinceLastStandup,
                 bullets: tasks.filter(progressed).map { bullet($0, details: authored($0)) }),
             ReportSection(
-                title: "Today",
+                title: ReportHeadings.today,
                 bullets: tasks.filter { $0.status == .inProgress }.map { bullet($0) }),
             ReportSection(
-                title: "Blockers",
+                title: ReportHeadings.blockers,
                 bullets: tasks.filter { $0.status == .blocked }
                     .map { bullet($0, details: reason($0)) }),
         ]
@@ -93,9 +93,9 @@ public enum RawReportSections {
         }
 
         return [
-            ReportSection(title: "Completed", bullets: completed),
-            ReportSection(title: "In flight", bullets: inFlight),
-            ReportSection(title: "Blockers & risks", bullets: blocked),
+            ReportSection(title: ReportHeadings.completed, bullets: completed),
+            ReportSection(title: ReportHeadings.inFlight, bullets: inFlight),
+            ReportSection(title: ReportHeadings.blockersAndRisks, bullets: blocked),
         ]
     }
 

@@ -44,7 +44,7 @@ func noSettingsKeyLooksLikeACredential() {
     // The count is what stops this being a test that passes by matching
     // nothing: a new key must be listed in `allKeys`, and listing it moves this
     // number. Same guard `CredentialPatterns.all` carries for the same reason.
-    #expect(AppSettings.allKeys.count == 8)
+    #expect(AppSettings.allKeys.count == 9)
     #expect(Set(AppSettings.allKeys).count == AppSettings.allKeys.count)
 }
 

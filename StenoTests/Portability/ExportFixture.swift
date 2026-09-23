@@ -211,6 +211,6 @@ struct ExportFixture {
             .gather(for: project)
         _ = try StandupService(
             context: context, now: { Self.at(300) }, copy: { _ in true }
-        ).commit("*Yesterday*\n- fixed PAY-421", of: window, for: project)
+        ).commit("*Yesterday*\n- fixed PAY-421", of: window, for: project, modelUsed: nil)
     }
 }

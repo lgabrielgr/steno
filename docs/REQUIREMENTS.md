@@ -1,12 +1,13 @@
 # REQUIREMENTS.md — Steno
 
-**Status:** Draft v1.20
-**Date:** 2026-09-21
+**Status:** Draft v1.21
+**Date:** 2026-09-23
 **Audience:** Engineering agents in future sessions. This document is the source of truth for task generation and implementation.
 
 > **Steno** — a stenographer records what was said, verbatim, without editorializing. That is the product in one word: an accurate record of what you did, lightly organized, never embellished.
 
 **Changelog**
+- *v1.21* — §12's **Q(M3) is resolved: no report history.** Past reports are not browsable: no product surface displays, lists, or compares them. The rows are read by FR-4.1's undo and by §10's export (`ExportEncoder` fetches every `StandupReport`) and by import's merge — all of which move or reverse a report rather than presenting one. The question was posed as "cheap to add now, awkward to retrofit", and the answer is that cheapness was never the test — §2.1 is. A browsable archive of past stand-ups is a record of *what was reported*, which is a different product from a record of *what was done*: it invites comparing weeks against each other, and from there the performance-tracking and self-review tooling §2.1 exists to refuse. The rows stay — FR-4.1 needs them and §10's export carries them — so this is a decision about surfaces, not storage, and it stays reversible from the data if the user ever asks. Answered by the user 2026-09-23 during M3-03's review; see `DECISIONS.md` D-155.
 - *v1.20* — §6 no longer requires `kSecAttrAccessibleAfterFirstUnlock`, and now names the login keychain with `kSecAttrSynchronizable` off. The old wording was not implementable on this project's terms: the attribute means something only to the data-protection keychain, which needs the restricted `keychain-access-groups` entitlement and therefore a provisioning profile — and adding it makes CI's ad-hoc signing shape fail to build outright ("Steno requires a provisioning profile"), takes `make build` offline behind `-allowProvisioningUpdates` and a live Apple ID session, and buys a profile that expires every seven days on the free Personal Team §6.1 commits to. Probed five ways before any code was written; the login keychain passes ad-hoc signed. Nothing §6 or §8 actually guarantees changes — secrets stay in the Keychain and out of SwiftData, `UserDefaults`, plists and logs — and the attribute is now *omitted* rather than passed, because the login keychain accepts it while ignoring it and a call that looks like it enforces a rule it does not is worse than no call. §6's iCloud-sync line flips from "optionally, user-controlled" to off, which is what D1/§14's cancellation of sync already implied. Found while implementing M3-01; the implementation choices are `DECISIONS.md` D-134 and D-135, which point here.
 - *v1.19* — §3.3 now names §10.1's Replace as the single sanctioned exception to "events are never edited or deleted". The two requirements have always contradicted each other: §3.3 states the invariant without qualification and CLAUDE.md promotes it to a non-negotiable, while §10.1 requires Replace to wipe the local store — which necessarily removes `Event` rows. Nothing about either rule changes; the exception is stated where a reader of §3.3 will find it, so the next agent to meet a deletion in an append-only store reads a decision rather than a defect. The exception is confined to a plan field that a merge cannot populate, and a test asserts that emptiness across the whole merge fixture set. Found while implementing M2.5-03; the implementation choice is `DECISIONS.md` D-106, which points here.
 - *v1.18* — §10.6's commutativity property now says what it is stated over. Read literally it was false in the **default** configuration: §10.2 excludes `SourceRef.lastFetchedAt` and `.cachedSummary` from an export unless the opt-in is set, so an ordinary file carries no information about them, and §10.1's "`nil` loses to any value" then preserves whichever machine happens to be the import target — A→B and B→A differ in exactly those two fields. Nothing about the merge rule is wrong; the requirement was asserting convergence over data the file does not contain. Raised in review of M2.5-02's PR, where it had been recorded only in a test comment. `DECISIONS.md` D-105.
@@ -91,6 +92,9 @@ Do not build these. Reject tasks that propose them.
 - Custom statuses, custom fields, custom workflows
 - Task prioritization or "what should I work on" recommendations — see D12
 - Auto-posting to Slack (user copies manually — see D6)
+- Browsing past reports — history views, week-over-week comparison, self-review or promo-packet
+  export. The rows persist for FR-4.1's undo and §10's export; no surface reads them. Q(M3),
+  resolved v1.21
 
 ---
 
@@ -803,14 +807,15 @@ Resolve with the user before the milestone that depends on each.
 
 **Resolved (v1.8):** task model's Swift type name → `TaskItem` (§3.2).
 
+**Resolved (v1.21):** Report history → **no** (Q(M3)). Past reports are not browsable; the rows persist for FR-4.1's undo and §10's export, and nothing else reads them. §2.1.
+
 **Resolved (v1.7):** first-run `windowStart` → 24h (§3.5). Undo semantics → redaction (FR-4.1). Note grace window → redact-and-reappend (FR-2). `modifiedAt` → on both mutable models (§3.1, §3.2). `SourceRef` → first-class model with `id`, own export array (§3.4, §10.2). Periodic output schema → §7.3. Stale threshold precedence → FR-5. Bundle ID / deployment target → §9.1.
 
 **Still open:**
 
 1. **Q(M4):** Should a task auto-transition to `done` when its linked Jira ticket closes, or is the app's status independent of Jira's? (Recommend: independent, with a suggestion badge. Auto-transition would make the app's state depend on a system the user doesn't fully control.)
-2. **Q(M3):** Should the app retain a history of past reports for browsing (e.g. for writing self-reviews or promo packets)? Cheap to add now, awkward to retrofit.
-3. **Q(M1):** Should EM recurring activities (weekly 1:1s, review cycles) support task templates or recurrence? Deferred from v1; confirm this is acceptable.
-4. **Q(M2) — partially resolved by §10.** Single-device is acceptable through M6 provided export/import lands at M2.5 as specified. Remaining question: is auto-export into a cloud-drive folder sufficient in daily practice, or does the user need true concurrent multi-machine editing sooner? If the answer is genuinely "not sufficient," that reopens §14.
+2. **Q(M1):** Should EM recurring activities (weekly 1:1s, review cycles) support task templates or recurrence? Deferred from v1; confirm this is acceptable.
+3. **Q(M2) — partially resolved by §10.** Single-device is acceptable through M6 provided export/import lands at M2.5 as specified. Remaining question: is auto-export into a cloud-drive folder sufficient in daily practice, or does the user need true concurrent multi-machine editing sooner? If the answer is genuinely "not sufficient," that reopens §14.
 
 ---
 

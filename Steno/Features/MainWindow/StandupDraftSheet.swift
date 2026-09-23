@@ -115,6 +115,20 @@ struct StandupDraftSheet: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
+            // D-148: the AI call is in flight and the text on screen is
+            // M2-02's raw report. Copy stays live throughout — §7.4's promise
+            // is that the user is never left holding nothing while a network
+            // call decides, and a disabled button during a 20-second call is
+            // exactly that.
+            if draft.isPolishing {
+                HStack(spacing: 6) {
+                    ProgressView()
+                        .controlSize(.small)
+                    Text("Polishing…")
+                }
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            }
             Spacer()
             switch draft.phase {
             case .editing:

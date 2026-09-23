@@ -81,8 +81,15 @@ public struct StandupService {
     /// makes the draft editable and §7.3's whole philosophy is that the user's
     /// phrasing wins, so the edited string is what reaches both the clipboard
     /// and `markdownBody`.
+    /// **`modelUsed` has no default value** (D-151). A defaulted `nil` keeps
+    /// every existing call site compiling, which is its entire appeal and also
+    /// its defect: a future caller then records an AI report as a fallback and
+    /// the compiler never asks. `wasAIGenerated` is derived from it rather than
+    /// passed beside it, so the two fields cannot disagree about what produced
+    /// the text — which is what makes `modelUsed` usable for the "debugging
+    /// quality regressions" its own declaration names.
     public func commit(
-        _ body: String, of window: GatheredWindow, for project: Project
+        _ body: String, of window: GatheredWindow, for project: Project, modelUsed: String?
     ) throws -> StandupCommit {
         // 1. The pair must describe the same project. `NoteService.correct`
         //    guards its own pair for this reason: a mismatch would advance one
@@ -108,7 +115,8 @@ public struct StandupService {
             windowStart: window.start,
             windowEnd: window.end,
             markdownBody: body,
-            wasAIGenerated: false
+            wasAIGenerated: modelUsed != nil,
+            modelUsed: modelUsed
         )
         context.insert(report)
 

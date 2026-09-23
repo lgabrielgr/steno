@@ -95,7 +95,7 @@ func appendOnlyHoldsForStandupCommit() throws {
     let service = fixture.standupService(nowOffset: 900)
 
     try expectingAppendOnly(fixture.context) {
-        _ = try service.commit("the draft body", of: window, for: fixture.alpha)
+        _ = try service.commit("the draft body", of: window, for: fixture.alpha, modelUsed: nil)
     }
 
     // Proof the check exercised a real write, not zero new events passing

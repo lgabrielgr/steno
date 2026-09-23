@@ -48,7 +48,7 @@ private struct ClockFixture {
         ).gather(for: project)
         return try StandupService(
             context: fixture.context, now: { ExportFixture.at(offset) }, copy: { _ in true }
-        ).commit("*Yesterday*\n- shipped it", of: window, for: project).report
+        ).commit("*Yesterday*\n- shipped it", of: window, for: project, modelUsed: nil).report
     }
 
     func undo(_ report: StandupReport) throws {
