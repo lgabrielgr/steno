@@ -197,3 +197,107 @@ func theFallbackIsM2s() async {
     #expect(result.markdown == SlackMarkdown.render(RawReportSections.build(from: window)))
     #expect(result.markdown.contains(ReportHeadings.completed))
 }
+
+// MARK: - Work the draft left out (PR #37 review)
+
+@Test("a draft that omits a task the user wrote notes on falls back")
+func droppedWorkDegrades() async {
+    let noted = DraftFixture.task(
+        "the one it forgot", events: [DraftFixture.event("spent all morning on this")])
+    let mentioned = DraftFixture.task(
+        "the one it kept", events: [DraftFixture.event("quick fix")])
+    let window = DraftFixture.window(tasks: [noted, mentioned])
+    // Structurally valid and every id real, so `validated(against:)` passes it:
+    // the failure is in what the draft does not say.
+    let partial = StandupDraft.daily(
+        DailyDraft(
+            sinceLastStandup: [DailyBullet(taskID: mentioned.id, text: "shipped the quick fix")],
+            today: [], blockers: []))
+    let provider = StubAIProvider(draft: .success(partial))
+
+    let result = await summarizer(provider: provider).summarize(window)
+
+    #expect(result.modelUsed == nil)
+    #expect(result.markdown == StandupSummarizer.rawMarkdown(for: window))
+    // The fallback carries what the draft dropped, which is the whole reason
+    // this is a degradation rather than an accepted omission.
+    #expect(result.markdown.contains("spent all morning on this"))
+}
+
+@Test("a task with nothing written about it may be left out")
+func aQuietTaskMayBeOmitted() async {
+    // The counter-case, and the reason the check is not "every task must
+    // appear": `RawReportSections` itself puts a task like this under no daily
+    // heading, so rejecting the draft would hand the user the rougher report
+    // for being exactly as faithful as the fallback.
+    let quiet = DraftFixture.task("nothing was said about this", status: .todo)
+    let noted = DraftFixture.task(
+        "the real work", events: [DraftFixture.event("found the race")])
+    let window = DraftFixture.window(tasks: [quiet, noted])
+    let draft = StandupDraft.daily(
+        DailyDraft(
+            sinceLastStandup: [DailyBullet(taskID: noted.id, text: "found the race")],
+            today: [], blockers: []))
+    let provider = StubAIProvider(draft: .success(draft))
+
+    let result = await summarizer(provider: provider).summarize(window)
+
+    #expect(result.modelUsed == modelID)
+    #expect(result.markdown.contains("found the race"))
+}
+
+@Test("machine-authored events alone do not make a task unreportable")
+func onlyTheUsersOwnWordsCount() async {
+    // D-072's reasoning, applied here: `created` and `statusChanged` bodies are
+    // strings the app wrote. A draft omitting a task whose only window activity
+    // was the app's own bookkeeping has lost nothing of the user's.
+    let machine = DraftFixture.task(
+        "moved columns and nothing else",
+        events: [
+            DraftFixture.event("Task created", kind: .created),
+            DraftFixture.event("To Do → In Progress", kind: .statusChanged),
+        ])
+    let noted = DraftFixture.task("real work", events: [DraftFixture.event("found the race")])
+    let window = DraftFixture.window(tasks: [machine, noted])
+    let draft = StandupDraft.daily(
+        DailyDraft(
+            sinceLastStandup: [DailyBullet(taskID: noted.id, text: "found the race")],
+            today: [], blockers: []))
+
+    let result = await summarizer(provider: StubAIProvider(draft: .success(draft)))
+        .summarize(window)
+
+    #expect(result.modelUsed == modelID)
+}
+
+@Test("a periodic bullet covering several tasks reports all of them")
+func themedBulletsCountAsCoverage() async {
+    let first = DraftFixture.task("one", events: [DraftFixture.event("did a thing")])
+    let second = DraftFixture.task("two", events: [DraftFixture.event("did another")])
+    let window = DraftFixture.window(.periodic, tasks: [first, second])
+    // §7.3's grouping licence: one bullet, two task_ids, nothing dropped.
+    let draft = StandupDraft.periodic(
+        PeriodicDraft(
+            completed: [ThemedBullet(taskIDs: [first.id, second.id], text: "cleaned up retries")],
+            inFlight: [], blockersAndRisks: []))
+
+    let result = await summarizer(provider: StubAIProvider(draft: .success(draft)))
+        .summarize(window)
+
+    #expect(result.modelUsed == modelID, "grouping is not omission")
+}
+
+@Test("a cancelled polish is not reported as a degradation")
+func cancellationIsNotADegradation() {
+    // `AnthropicErrors` maps `CancellationError` to `.timedOut`, correctly —
+    // that is also how the provider's own deadline fires, so the provider
+    // cannot tell them apart and should not try. The caller can: it knows
+    // whether *its* task was cancelled, which happens when the user closes the
+    // sheet or prepares another window.
+    #expect(StandupSummarizer.degradationLabel(for: .timedOut, cancelled: true) == nil)
+
+    // A real timeout still says so, or §7.4's log stops answering the question
+    // it exists for.
+    #expect(StandupSummarizer.degradationLabel(for: .timedOut, cancelled: false) == "timedOut")
+    #expect(StandupSummarizer.degradationLabel(for: .network, cancelled: false) == "network")
+}

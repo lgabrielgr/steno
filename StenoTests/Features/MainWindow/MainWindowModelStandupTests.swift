@@ -13,11 +13,21 @@ private let origin = Date(timeIntervalSince1970: 1_000_000)
 /// `copy` is injected all the way down so the headless bundle never reaches the
 /// real pasteboard — a test that did would mutate the developer's clipboard and
 /// be order-dependent on anything else in the process that copies (§9.4).
+///
+/// **`settings` is a scratch suite, and that is load-bearing rather than tidy.**
+/// `MainWindowModel` builds its §7.3 polish out of `AppSettings`, which defaults
+/// to `UserDefaults.standard` — the developer's own preferences. On a machine
+/// where `aiSelectedModelID` happens to be set, every `prepareStandup()` below
+/// would read the real login Keychain and try to reach the network, which §9.4
+/// forbids outright and which makes the suite depend on machine state. The
+/// hazard is the one `MainWindowModel.init` already documents for auto-export
+/// and `~/Steno Backups` (PR #37 review).
 @MainActor
 private func modelWithReportableWork(
     now: @escaping () -> Date = { origin },
     copy: @escaping @MainActor (String) -> Bool = { _ in true }
 ) throws -> (MainWindowModel, Project) {
+    let defaults = try #require(UserDefaults(suiteName: "steno.tests.\(UUID().uuidString)"))
     let container = try StenoStore.inMemory()
     // `ModelContext(container)` retains its container; `container.mainContext`
     // does not, and dangles the moment the container goes out of scope.
@@ -35,7 +45,8 @@ private func modelWithReportableWork(
             kind: .note, body: "found the race in setUp"))
     try context.save()
 
-    let model = MainWindowModel(context: context, now: now, copy: copy)
+    let model = MainWindowModel(
+        context: context, now: now, copy: copy, settings: AppSettings(defaults: defaults))
     model.selection = .project(project.id)
     return (model, project)
 }

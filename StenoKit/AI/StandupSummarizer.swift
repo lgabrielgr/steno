@@ -88,10 +88,26 @@ public struct StandupSummarizer: Sendable {
                 return fallback
             }
 
+            // A draft that simply left work out is a worse failure than one
+            // that arrived malformed, because nothing about it looks wrong.
+            let dropped = Self.unreportedWork(in: window, draft: draft)
+            guard dropped == 0 else {
+                degraded(.invalidResponse(.incompleteDraft))
+                return fallback
+            }
+
             return SummarizedStandup(
                 markdown: SlackMarkdown.render(sections), modelUsed: modelID)
         } catch let error as AIError {
-            degraded(error)
+            // **A cancelled polish is not a degradation** (PR #37 review). The
+            // user closed the sheet or prepared another window; the result is
+            // discarded either way. `AnthropicErrors` maps `CancellationError`
+            // to `.timedOut` — correctly, because that is also how the
+            // provider's own deadline fires — so without this check an ordinary
+            // dismiss writes "fell back: timedOut" into the log someone reads
+            // to find out why their report was rough, and tells them their
+            // provider is slow when they cancelled it themselves.
+            degraded(error, cancelled: Task.isCancelled)
             return fallback
         } catch {
             // **An error the protocol says cannot occur.** `AIProvider`'s
@@ -102,6 +118,30 @@ public struct StandupSummarizer: Sendable {
             Log.report.error("the summarizer caught a non-AIError; a provider broke its contract")
             return fallback
         }
+    }
+
+    /// How many tasks the user wrote notes on that the draft never mentions.
+    ///
+    /// **Not "every task in the window must appear."** That reading is stricter
+    /// than the fallback it would degrade to: `RawReportSections` records its
+    /// own accepted gap — a task now `.todo` whose only window event is a status
+    /// change appears under no daily heading — so requiring full coverage would
+    /// reject drafts for omitting exactly what M2-02 omits, and hand the user
+    /// the rougher report for being more faithful.
+    ///
+    /// What is never sanctioned is dropping words the user actually wrote. §7.3
+    /// says a task too thin to summarize gets its raw note rather than padding;
+    /// it nowhere permits silence. So the test is authored events: if the user
+    /// typed something about a task inside the window and no bullet mentions
+    /// that task, the draft lost work, and §7.4's report — which does carry it —
+    /// is better.
+    ///
+    /// Counts rather than names them: §8 keeps task identity out of the log.
+    static func unreportedWork(in window: GatheredWindow, draft: StandupDraft) -> Int {
+        let mentioned = draft.allTaskIDs
+        return window.tasks.filter { task in
+            !mentioned.contains(task.id) && task.events.contains { $0.kind.isUserAuthored }
+        }.count
     }
 
     /// §7.4's raw report for this window: M2-02's two pure functions, unchanged.
@@ -142,8 +182,18 @@ public struct StandupSummarizer: Sendable {
     /// Carries `metricsLabel` and nothing else: it is a word from a fixed
     /// vocabulary, and no `AIError` case holds free-form text precisely so that
     /// logging one cannot leak a stand-up (§8).
-    private func degraded(_ error: AIError) {
-        Log.report.info(
-            "standup fell back to the raw report: \(error.metricsLabel, privacy: .public)")
+    private func degraded(_ error: AIError, cancelled: Bool = false) {
+        guard let label = Self.degradationLabel(for: error, cancelled: cancelled) else { return }
+        Log.report.info("standup fell back to the raw report: \(label, privacy: .public)")
+    }
+
+    /// What the fallback line should say, or `nil` when there is nothing to say.
+    ///
+    /// **Split out so the rule is a test rather than a claim** — D-147's
+    /// reasoning: `Log.report` writes to the unified log and cannot be read back
+    /// in-process, so a test of the emitter could only check that it did not
+    /// crash. This is the decision the emitter makes.
+    static func degradationLabel(for error: AIError, cancelled: Bool) -> String? {
+        cancelled ? nil : error.metricsLabel
     }
 }

@@ -4202,9 +4202,11 @@ next three requests after that are the performance-tracking, self-review and pro
 tooling §2.1 exists to refuse. Steno's value "comes as much from what it refuses to do as from
 what it does" (CLAUDE.md), and this is one of the refusals.
 
-**Nothing is deleted and nothing is prevented.** `StandupReport` rows persist — FR-4.1's undo
-needs them and §10's export carries them — so the decision is about surfaces, not storage, and
-the data to build a history view remains available if the user ever asks for one. That
+**Nothing is deleted and nothing is prevented.** `StandupReport` rows persist and are read in
+three places that are not surfaces: FR-4.1's undo, §10's export (`ExportEncoder` fetches every
+report), and import's merge. The decision is about *presentation* — displaying, listing, or
+comparing past reports — so the data to build a history view remains available if the user ever
+asks for one. That
 asymmetry is why "awkward to retrofit" was overstated: what would be retrofitted is a view over
 rows that were there all along.
 

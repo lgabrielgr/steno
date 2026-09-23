@@ -79,6 +79,17 @@ public enum InvalidResponseReason: Equatable, Sendable {
     /// distinguishing a decline from a broken response.
     case refused
 
+    /// The draft left out a task the user wrote notes on.
+    ///
+    /// **Distinct from `.emptyDraft`, which is a draft with no bullets at all.**
+    /// This one is well formed, passes `validated(against:)` — every id it names
+    /// is real — and is still unusable, because the failure is in what it does
+    /// *not* say. §7.3 never sanctions omission: a task too thin to summarize
+    /// gets its raw note, not silence. Filed as its own reason so §8's metrics
+    /// can tell "the model answered with nothing" from "the model answered
+    /// about half the window" (PR #37 review).
+    case incompleteDraft
+
     /// The answer was cut off by `max_tokens`.
     ///
     /// Distinct from `.schemaViolation` for the same reason in the other

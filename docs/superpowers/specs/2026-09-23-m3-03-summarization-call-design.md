@@ -443,10 +443,19 @@ it honest through review is worth more than the duplication it creates. This spe
   which is the direction that hides itself; the metrics label `.truncated` is where it would
   surface, and M3-04's live run is where it would first be seen.
 
-## An open question this task surfaces and does not answer
+## A question this task surfaced, and its answer
 
-**§12's Q(M3)** — "should the app retain a history of past reports for browsing (e.g. for writing
-self-reviews or promo packets)?" — is due before M3 ships. `StandupReport` already persists every
-report with its window and its `markdownBody`, so the data exists; what is missing is a decision
-about whether anything reads it. This task does not need the answer and does not force it, but
-M3-04 is the last task in the milestone and it should not merge with the question still open.
+**§12's Q(M3) — "should the app retain a history of past reports for browsing?" — is resolved:
+no.** Raised by this task because M3-04 is the milestone's last, answered by the user during this
+PR's review, and recorded in REQUIREMENTS.md **v1.21** with a matching `§2.1` non-goal and
+`DECISIONS.md` D-155.
+
+The question framed itself as an economic one — "cheap to add now, awkward to retrofit" — and
+that framing is what had to be rejected rather than answered. A browsable archive of past
+stand-ups records what was *reported*, which is a different product from a record of what was
+*done*: it invites comparing weeks, and the requests after that are the performance-tracking and
+self-review tooling §2.1 exists to refuse.
+
+Nothing is deleted. `StandupReport` rows persist and are read by FR-4.1's undo, §10's export and
+import's merge — none of which present a report to the user — so the refusal is about surfaces,
+and remains reversible from the data.

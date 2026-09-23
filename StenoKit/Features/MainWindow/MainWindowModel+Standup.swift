@@ -24,6 +24,14 @@ extension MainWindowModel {
     /// draft stays exactly as M2-02 rendered it. That is every launch until
     /// M3-04 ships the key field — §7.4 working, rather than a gap.
     ///
+    /// **Hazard for whoever writes a test that reaches `prepareStandup()`:**
+    /// `settings` defaults to `UserDefaults.standard`, so a `MainWindowModel`
+    /// built with defaults reads the developer's own selected model and, if one
+    /// is set, their real login Keychain — and then tries to reach the network,
+    /// which §9.4 denies. Inject a scratch `AppSettings` the way
+    /// `MainWindowModelStandupTests` does. The same hazard `init` documents for
+    /// auto-export and `~/Steno Backups`.
+    ///
     /// `static`, so `init` can call it before `self` exists.
     static func standupPolish(
         settings: AppSettings
