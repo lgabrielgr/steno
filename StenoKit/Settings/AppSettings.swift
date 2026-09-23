@@ -41,6 +41,7 @@ public struct AppSettings {
         autoExportFolderKey,
         autoExportStatusKey,
         autoExportOnboardedKey,
+        aiSelectedModelIDKey,
     ]
 
     private let defaults: UserDefaults
@@ -94,6 +95,43 @@ public struct AppSettings {
                 return
             }
             defaults.set(newValue.uuidString, forKey: Self.defaultProjectIDKey)
+        }
+    }
+
+    // MARK: - §7.1, the AI provider
+
+    /// The model id `StandupSummarizer` sends (§7.1, D-141).
+    ///
+    /// **Declared here by M3-03 and written by M3-04.** The summarizer needs
+    /// somewhere to read a selection from before the picker that writes it
+    /// exists; until then this is always absent, every stand-up takes §7.4's
+    /// raw path, and that is this task's sixth acceptance criterion rather than
+    /// a gap in it.
+    ///
+    /// **A model id, not a provider id.** Only Anthropic ships, §7.1's
+    /// abstraction is exercised by `StubAIProvider`, and a setting with one
+    /// possible value and no UI is a field M3-04 would have to either use or
+    /// delete.
+    ///
+    /// Not a credential and never near one: §8 keeps keys in the Keychain, and
+    /// `AISecretsTests` reads `allKeys` to assert exactly that.
+    public static let aiSelectedModelIDKey = "com.lgabrielgr.steno.ai.selectedModelID"
+
+    /// The user's chosen model, or `nil` when they have not chosen one.
+    ///
+    /// An empty string reads as `nil`: `UserDefaults` will happily store one,
+    /// and a model id of `""` reaches the API as a 400 the user cannot explain.
+    public var aiSelectedModelID: String? {
+        get {
+            let raw = defaults.string(forKey: Self.aiSelectedModelIDKey)
+            return (raw?.isEmpty ?? true) ? nil : raw
+        }
+        nonmutating set {
+            guard let newValue, !newValue.isEmpty else {
+                defaults.removeObject(forKey: Self.aiSelectedModelIDKey)
+                return
+            }
+            defaults.set(newValue, forKey: Self.aiSelectedModelIDKey)
         }
     }
 
