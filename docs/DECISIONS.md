@@ -4241,7 +4241,27 @@ with nothing", and §8's metrics stop distinguishing them if they share a label.
 count and never the ids — §8 keeps task identity out of the log, the rule `unknownTaskIDs`
 already follows.
 
-**Falsified by** `droppedWorkDegrades`, `aQuietTaskMayBeOmitted`, `onlyTheUsersOwnWordsCount` and
-`themedBulletsCountAsCoverage`. Mutation-verified in both directions, which is the part that
+**Amended twice in the same review, and both amendments were defects in this entry's first
+version rather than in the finding that prompted it.**
+
+1. **Coverage read the draft, not the report.** `StandupDraft.allTaskIDs` counts a bullet's ids
+   whether or not the bullet says anything, so a response pairing a blank bullet for task A with
+   a real bullet for task B passed this check, lost A's bullet to D-152 at render time, and
+   reached the user missing A. Coverage now reads `DraftSections.reportedTaskIDs`, which applies
+   D-152's rule — and that rule now has one owner, `DraftSections.isReportable`, because two
+   spellings of "blank" is the same defect in a slower form.
+2. **A standing blocker was not counted as the user's words.** `GatheredTask.blockedReason` is
+   sourced independently of the window (D-069) precisely so that a task blocked last week and
+   still blocked reports its reason with no in-window events — which is exactly the case where an
+   authored-events test says nothing would be lost. `RawReportSections` speaks that reason under
+   *Blockers*, so the AI path could drop a blocker the fallback would have spoken. A blocker
+   nobody mentions is the worst thing this product can do to a stand-up.
+
+**Falsified by** `droppedWorkDegrades`, `aQuietTaskMayBeOmitted`, `onlyTheUsersOwnWordsCount`,
+`themedBulletsCountAsCoverage`, `aBlankBulletIsNotCoverage`, `aBlankThemedBulletIsNotCoverage`,
+`anOmittedBlockerDegrades` and `aReportedBlockerIsFine`. Mutation-verified in both directions, which is the part that
 matters here: removing the guard turns the first red, and widening it to "every task must appear"
 turns the second red — the check that the fix did not overshoot into the failure mode above.
+The blank-bullet mutation also had to be run against *both* arms of `reportedTaskIDs`: the daily
+test alone left the periodic arm unguarded, which the sweep caught and a reading would not
+have.

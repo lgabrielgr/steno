@@ -138,10 +138,29 @@ public struct StandupSummarizer: Sendable {
     ///
     /// Counts rather than names them: §8 keeps task identity out of the log.
     static func unreportedWork(in window: GatheredWindow, draft: StandupDraft) -> Int {
-        let mentioned = draft.allTaskIDs
-        return window.tasks.filter { task in
-            !mentioned.contains(task.id) && task.events.contains { $0.kind.isUserAuthored }
-        }.count
+        // `DraftSections.reportedTaskIDs`, not `draft.allTaskIDs`: the latter
+        // counts a task named by a bullet with no words in it, which D-152 then
+        // drops at render time (PR #37 review).
+        let reported = DraftSections.reportedTaskIDs(in: draft)
+        return window.tasks.filter { !reported.contains($0.id) && carriesUserWords($0) }.count
+    }
+
+    /// Whether omitting this task would lose something the user actually said.
+    ///
+    /// **Two carriers, not one.** Authored events are the obvious half. The
+    /// other is `blockedReason`, which `GatheredTask` sources *independently of
+    /// the window* — deliberately, so that "a task blocked last week, still
+    /// blocked, with nothing new said since" still reports its reason, which is
+    /// exactly the case where `events` is empty (D-069). `RawReportSections`
+    /// puts every currently-blocked task under *Blockers* with that reason, so
+    /// without this clause an AI draft could drop a standing blocker and be
+    /// marked successful while the fallback it replaced would have spoken it
+    /// (PR #37 review).
+    ///
+    /// A blocker nobody mentions is the worst thing this product can do to a
+    /// stand-up.
+    private static func carriesUserWords(_ task: GatheredTask) -> Bool {
+        task.blockedReason != nil || task.events.contains { $0.kind.isUserAuthored }
     }
 
     /// §7.4's raw report for this window: M2-02's two pure functions, unchanged.
@@ -194,6 +213,12 @@ public struct StandupSummarizer: Sendable {
     /// in-process, so a test of the emitter could only check that it did not
     /// crash. This is the decision the emitter makes.
     static func degradationLabel(for error: AIError, cancelled: Bool) -> String? {
-        cancelled ? nil : error.metricsLabel
+        guard !cancelled else { return nil }
+        // The family, then the reason where there is one. §8's `ai` line keeps
+        // D-137's single word; this is the `report` line, and "invalidResponse"
+        // alone cannot tell a hallucinated shape from a draft that quietly left
+        // half the window out (PR #37 review).
+        guard case .invalidResponse(let reason) = error else { return error.metricsLabel }
+        return "\(error.metricsLabel).\(reason.label)"
     }
 }

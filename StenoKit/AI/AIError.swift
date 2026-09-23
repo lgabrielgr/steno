@@ -85,9 +85,16 @@ public enum InvalidResponseReason: Equatable, Sendable {
     /// This one is well formed, passes `validated(against:)` — every id it names
     /// is real — and is still unusable, because the failure is in what it does
     /// *not* say. §7.3 never sanctions omission: a task too thin to summarize
-    /// gets its raw note, not silence. Filed as its own reason so §8's metrics
-    /// can tell "the model answered with nothing" from "the model answered
-    /// about half the window" (PR #37 review).
+    /// gets its raw note, not silence. Filed as its own reason so the two can be
+    /// told apart — in the code, which rejects them at different guards, and in
+    /// §7.4's fallback line, which logs `InvalidResponseReason.label`.
+    ///
+    /// **§8's `ai` metrics line does not distinguish them, and that is not an
+    /// oversight to fix here** (PR #37 review). `AIError.metricsLabel` is
+    /// D-137's fixed one-word vocabulary for the provider's own telemetry, and
+    /// every `invalidResponse` reason shares the `invalidResponse` label there.
+    /// The finer label belongs to the `report` category, which is where someone
+    /// asking "why was my stand-up rough" actually looks.
     case incompleteDraft
 
     /// The answer was cut off by `max_tokens`.
@@ -98,6 +105,23 @@ public enum InvalidResponseReason: Equatable, Sendable {
     /// `.schemaViolation` would make a real hallucination indistinguishable
     /// from the app under-provisioning `maxOutputTokens`.
     case truncated
+
+    /// One word, from a fixed vocabulary, for §7.4's fallback line.
+    ///
+    /// **Spelled out rather than derived from `String(describing:)`**, whose
+    /// output is a refactor away from changing — the reasoning `metricsLabel`
+    /// already carries. Nothing here can hold model output, which is what makes
+    /// logging it safe under §8.
+    public var label: String {
+        switch self {
+        case .undecodable: return "undecodable"
+        case .schemaViolation: return "schemaViolation"
+        case .emptyDraft: return "emptyDraft"
+        case .refused: return "refused"
+        case .truncated: return "truncated"
+        case .incompleteDraft: return "incompleteDraft"
+        }
+    }
 }
 
 extension AIError: LocalizedError {

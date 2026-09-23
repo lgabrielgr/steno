@@ -104,8 +104,8 @@ public enum DraftSections {
     private static func bullet(
         text: String, taskIDs: [UUID], keys: [UUID: [String]]
     ) -> ReportBullet? {
+        guard isReportable(text) else { return nil }
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return nil }
 
         let present = tokens(in: trimmed)
         var missing: [String] = []
@@ -116,6 +116,35 @@ public enum DraftSections {
 
         guard !missing.isEmpty else { return ReportBullet(text: trimmed) }
         return ReportBullet(text: trimmed + " (\(missing.joined(separator: ", ")))")
+    }
+
+    /// D-152's rule, in one place.
+    ///
+    /// **Both the renderer and the summarizer's coverage check read this**, and
+    /// they must agree: a bullet that is dropped here but counted there makes a
+    /// task look reported while nothing about it reaches the page (PR #37
+    /// review). Two spellings of "blank" is the twin-drift this repo keeps
+    /// paying for.
+    static func isReportable(_ text: String) -> Bool {
+        !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    /// The tasks this draft actually says something about.
+    ///
+    /// **Not `StandupDraft.allTaskIDs`**, which counts a bullet's ids whether or
+    /// not the bullet carries any words. A response with a blank bullet naming
+    /// task A and a real bullet naming task B passes an `allTaskIDs` coverage
+    /// check, loses A's bullet to `isReportable` at render time, and reaches the
+    /// user missing A entirely.
+    static func reportedTaskIDs(in draft: StandupDraft) -> Set<UUID> {
+        switch draft {
+        case .daily(let daily):
+            let bullets = daily.sinceLastStandup + daily.today + daily.blockers
+            return Set(bullets.filter { isReportable($0.text) }.map(\.taskID))
+        case .periodic(let periodic):
+            let bullets = periodic.completed + periodic.inFlight + periodic.blockersAndRisks
+            return Set(bullets.filter { isReportable($0.text) }.flatMap(\.taskIDs))
+        }
     }
 
     /// The sentence's words, lowercased, split on everything a ticket key
