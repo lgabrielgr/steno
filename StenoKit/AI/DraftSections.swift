@@ -86,10 +86,18 @@ public enum DraftSections {
     /// The prompt still asks the model to preserve keys: this covers the case
     /// where it does not.
     ///
-    /// **Presence is checked case-insensitively; the appended form is verbatim.**
-    /// A model that wrote "landed steno-12 behind a flag" preserved the key
-    /// badly but did preserve it, and appending a second copy would read worse
-    /// than the imperfect original.
+    /// **Presence is checked case-insensitively and on token boundaries; the
+    /// appended form is verbatim.** A model that wrote "landed steno-12 behind
+    /// a flag" preserved the key badly but did preserve it, and appending a
+    /// second copy would read worse than the imperfect original.
+    ///
+    /// **A raw substring test would treat a prefix as a match** (PR #37
+    /// review): with `PAY-4` on the task and `PAY-42` in the sentence,
+    /// `contains` says the key is present, the re-attachment is skipped, and
+    /// the copied report silently loses a ticket the user has to say out loud —
+    /// the exact failure D-150 exists to prevent, reached through D-150's own
+    /// guard. Jira numbers issues sequentially, so a project with 42 issues has
+    /// the pair.
     ///
     /// `details` stays empty: an AI bullet is one line, which is what
     /// `ReportBullet.details`' default was added for.
@@ -99,14 +107,34 @@ public enum DraftSections {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return nil }
 
-        let haystack = trimmed.lowercased()
+        let present = tokens(in: trimmed)
         var missing: [String] = []
         for key in taskIDs.flatMap({ keys[$0] ?? [] })
-        where !missing.contains(key) && !haystack.contains(key.lowercased()) {
+        where !missing.contains(key) && !present.contains(key.lowercased()) {
             missing.append(key)
         }
 
         guard !missing.isEmpty else { return ReportBullet(text: trimmed) }
         return ReportBullet(text: trimmed + " (\(missing.joined(separator: ", ")))")
+    }
+
+    /// The sentence's words, lowercased, split on everything a ticket key
+    /// cannot contain.
+    ///
+    /// **The hyphen stays a word character**, so `PAY-4` is one token rather
+    /// than two and cannot be matched by a sentence that merely says `PAY`.
+    /// Everything else splits, so a key in parentheses, quotes, or before a
+    /// full stop is still found — `(STENO-12)` and `STENO-12.` both tokenize to
+    /// `steno-12`.
+    ///
+    /// A consequence worth stating: `PAY-4-ish` is its own token, so a key
+    /// inside a longer hyphenated word reads as absent and is re-attached. That
+    /// errs toward saying the ticket twice rather than losing it, which is the
+    /// direction §7.3 chooses everywhere else.
+    private static func tokens(in text: String) -> Set<String> {
+        Set(
+            text.lowercased()
+                .split(whereSeparator: { !$0.isLetter && !$0.isNumber && $0 != "-" })
+                .map(String.init))
     }
 }

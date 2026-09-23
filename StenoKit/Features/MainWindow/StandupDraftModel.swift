@@ -91,6 +91,18 @@ public final class StandupDraftModel {
 
     private var polishTask: Task<Void, Never>?
 
+    /// Which polish `isPolishing` is describing.
+    ///
+    /// **Cancellation is cooperative, so a superseded call still finishes** (PR
+    /// #37 review). Dismissing a sheet and preparing another one inside D-145's
+    /// twenty-second budget leaves the first call suspended on the network; it
+    /// resumes, finds the phase and the text guards against it, and — without
+    /// this — has already cleared `isPolishing` for the *second* call on its way
+    /// past. The sheet then drops "Polishing…" while a draft is still in
+    /// flight. Bumped by `begin` and by `dismiss`, so a result whose generation
+    /// has moved on touches no state at all.
+    private var polishGeneration = 0
+
     private let service: StandupService
     private let undoService: StandupUndoService
     private let polish: @MainActor (GatheredWindow) async -> SummarizedStandup
@@ -153,10 +165,12 @@ public final class StandupDraftModel {
         notice = nil
         aiModelUsed = nil
         isPolishing = true
+        polishGeneration &+= 1
+        let generation = polishGeneration
         polishTask = Task { [weak self] in
             let result = await self?.polish(window)
             guard let self, let result else { return }
-            install(result)
+            install(result, from: generation)
         }
     }
 
@@ -171,7 +185,12 @@ public final class StandupDraftModel {
     /// functions, same frozen window — so assigning it would be a no-op that
     /// relied on that coincidence. Skipping it makes the no-op a fact about the
     /// branch instead.
-    private func install(_ result: SummarizedStandup) {
+    private func install(_ result: SummarizedStandup, from generation: Int) {
+        // Before anything, including `isPolishing`: a superseded call answers
+        // for a draft that is no longer on screen, and the sheet's in-flight
+        // state belongs to whichever call is current.
+        guard generation == polishGeneration else { return }
+
         isPolishing = false
         guard !Task.isCancelled, phase == .editing, text == pristineText,
             let model = result.modelUsed
@@ -191,6 +210,7 @@ public final class StandupDraftModel {
     public func dismiss() {
         polishTask?.cancel()
         polishTask = nil
+        polishGeneration &+= 1
         isPolishing = false
         window = nil
         text = ""

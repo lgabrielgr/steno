@@ -157,3 +157,90 @@ func dismissEndsThePolish() async throws {
     #expect(model.aiModelUsed == nil)
     #expect(model.text == "")
 }
+
+// MARK: - A superseded polish (PR #37 review)
+
+/// Holds a polish open until the test lets it finish.
+///
+/// Cancellation is cooperative, so "the first call is still suspended when the
+/// second begins" is the state that needs reproducing, and a closure that
+/// returns immediately can never reproduce it.
+@MainActor
+private final class PolishGate {
+    private var waiting: [CheckedContinuation<Void, Never>] = []
+
+    /// Whether a call has actually reached this gate.
+    ///
+    /// **Load-bearing.** `begin` creates a `Task` and returns; the task body has
+    /// not run yet. A test that dismissed immediately would cancel a call that
+    /// never entered `polish`, never reproduce "an earlier call is still
+    /// suspended", and pass against the defect it was written for — which is
+    /// exactly what the first version of this test did, and what the mutation
+    /// sweep caught.
+    var isHolding: Bool { !waiting.isEmpty }
+
+    func wait() async {
+        await withCheckedContinuation { waiting.append($0) }
+    }
+
+    func release() {
+        let held = waiting
+        waiting = []
+        held.forEach { $0.resume() }
+    }
+}
+
+/// Yield until `gate` is holding a call, or give up and let the assertion say so.
+@MainActor
+private func untilHolding(_ gate: PolishGate) async {
+    for _ in 0..<1000 {
+        if gate.isHolding { return }
+        await Task.yield()
+    }
+}
+
+@MainActor
+@Test("a superseded polish does not clear the next one's in-flight state")
+func aStalePolishLeavesTheNewOneAlone() async throws {
+    let fixture = try ReportFixture()
+    let task = try fixture.task("ship the thing", in: fixture.alpha, status: .inProgress)
+    try fixture.event("found the race in setUp", on: task, at: 60)
+    try fixture.setLastStandup(ReportFixture.origin, on: fixture.alpha)
+    let window = try fixture.gatherer(nowOffset: 300).gather(for: fixture.alpha)
+
+    let first = PolishGate()
+    let second = PolishGate()
+    var call = 0
+    let model = StandupDraftModel(
+        service: fixture.standupService(nowOffset: 900),
+        undoService: fixture.standupUndoService(),
+        polish: { _ in
+            call += 1
+            await (call == 1 ? first : second).wait()
+            return SummarizedStandup(markdown: "polished", modelUsed: "model-x")
+        })
+
+    model.begin(window: window, text: "generated text")
+    await untilHolding(first)
+    #expect(first.isHolding, "precondition: the first call reached the network")
+
+    model.dismiss()
+    model.begin(window: window, text: "a second draft")
+    await untilHolding(second)
+    #expect(second.isHolding, "precondition: the second call reached the network")
+    #expect(model.isPolishing, "precondition: the second call is in flight")
+
+    // The first call resumes now — after its sheet is gone and a new one is
+    // waiting. It must touch nothing.
+    first.release()
+    for _ in 0..<50 { await Task.yield() }
+
+    #expect(model.isPolishing, "a call from a dismissed sheet hid the live one's progress")
+    #expect(model.text == "a second draft")
+
+    // And the live call still lands when it answers.
+    second.release()
+    for _ in 0..<50 { await Task.yield() }
+    #expect(model.isPolishing == false)
+    #expect(model.text == "polished")
+}

@@ -152,3 +152,28 @@ func anUnattributedBulletSurvives() {
         DraftSections.build(from: draft, window: window)[0].bullets.map(\.text)
             == ["tidied up the CI config"])
 }
+
+@Test("a longer ticket number does not pass for a shorter one")
+func aPrefixIsNotAMatch() {
+    // PR #37 review. Jira numbers issues sequentially, so a project with 42
+    // issues has both PAY-4 and PAY-42 — and a raw substring test reads the
+    // longer one as evidence that the shorter is present, skipping the
+    // re-attachment and losing a ticket from the text the user reads aloud.
+    let task = DraftFixture.task("payments", keys: ["PAY-4"])
+    let window = DraftFixture.window(tasks: [task])
+    let draft = StandupDraft.daily(
+        DailyDraft(
+            sinceLastStandup: [
+                DailyBullet(taskID: task.id, text: "picked up the retry work from PAY-42"),
+                DailyBullet(taskID: task.id, text: "closed PAY-4, finally"),
+                DailyBullet(taskID: task.id, text: "split the fix across (PAY-4) and PAY-42"),
+            ],
+            today: [], blockers: []))
+
+    let texts = DraftSections.build(from: draft, window: window)[0].bullets.map(\.text)
+    #expect(texts[0] == "picked up the retry work from PAY-42 (PAY-4)")
+    // Still not appended when it genuinely is there, whatever punctuation
+    // surrounds it.
+    #expect(texts[1] == "closed PAY-4, finally")
+    #expect(texts[2] == "split the fix across (PAY-4) and PAY-42")
+}
