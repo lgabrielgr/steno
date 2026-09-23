@@ -4021,3 +4021,169 @@ back in-process.
 because the `stop_reason` branches and the `decode`/`validated` pair are separate throw sites and
 a fix applied to one would leave the other recording nothing. Confirmed by mutation: passing
 `usage: nil` in the refusal branch turns the first red.
+
+### D-148 — The draft sheet opens on the raw report and upgrades in place
+
+§7.4 requires the raw path be built *before* the AI path, and M2-02 built it. The literal reading
+of that is "call the AI, catch the throw, render the fallback." This is a stronger one: the sheet
+opens on M2-02's markdown immediately, with Copy live, and the AI draft replaces it later only if
+it arrives *and* the user has not typed.
+
+The rejected alternative was a loading state with Copy disabled until something came back. D-145
+budgets 20 seconds for a draft, and the user pressing ⌘R is frequently already in the meeting — so
+a spinner withholds, for up to twenty seconds, a report the app finished rendering in
+microseconds, and then on a failure shows them that same report anyway. The worst case of what
+shipped is a user who reads the raw draft aloud and never learns the AI would have improved it.
+The worst case of the spinner is a user standing in silence. Awaiting before opening the sheet
+costs the same and additionally makes ⌘R look broken.
+
+The swap is guarded on four conditions, each a way the result stops being wanted: the task was
+cancelled, the phase moved past `.editing`, the text differs from what was installed, or the
+summarizer fell back. The third compares against a stored `pristineText` rather than a dirty flag,
+so a user who types and undoes back to the original still receives the upgrade. The fourth means
+nothing is installed on a fallback — in production that markdown is byte-identical to what is
+already on screen, and skipping the assignment makes the no-op a fact about the branch rather than
+a coincidence it relies on.
+
+`begin(window:text:)` starts the polish itself rather than leaving a second call for the caller.
+A step that cannot be forgotten beats one documented as required, and every path into the sheet
+goes through it.
+
+**Falsified by** `thePolishInstallsOverAnUntouchedDraft`, `thePolishYieldsToTheUser`,
+`aFallbackChangesNothing` and `dismissEndsThePolish`. Confirmed by mutation: dropping
+`text == pristineText` from the guard turns the second red; installing on a `nil` `modelUsed`
+turns the third.
+
+### D-149 — The schema does not constrain `task_id` to the ids that were sent
+
+Both schemas type `task_id` as a plain string. The ids the app sent ride on
+`StandupRequest.allowedTaskIDs`, and `StandupDraft.validated(against:)` — which M3-01 placed
+inside the provider — rejects anything else into §7.4's fallback.
+
+The rejected alternative is genuinely tempting: structured outputs accept an `enum`, D18 caps the
+store at under 20 live tasks so the schema would stay small, and a hallucinated id would become
+impossible to express rather than merely detected.
+
+It is rejected because it does not prevent invention; it hides it. §7.3 says what the rejection is
+*for*: "a hallucinated ID is the clearest possible signal the model invented a fact, and it should
+fail loudly into the §7.4 fallback rather than render." A model that has invented a sentence about
+work that did not happen still emits that sentence under an `enum` — attached now to whichever
+real task id the constraint permits — and the user reads a fabricated claim under a correct
+attribution. Unconstrained, the same failure becomes a rough-but-true raw report.
+
+`format: "uuid"` **is** set, and is a different question: it constrains an id's shape, not its
+membership, and keeps a malformed UUID out of `StandupDraft.decode`, where it would arrive as a
+schema violation indistinguishable from an invented section.
+
+**Falsified by** `theCardinalityDiffers`, which asserts `enum` is absent from both the daily
+`task_id` and the periodic `task_ids` items.
+
+### D-150 — The renderer re-attaches ticket keys; the prompt only asks
+
+`DraftSections` appends each referenced task's ticket keys to the bullet text, in the exact
+`" (STENO-12, STENO-19)"` form `RawReportSections.bullet` already emits, skipping any key the
+model's sentence already contains. The §7.3 constraint telling the model to preserve keys verbatim
+stays in the prompt as well.
+
+Both, because the task file's third acceptance criterion covers five things — ticket keys, service
+names, function names, error strings, acronyms — and only one of them is machine-checkable. Four
+live inside free text with no separate record; nothing but the prompt can protect them. A ticket
+key is different: `GatheredTask.ticketKeys` is a sorted list of facts drawn from the event log
+(D-065), so the app knows what should be there and can put it there. Leaving the only checkable
+member of the list to a prompt would be choosing not to check the one thing that can be.
+
+Re-attaching is not inventing. §7.3 prohibits facts absent from the event log; a ticket key is in
+the event log, on the task the bullet is about, and the fallback path already emits it on the same
+bullet. The AI path emitting less would be a regression dressed as restraint.
+
+Presence is checked case-insensitively and the appended form is verbatim — a model that wrote
+"landed steno-12 behind a flag" preserved the key badly but did preserve it, and a second copy
+reads worse than the imperfect original. Keys are collected by walking the bullet's task ids in
+the order returned, taking each task's already-sorted list, and deduping on first occurrence, so
+no `Set` or `Dictionary` iteration order reaches the output.
+
+**Falsified by** `aDroppedKeyIsReattached`, `aKeptKeyIsNotDuplicated` and
+`themedKeysAreGatheredAndDeduped`. Confirmed by mutation: dropping the append turns the first red,
+and matching case-sensitively turns the second.
+
+### D-151 — `wasAIGenerated` is derived from `modelUsed`, and `commit` takes no default
+
+`StandupService.commit` gains `modelUsed: String?` as a required parameter and writes
+`wasAIGenerated: modelUsed != nil`. `StandupDraftModel` passes its `aiModelUsed`, set in exactly
+one place — D-148's install step — and never cleared while the draft stands.
+
+Derived, because the two fields answer the same question and the model's own declaration already
+ties them ("nil for a fallback report"). Two independently written fields are one refactor away
+from a report marked AI-generated with no model recorded, which is the state that makes the field
+useless for the "debugging quality regressions" it exists for.
+
+No default value, because a defaulted `nil` keeps every existing call site compiling — its entire
+appeal, and its defect: every future caller then silently records a fallback and the compiler
+stops asking. The cost is touching a handful of test call sites once.
+
+Editing AI text keeps the flag true. The report *was* AI-generated and the user polished it, as
+FR-4 step 6 intends; a flag that flipped on the first keystroke would mark nearly every real AI
+report as a fallback.
+
+**Falsified by** `theAIFlagFollowsTheModel`, which asserts both directions, and
+`editingAfterThePolishKeepsTheFlag`. Confirmed by mutation: hardcoding `wasAIGenerated: true`
+turns both red.
+
+### D-152 — Blank bullets are dropped, and a draft of nothing but blanks is empty
+
+`DraftSections` drops any bullet whose text is empty or whitespace-only. If that leaves all three
+sections without bullets, the summarizer treats the result as `.invalidResponse(.emptyDraft)` and
+takes §7.4's fallback.
+
+This is not already handled upstream. `StandupDraft.isEmpty` counts bullets rather than content,
+deliberately — its doc comment is about a bullet's *identity*: "a bullet with an empty `task_ids`
+array is still a bullet the model wrote, and losing it silently would be worse than surfacing it."
+That reasoning does not extend to text. A bullet with task ids and no sentence surfaces as `• ` in
+Slack, or as `• (STENO-12)` once D-150 has run, which is not surfacing anything — and an empty AI
+report is strictly worse than the rough one M2-02 already rendered.
+
+A bullet with real text and an empty `task_ids` array is kept, unchanged, with no keys appended.
+That case is exactly what `StandupDraft`'s comment protects, and this narrows it not at all.
+
+**Falsified by** `blankBulletsAreDropped`, `anUnattributedBulletSurvives` and `aBlankDraftDegrades`.
+Confirmed by mutation: neutralizing the `trimmed.isEmpty` guard turns the first red, and
+neutralizing the all-empty check turns the third.
+
+### D-153 — The `today` section carries an explicit D12 guard
+
+The daily prompt states that `today` restates which tasks are currently in progress, drawn from
+the record, and must not recommend what to work on, in what order, or what to prioritize.
+
+Every other §7.3 constraint guards against a model's general tendencies. This one guards against a
+section name in our own schema: `today` is the only forward-looking field in either schema, and a
+summarizer asked for "today" with no further instruction produces a plan — which is the product
+§2.1's non-goals and D12 exist to refuse ("**no** focus suggestions, **no** prioritization"). One
+sentence removes the one structural invitation to violate it.
+
+The periodic schema needs no equivalent: `completed`, `in_flight` and `blockers_and_risks` are all
+statements about what happened.
+
+**Falsified by** `theDailyPromptGuardsPrioritization`. Confirmed by mutation: deleting the line
+turns it red.
+
+### D-154 — 4096 output tokens for both cadences
+
+`StandupRequest.maxOutputTokens` is 4096 regardless of cadence.
+
+The arithmetic: D18 caps the store at under 20 live tasks. A worst-case `daily` response puts every
+task in all three sections — 60 bullets at roughly 50 tokens including the UUID — for about 3,000
+tokens. A `periodic` response is capped by its own prompt at 8–12 bullets and is far smaller even
+with several ids per bullet.
+
+One number rather than two, because a tighter periodic budget saves nothing the user can perceive —
+output tokens are billed as used, not as reserved — and adds a second constant to keep in step with
+a prompt instruction that can change.
+
+Generous rather than tight, because truncation maps to `.invalidResponse(.truncated)` and degrades
+to the raw report. An under-provisioned budget therefore does not fail loudly; it quietly makes the
+AI never work, and the symptom the user reports is "the polish never happens." Erring high costs
+nothing; erring low costs the feature.
+
+**This is arithmetic, not measurement** — no live call has been made (see the PR body). The metrics
+label `.truncated` is where an error in it would surface, and M3-04's live run is where it would
+first be seen.
