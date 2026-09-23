@@ -285,9 +285,17 @@ Two constraints the spec implies rather than prints:
 
 Two literal JSON Schema documents, `additionalProperties: false`, all three sections required,
 items requiring both their task reference and their text. `daily` uses `task_id` (string);
-`periodic` uses `task_ids` (array of string). They are built from Swift literals through
-`JSONSerialization` with `.sortedKeys`, so the bytes are identical on every build and a request
-is reproducible — the same property §10.2 requires of the export for the same reason.
+`periodic` uses `task_ids` (array of string), and both carry `format: "uuid"` — a constraint on
+an id's *shape*, which is a different question from D-149's constraint on its *membership*, and
+which keeps a malformed UUID out of `StandupDraft.decode` where it would arrive as a schema
+violation indistinguishable from an invented section.
+
+**Written as Swift string literals, not assembled through `JSONSerialization`** — an amendment to
+this design made during implementation. The assembled version has to be `try`-ed at a call site
+where it cannot fail, and its key order becomes an argument about encoder options rather than
+something a reader can see. A literal is greppable, diffable, byte-stable by construction — the
+same reproducibility §10.2 requires of the export, reached more directly — and is checked by
+`StandupSchemaTests` parsing it back and building a response out of its own key names.
 
 `AnthropicWire.messagesBody` parses the document back out and nests it under
 `output_config.format`; nothing between here and the wire inspects it, which is what
