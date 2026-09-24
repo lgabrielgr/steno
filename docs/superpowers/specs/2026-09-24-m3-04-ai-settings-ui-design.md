@@ -258,18 +258,20 @@ Every clause below was checked against `StandupPrompt.user`, `ReportGatherer.gat
 
 > **What Steno sends to Anthropic.** When a stand-up is polished, Steno sends one project's
 > report window: its start and end, and for every task in it — the title, the status, any Jira
-> ticket keys, the blocked reason, and every event inside that window — your notes, status
-> changes, blocked reasons and when the task was created — each with its timestamp, in the words
-> you typed. Notes are sent whole; nothing is shortened or stripped first. Each task also
-> carries a random identifier so the model can refer to it.
+> ticket keys, the blocked reason, and every event inside that window, each with its timestamp.
+> Your notes and blocked reasons go in the words you typed, whole and unshortened; the rest is
+> recorded data Steno wrote itself (when the task was created, and each status change). Each task
+> also carries a stable internal identifier so the model can refer to it.
 >
 > **What is not sent:** other projects, tasks outside the window, notes you have redacted, and
-> anything you have not reported on. Your API key is sent as the request's authorization header
-> and is stored only in your login Keychain — never in Steno's data file, its preferences, or
+> anything you have not reported on. Your API key travels in the request's `x-api-key` header —
+> `AnthropicWire`'s actual transport, not the `Authorization` header this paragraph first claimed
+> — and is stored only in your login Keychain, never in Steno's data file, its preferences, or
 > its logs.
 >
-> **With no key set, or no model selected, Steno never contacts Anthropic** and builds your
-> stand-up from your log alone.
+> **Your stand-ups reach Anthropic only when a key is set and a model is selected**, and
+> otherwise are built from your log alone. "Test Connection" and "Refresh Models" contact
+> Anthropic when you press them, and send no task content.
 
 **This describes what ships today, and M4 must amend it.** The prompt's own doc comment already
 anticipates `externalUpdate` bodies fetched from Jira and Confluence, which D4 permits sending —

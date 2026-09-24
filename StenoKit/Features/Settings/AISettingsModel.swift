@@ -98,6 +98,16 @@ public final class AISettingsModel {
 
     public internal(set) var listState: ListState = .idle
 
+    /// Whether a fetch has ever succeeded for the selected provider.
+    ///
+    /// **`models.isEmpty` cannot answer this.** §7.1 calls an empty result
+    /// legitimate — "a key with access to nothing" — so an empty array is
+    /// either "we never asked" or "we asked and there is nothing", and the pane
+    /// says different things about those. Reset when the provider changes or
+    /// the key is removed, because what a provider offered is an answer about a
+    /// credential. Raised by Copilot on PR #38.
+    public internal(set) var hasFetchedModels: Bool = false
+
     /// The user's choice, mirrored from `AppSettings` and written through.
     public internal(set) var selectedModelID: String?
 
@@ -120,6 +130,7 @@ public final class AISettingsModel {
         didSet {
             guard oldValue != selectedProviderID else { return }
             models = []
+            hasFetchedModels = false
             listState = .idle
             connection = .untested
             keyEntry = ""
@@ -189,7 +200,7 @@ public final class AISettingsModel {
     public var selectionStatus: SelectionStatus {
         guard let selectedModelID else { return .none }
         if models.contains(where: { $0.id == selectedModelID }) { return .offered }
-        return models.isEmpty ? .notFetchedYet : .noLongerOffered
+        return hasFetchedModels ? .noLongerOffered : .notFetchedYet
     }
 
     /// Whether the selected model is a row the provider did not offer.
@@ -316,6 +327,7 @@ public final class AISettingsModel {
         do {
             let fetched = try await provider.availableModels()
             models = fetched
+            hasFetchedModels = true
             listState = .idle
             if adoptsDefault { adoptRecommendedModel(from: fetched) }
         } catch {

@@ -154,22 +154,24 @@ struct AISettingsPane: View {
             Text(
                 "When a stand-up is polished, Steno sends one project's report window: its start "
                     + "and end, and for every task in it — the title, the status, any ticket keys, "
-                    + "the blocked reason, and every event inside that window (your notes, status "
-                    + "changes, blocked reasons, and when the task was created) with its timestamp, "
-                    + "in the words you typed. Notes are sent whole; nothing is shortened first. "
-                    + "Each task also carries a stable internal identifier so the model can "
-                    + "refer to it, and a blocked reason is sent even if you wrote it before "
-                    + "this window."
+                    + "the blocked reason, and every event inside that window, each with its "
+                    + "timestamp. Your notes and blocked reasons go in the words you typed, whole "
+                    + "and unshortened; the rest is recorded data Steno wrote itself (when the "
+                    + "task was created, and each status change). Each task also carries a stable "
+                    + "internal identifier so the model can refer to it, and a blocked reason is "
+                    + "sent even if you wrote it before this window."
             )
             Text(
                 "Not sent: other projects, tasks outside the window, and notes you have redacted. "
-                    + "Your API key travels as the request's authorization header and is stored "
-                    + "only in your login Keychain — never in Steno's data file, its preferences, "
-                    + "or its logs."
+                    + "Your API key travels in the request's `x-api-key` header and is stored only "
+                    + "in your login Keychain — never in Steno's data file, its preferences, or "
+                    + "its logs."
             )
             Text(
-                "With no key set, or no model selected, Steno never contacts Anthropic and builds "
-                    + "your stand-up from your log alone."
+                "Your stand-ups reach Anthropic only when a key is set and a model is selected — "
+                    + "otherwise Steno builds them from your log alone. \"Test Connection\" and "
+                    + "\"Refresh Models\" contact Anthropic when you press them, and send no "
+                    + "task content."
             )
         }
         .font(.callout)

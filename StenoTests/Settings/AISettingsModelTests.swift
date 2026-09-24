@@ -160,6 +160,32 @@ func theReasonASelectionIsUnlistedIsDistinguishable() async throws {
     #expect(model.selectionStatus == .offered)
 }
 
+/// **An empty list that arrived is not the same as no list.** §7.1 calls an
+/// empty result legitimate — "a key with access to nothing" — and it leaves
+/// `models` empty, which is indistinguishable from "never fetched" if the only
+/// evidence is the array. The pane would then tell a user whose key has access
+/// to nothing to press Refresh, forever. Raised by Copilot on PR #38.
+@Test("a successful fetch that returns nothing is not reported as never fetched")
+@MainActor
+func anEmptySuccessfulFetchIsNotNeverFetched() async throws {
+    let (settings, _) = try scratchAISettings()
+    settings.aiSelectedModelID = aiHaiku.id
+    let model = AISettingsModel(
+        providers: [StubAIProvider(models: .success([]))],
+        credentials: InMemoryCredentialStore(), settings: settings)
+
+    #expect(model.selectionStatus == .notFetchedYet)
+
+    await model.refreshModels()
+
+    #expect(model.selectionStatus == .noLongerOffered)
+
+    // Removing the key takes the answer away again: what a provider offered is
+    // an answer about a credential that no longer exists.
+    model.removeKey()
+    #expect(model.selectionStatus == .notFetchedYet)
+}
+
 @Test("a selection is not reported as unlisted when there is none")
 @MainActor
 func noSelectionIsNotUnlisted() async throws {

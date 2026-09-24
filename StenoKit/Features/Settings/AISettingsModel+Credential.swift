@@ -72,6 +72,7 @@ extension AISettingsModel {
         keyEntry = ""
         hasStoredKey = false
         models = []
+        hasFetchedModels = false
         listState = .idle
         connection = .untested
     }
