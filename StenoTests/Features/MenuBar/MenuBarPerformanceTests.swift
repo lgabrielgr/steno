@@ -18,8 +18,11 @@ import XCTest
 /// because nothing there observes. The last two cases measure it both ways.
 ///
 /// XCTest rather than Swift Testing per D-011's `measure` exception. Asserts
-/// against the **worst** of `measure`'s ten iterations, not the last —
-/// `CapturePerformanceTests`' convention, and for its reason.
+/// the **mean** of `measure`'s ten iterations, not the last and no longer the
+/// worst — `CapturePerformanceTests`' convention since D-064, which this file
+/// did not inherit until D-162. These three cases carry the file's highest
+/// variance (RSD 26-70% on this machine against extraction's 6-34%), so they
+/// were the most exposed to the statistic, not the least.
 ///
 /// **`make test` will not show you the number.** xcbeautify compresses
 /// `measure` output to an average and an RSD. To read it:
@@ -99,17 +102,20 @@ final class MenuBarPerformanceTests: XCTestCase {
         let directory = makeDirectory()
         defer { try? FileManager.default.removeItem(at: directory) }
         let model = try makeModel(at: directory, tasks: 20)
-        var elapsed = 0.0
+        var total = 0.0
+        var runs = 0
 
         measure {
             let start = Date()
             model.prepareForShow()
-            elapsed = max(elapsed, Date().timeIntervalSince(start))
+            total += Date().timeIntervalSince(start)
+            runs += 1
         }
 
         // A swallowed failure would otherwise measure ten no-ops and pass.
         XCTAssertEqual(model.rows.count, 20)
-        XCTAssertLessThan(elapsed, 0.050, "one popover open exceeded 50 ms")
+        XCTAssertGreaterThan(runs, 0, "the measured block never ran")
+        XCTAssertLessThan(total / Double(runs), 0.050, "one popover open exceeded 50 ms")
     }
 
     /// The baseline for the case below: one capture at D18's ceiling with no
@@ -138,7 +144,8 @@ final class MenuBarPerformanceTests: XCTestCase {
         defer { try? FileManager.default.removeItem(at: directory) }
         let context = try makeStore(at: directory, inProgress: 20)
         let service = CaptureService(context: context, now: { Self.origin })
-        var elapsed = 0.0
+        var total = 0.0
+        var runs = 0
         var failures = 0
 
         measure {
@@ -148,19 +155,24 @@ final class MenuBarPerformanceTests: XCTestCase {
             } catch {
                 failures += 1
             }
-            elapsed = max(elapsed, Date().timeIntervalSince(start))
+            total += Date().timeIntervalSince(start)
+            runs += 1
         }
 
         // `measure` runs the block ten times, so a swallowed error would
         // otherwise measure ten no-ops and pass. 20 seeded + 10 captured.
         XCTAssertEqual(failures, 0)
+        XCTAssertGreaterThan(runs, 0, "the measured block never ran")
         XCTAssertEqual(try context.fetch(FetchDescriptor<TaskItem>()).count, 30)
         // The same 50 ms `CapturePerformanceTests` gates on, so the three
-        // capture ceilings cannot drift apart. The worst iteration observed
-        // here is 14.5 ms — the cold first one — so the margin is ~3.4x rather
-        // than that file's ~6x. It is the cold-store fsync being measured, not
-        // this branch's work; see the case below.
-        XCTAssertLessThan(elapsed, 0.050, "a capture with nothing observing exceeded 50 ms")
+        // capture ceilings cannot drift apart. The mean observed here is
+        // 3 ms across three runs — a ~17x margin — while the cold first
+        // iteration still reaches 10-14 ms, which is the cold-store fsync and
+        // not this branch's work. That gap between mean and worst is exactly
+        // what D-162 stopped gating on; see the case below for the delta this
+        // pair exists to measure.
+        XCTAssertLessThan(
+            total / Double(runs), 0.050, "a capture with nothing observing exceeded 50 ms")
     }
 
     /// The same capture with a live `MenuBarModel` observing — which is the
@@ -189,7 +201,7 @@ final class MenuBarPerformanceTests: XCTestCase {
     /// magnitude of headroom, which is what lets M1-04 claim capture latency
     /// has not regressed.
     ///
-    /// **The two worst-of-ten figures do not compare, and inverting them is
+    /// **The two first-iteration figures do not compare, and inverting them is
     /// not evidence the observer is free.** Building the `MenuBarModel` runs a
     /// fetch before the measure starts, warming a store the no-observer case
     /// meets cold on its first iteration; that first iteration is the worst in
@@ -215,7 +227,8 @@ final class MenuBarPerformanceTests: XCTestCase {
         XCTAssertEqual(model.rows.count, 19, "no reload should have happened yet")
 
         let service = CaptureService(context: context, now: { Self.origin })
-        var elapsed = 0.0
+        var total = 0.0
+        var runs = 0
         var failures = 0
 
         measure {
@@ -225,14 +238,17 @@ final class MenuBarPerformanceTests: XCTestCase {
             } catch {
                 failures += 1
             }
-            elapsed = max(elapsed, Date().timeIntervalSince(start))
+            total += Date().timeIntervalSince(start)
+            runs += 1
         }
 
         XCTAssertEqual(failures, 0)
+        XCTAssertGreaterThan(runs, 0, "the measured block never ran")
         // Captured tasks arrive `.todo`, so the list is the twenty in-progress
         // — and the twentieth is the one only a reload can find.
         XCTAssertEqual(model.rows.count, 20, "the .stenoDidWrite observer never reloaded")
         XCTAssertEqual(try context.fetch(FetchDescriptor<TaskItem>()).count, 30)
-        XCTAssertLessThan(elapsed, 0.050, "a capture with the menu bar observing exceeded 50 ms")
+        XCTAssertLessThan(
+            total / Double(runs), 0.050, "a capture with the menu bar observing exceeded 50 ms")
     }
 }
