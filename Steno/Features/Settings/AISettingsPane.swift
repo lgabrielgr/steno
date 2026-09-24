@@ -34,8 +34,25 @@ struct AISettingsPane: View {
             Section("API key") {
                 // Entry only (D-157): this field never receives the stored key,
                 // so what is on screen is what the user just typed.
-                SecureField("Paste your API key", text: $model.keyEntry)
+                //
+                // **The string is the `prompt`, not the label, and the style is
+                // explicit.** A grouped `Form` renders a labelled field as a
+                // left-hand label plus whatever width is left over, so
+                // `SecureField("Paste your API key", …)` drew that sentence as
+                // static text and left a caret-width control against the right
+                // edge — the user reported clicking the words and nothing
+                // happening. `BackupFolderField` already draws its own bordered
+                // box for this same reason; this is the editable version of
+                // that fix. `labelsHidden()` keeps the accessibility label
+                // without drawing a second copy of the section header.
+                SecureField("API key", text: $model.keyEntry, prompt: Text("Paste your API key"))
                     .textContentType(.password)
+                    .textFieldStyle(.roundedBorder)
+                    .labelsHidden()
+                    // Paste, Return, done. `saveKey()` refuses an empty or
+                    // all-whitespace entry, so Return on an empty field is a
+                    // no-op rather than a spurious Keychain write.
+                    .onSubmit { Task { await model.saveKey() } }
 
                 HStack {
                     Button(model.hasStoredKey ? "Replace Key" : "Save Key") {
