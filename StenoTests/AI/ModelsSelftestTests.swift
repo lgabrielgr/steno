@@ -121,11 +121,17 @@ func anUnexpectedErrorIsNotQuoted() async {
     #expect(lines.joined.contains("LeakyDefect"))
 }
 
-/// The bridge `CLIEntry` uses: a synchronous, `@MainActor` caller blocking on
-/// work that runs on the cooperative pool. If `run` ever hops to the main
-/// actor this test deadlocks rather than failing — which is the loudest
-/// available signal for that mistake.
+/// The bridge `CLIEntry` uses, exercised from the isolation production uses.
+///
+/// **`@MainActor` is load-bearing, not decoration.** `CLIEntry.run` is
+/// `@MainActor` and blocks the main thread on the semaphore while `run`
+/// proceeds on the cooperative pool. Without this attribute the test would
+/// block a pool thread instead, leaving the main thread free — so a
+/// `ModelsSelftest.run` that acquired `@MainActor` isolation would pass here
+/// and deadlock in production. With it, that mistake hangs this test, which is
+/// the loudest signal available for it.
 @Test("the synchronous bridge returns the same code as the async run")
+@MainActor
 func theSynchronousBridgeAgrees() {
     let lines = LineCollector()
 

@@ -902,6 +902,12 @@ Apply each mutation, run `make test`, confirm the named test goes red (the runne
 | `credentialKinds` returns `CredentialKind.allCases` | `only the API key is offered as a credential kind` |
 | Drop `settings.aiSelectedModelID = modelID` from `select(modelID:)` | `choosing a model writes it where the stand-up path reads it` |
 | `presentable` returns `.timedOut` for a non-`AIError` | `a provider that throws the wrong error type degrades rather than crashing` |
+| `detail(for:)` returns `String(describing: error)` for a non-`KeychainError` | `a store failure that quotes the credential is not rendered` |
+| The `.unreadable` arm of `init` sets no `keyProblem` | `a Keychain that cannot be read says so rather than claiming no key` |
+| `selectionStatus` returns `.notFetchedYet` for every unlisted selection | `the reason a selection is unlisted is distinguishable` |
+| `forgetEntry()` is a no-op | `forgetting the entry clears a typed but unsaved key` |
+| `removeKey` deletes for `providers.last?.id` | `removing an absent key is not an error, and touches no other provider` |
+| Clear the selection on an empty fetch in `adoptRecommendedModel` | `a key whose list comes back empty changes no selection` |
 
 - [ ] **Step 8: Format, lint, commit**
 
@@ -1671,6 +1677,7 @@ Then, each in turn — run `make test`, confirm the named test goes red, restore
 | Delete the `guard rest.count == 1` in the parser arm | `a selftest takes no flags` |
 | Rename the parser's `case "models-selftest"` | `each selftest parses on its own` |
 | Hard-code `"keychain-selftest"` in `misroutedSelftest`'s call | `a selftest handed to the runner is refused, and says which one` |
+| Add a `models-selftest` line to `CLIUsage.text` | `neither selftest appears in the usage text` |
 
 - [ ] **Step 9: Commit**
 

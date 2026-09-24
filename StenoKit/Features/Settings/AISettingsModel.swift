@@ -57,8 +57,12 @@ public final class AISettingsModel {
     /// The `SecureField`'s binding — **what the user is typing, never what is
     /// stored** (D-157).
     ///
-    /// It starts empty on every appearance, including when a key is already in
-    /// the Keychain, and `saveKey()` clears it the instant the write succeeds.
+    /// It is cleared after every successful save, and by `forgetEntry()`, which
+    /// the pane calls as it appears and disappears — **this model is built once
+    /// in `StenoApp.init` and held for the process**, so a key typed and not
+    /// saved would otherwise still be in the field when the window reopened, and
+    /// in memory until the app quit. The clearing is the pane's to trigger
+    /// because only a view knows what an appearance is.
     /// Nothing in this type reads a credential's *value*; the only Keychain
     /// read it performs is the presence check behind `hasStoredKey`, whose
     /// result is a `Bool`. That is what makes "the key is never displayed in
@@ -67,29 +71,39 @@ public final class AISettingsModel {
     public var keyEntry: String = ""
 
     /// Whether a credential exists for the selected provider.
-    public private(set) var hasStoredKey: Bool = false
+    ///
+    /// `false` when the Keychain *refused the read* as well as when nothing is
+    /// stored — the two are indistinguishable to a caller — which is why that
+    /// case also sets `keyProblem`. Reporting only "no key" would tell a user
+    /// with a locked keychain to paste a new one, which cannot work.
+    public internal(set) var hasStoredKey: Bool = false
 
     /// Why the last store or delete was refused, if it was.
     ///
-    /// Carries the `KeychainError`'s own description: it is an `OSStatus` and a
-    /// case name, never the credential, so §8 is not engaged — and a bare
-    /// "could not save" would leave a user with no way to tell a locked
-    /// keychain from a bug.
-    public private(set) var keyProblem: String?
+    /// Carries a `KeychainError`'s own description — an `OSStatus` and a case
+    /// name, never the credential — because a bare "could not save" leaves a
+    /// user unable to tell a locked keychain from a bug.
+    ///
+    /// **Anything that is not a `KeychainError` is named by type only.** The
+    /// `catch` binds `any Error`: `KeychainCredentialStore.store` encodes the
+    /// `Credential` before it reaches `SecItem*`, and an `EncodingError`
+    /// describes itself by quoting the value it choked on — which is the key
+    /// (§8). `ModelsSelftest.describe` narrows for the same reason.
+    public internal(set) var keyProblem: String?
 
     // MARK: - Models
 
     /// The last successfully fetched list, ordered by the provider (D-141).
-    public private(set) var models: [AIModel] = []
+    public internal(set) var models: [AIModel] = []
 
-    public private(set) var listState: ListState = .idle
+    public internal(set) var listState: ListState = .idle
 
     /// The user's choice, mirrored from `AppSettings` and written through.
-    public private(set) var selectedModelID: String?
+    public internal(set) var selectedModelID: String?
 
     // MARK: - Connection
 
-    public private(set) var connection: ConnectionState = .untested
+    public internal(set) var connection: ConnectionState = .untested
 
     // MARK: - Providers
 
@@ -108,9 +122,18 @@ public final class AISettingsModel {
             models = []
             listState = .idle
             connection = .untested
-            keyProblem = nil
             keyEntry = ""
-            hasStoredKey = storedKeyExists()
+            switch Self.storedKey(in: credentials, for: selectedProviderID) {
+            case .present:
+                hasStoredKey = true
+                keyProblem = nil
+            case .absent:
+                hasStoredKey = false
+                keyProblem = nil
+            case .unreadable(let detail):
+                hasStoredKey = false
+                keyProblem = "macOS could not read your stored key: \(detail)."
+            }
         }
     }
 
@@ -145,14 +168,33 @@ public final class AISettingsModel {
         return [AIModel(id: selectedModelID, displayName: selectedModelID)] + models
     }
 
-    /// Whether the selected model is a row the provider did not offer.
+    /// Where the selected model stands against the list that was fetched.
     ///
-    /// Drives the pane's caption. `true` before the first fetch is the ordinary
-    /// state under D-158, not an anomaly — which is why the caption says the
-    /// list has not been fetched rather than that the model is gone.
+    /// **Three cases, because the pane has three different things to say.** An
+    /// unlisted selection before any fetch is D-158's ordinary state ("we have
+    /// not asked"); an unlisted selection *after* a fetch means the provider
+    /// retired the model, and telling that user the list has not been fetched
+    /// sends them to a Refresh button that cannot help them.
+    public enum SelectionStatus: Equatable, Sendable {
+        /// Nothing is selected.
+        case none
+        /// The fetched list contains it.
+        case offered
+        /// No list has been fetched yet (D-158).
+        case notFetchedYet
+        /// A list was fetched and does not contain it.
+        case noLongerOffered
+    }
+
+    public var selectionStatus: SelectionStatus {
+        guard let selectedModelID else { return .none }
+        if models.contains(where: { $0.id == selectedModelID }) { return .offered }
+        return models.isEmpty ? .notFetchedYet : .noLongerOffered
+    }
+
+    /// Whether the selected model is a row the provider did not offer.
     public var selectionIsUnlisted: Bool {
-        guard let selectedModelID else { return false }
-        return !models.contains { $0.id == selectedModelID }
+        selectionStatus == .notFetchedYet || selectionStatus == .noLongerOffered
     }
 
     /// Whether a network call is in flight. The pane disables its buttons on it.
@@ -187,14 +229,16 @@ public final class AISettingsModel {
         }
     }
 
-    private let providers: [any AIProvider]
-    private let credentials: any CredentialStore
-    private let settings: AppSettings
+    // Internal rather than private: `private` is file-scoped, and the
+    // credential half of this type lives in `AISettingsModel+Credential.swift`.
+    let providers: [any AIProvider]
+    let credentials: any CredentialStore
+    let settings: AppSettings
 
     /// The provider the picker names, or `nil` only if this was built with an
     /// empty list — which production never does, and which a guard here turns
     /// into an inert pane rather than a crash.
-    private var provider: (any AIProvider)? {
+    var provider: (any AIProvider)? {
         providers.first { $0.id == selectedProviderID } ?? providers.first
     }
 
@@ -216,45 +260,19 @@ public final class AISettingsModel {
         self.settings = settings
         self.selectedProviderID = providers.first?.id ?? ""
         self.selectedModelID = settings.aiSelectedModelID
-        self.hasStoredKey = Self.storedKeyExists(
-            in: credentials, for: providers.first?.id ?? "")
+
+        switch Self.storedKey(in: credentials, for: providers.first?.id ?? "") {
+        case .present:
+            self.hasStoredKey = true
+        case .absent:
+            self.hasStoredKey = false
+        case .unreadable(let detail):
+            self.hasStoredKey = false
+            self.keyProblem = "macOS could not read your stored key: \(detail)."
+        }
     }
 
     // MARK: - Actions
-
-    /// Store what the user typed, then fetch the list and adopt a default.
-    ///
-    /// **`async`, and awaited by the pane inside a `Task`** — not a method that
-    /// starts a detached task of its own. A `Task` has not started when the
-    /// function that created it returns, so a test of the second shape can only
-    /// poll; awaiting this directly removes the question.
-    ///
-    /// Whitespace is trimmed because the common way to produce a key is a paste
-    /// from a web page, which brings a trailing newline with it; an all-blank
-    /// entry stores nothing, since `UserDefaults`-shaped "it saved!" feedback
-    /// for an empty key would be a lie the user only discovers at a stand-up.
-    public func saveKey() async {
-        guard let provider else { return }
-        let trimmed = keyEntry.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return }
-
-        do {
-            try credentials.store(.apiKey(trimmed), for: provider.id)
-        } catch {
-            // The error, not a generic sentence: a `KeychainError` is an
-            // `OSStatus` and a case name — never the credential — and
-            // `errSecInteractionNotAllowed` (a locked keychain) needs a
-            // different action from a bug in this app.
-            keyProblem = "macOS refused to store the key: \(error)."
-            return
-        }
-
-        keyProblem = nil
-        keyEntry = ""
-        hasStoredKey = true
-        connection = .untested
-        await fetchModels(adoptingRecommendedDefault: true)
-    }
 
     /// Fetch the list on the user's explicit request (D-158).
     ///
@@ -284,29 +302,6 @@ public final class AISettingsModel {
         }
     }
 
-    /// Delete the stored credential (§8's only removal path in the UI).
-    ///
-    /// **`aiSelectedModelID` is left alone.** A model id is not a secret, the
-    /// picker should not lose its place because a key was rotated, and
-    /// re-entering a key restores the previous behaviour with nothing to redo.
-    /// §7.4 covers the interval: the provider throws `.notConfigured` and the
-    /// stand-up is M2-02's raw report.
-    public func removeKey() {
-        guard let provider else { return }
-        do {
-            try credentials.delete(for: provider.id)
-        } catch {
-            keyProblem = "macOS refused to remove the key: \(error)."
-            return
-        }
-        keyProblem = nil
-        keyEntry = ""
-        hasStoredKey = false
-        models = []
-        listState = .idle
-        connection = .untested
-    }
-
     /// Record the user's choice (FR-6, §7.1).
     public func select(modelID: String) {
         selectedModelID = modelID
@@ -315,7 +310,7 @@ public final class AISettingsModel {
 
     // MARK: - Plumbing
 
-    private func fetchModels(adoptingRecommendedDefault adoptsDefault: Bool) async {
+    func fetchModels(adoptingRecommendedDefault adoptsDefault: Bool) async {
         guard let provider else { return }
         listState = .loading
         do {
@@ -341,30 +336,12 @@ public final class AISettingsModel {
         select(modelID: recommended.id)
     }
 
-    private func storedKeyExists() -> Bool {
-        Self.storedKeyExists(in: credentials, for: selectedProviderID)
-    }
-
-    /// **A presence check whose answer is a `Bool`.** The `Credential` it reads
-    /// is compared against `nil` and goes no further; nothing assigns it, and
-    /// no property of this type can hold it (D-157).
-    ///
-    /// A Keychain read that throws reads as "nothing stored", the posture
-    /// `AnthropicProvider.apiKey()` already takes: every remedy the user has is
-    /// the one an absent key already asks for.
-    private static func storedKeyExists(in store: any CredentialStore, for providerID: String)
-        -> Bool
-    {
-        guard !providerID.isEmpty else { return false }
-        return ((try? store.credential(for: providerID)) ?? nil) != nil
-    }
-
     /// `AIProvider`'s contract is that an implementation throws `AIError` and
     /// nothing else. Anything else is a defect in that provider, so it is
     /// logged as a fault — by type name only, because an arbitrary error's
     /// description can quote a payload (§8) — and presented as `.network`,
     /// which is the reading §7.4 degrades most usefully from.
-    private static func presentable(_ error: any Error) -> AIError {
+    static func presentable(_ error: any Error) -> AIError {
         if let aiError = error as? AIError { return aiError }
         Log.app.fault(
             "AI provider threw a non-AIError: \(String(describing: type(of: error)), privacy: .public)"

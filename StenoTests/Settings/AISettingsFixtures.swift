@@ -26,6 +26,16 @@ let aiHaiku = AIModel(id: "claude-haiku-9", displayName: "Claude Haiku 9")
 /// It exists so the model's catch-all is executed rather than asserted: the
 /// contract says only `AIError` escapes, and what this pane does when a future
 /// provider gets that wrong should be a tested answer rather than a hope.
+/// A credential store failure whose description quotes the value it was given.
+///
+/// `KeychainCredentialStore.store` encodes the `Credential` **before** it calls
+/// `SecItem*`, and `EncodingError.invalidValue` carries the offending value —
+/// so "the error is an OSStatus and a case name" is true of `KeychainError` and
+/// not of the `any Error` the `catch` actually binds. This is that case.
+struct LeakyStoreFailure: Error, CustomStringConvertible {
+    var description = #"EncodingError.invalidValue(Credential.apiKey("sk-ant-leaked-value"))"#
+}
+
 struct DefectiveAIProvider: AIProvider {
     struct Defect: Error {}
 

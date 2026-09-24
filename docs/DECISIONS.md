@@ -4295,9 +4295,24 @@ have.
 ### D-157 — The key field is entry-only, so §8 holds by construction
 
 `AISettingsModel.keyEntry` is the `SecureField`'s binding and holds only what the user is
-typing. It starts empty on every appearance — including when a key is already stored — and
-`saveKey()` clears it the instant the write succeeds. The pane's only Keychain read is a presence
-check whose result is a `Bool`; nothing in the type can hold a credential's value.
+typing. `saveKey()` clears it the instant the write succeeds, and the pane calls `forgetEntry()`
+on appear and on disappear — **the model is built once in `StenoApp.init` and held for the
+process**, so "the field is empty on every appearance" is a fact only the view can make true; a
+model that merely started empty would still be holding an unsaved key when the window reopened,
+and holding it in memory until the app quit. The pane's only Keychain read is a presence check
+whose result is a `Bool`; nothing in the type can hold a credential's value.
+
+**What `keyProblem` may render is narrowed for the same reason.** Its `catch` binds `any Error`,
+not `KeychainError`: `KeychainCredentialStore.store` encodes the `Credential` before it reaches
+`SecItem*`, and an `EncodingError` describes itself by quoting the value it choked on — which is
+the key. `detail(for:)` renders a `KeychainError` in full and anything else by type name only,
+the narrowing `ModelsSelftest.describe` already makes.
+
+**A refused read is its own state, not "absent".** `AnthropicProvider.apiKey()` collapses the two
+because its caller's remedy is the same either way. A Settings pane's is not: a locked keychain
+is unlocked, not re-keyed, and a pane that answered `errSecInteractionNotAllowed` with "no key is
+stored — Steno will use your log alone" would state a falsehood about a key that exists. So the
+presence check has three outcomes and the refusal sets `keyProblem`.
 
 The acceptance criterion is "the key is never displayed in full after entry and never appears in
 logs". A field that loaded the stored key so it could be edited in place would satisfy that

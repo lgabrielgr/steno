@@ -133,6 +133,44 @@ func aRefreshKeepsAnUnofferedSelection() async throws {
     #expect(model.modelRows.map(\.id) == ["claude-sonnet-1-retired", aiSonnet.id, aiHaiku.id])
 }
 
+/// **`selectionIsUnlisted` is true in three different situations and only one
+/// of them means "we have not asked yet".** The pane's caption said so
+/// unconditionally, which contradicted this file's own retired-model test: a
+/// refresh that succeeds and no longer offers the selection was told the list
+/// had not been fetched, and pressing Refresh again changed nothing.
+@Test("the reason a selection is unlisted is distinguishable")
+@MainActor
+func theReasonASelectionIsUnlistedIsDistinguishable() async throws {
+    let (settings, _) = try scratchAISettings()
+    settings.aiSelectedModelID = "claude-sonnet-1-retired"
+    let model = AISettingsModel(
+        providers: [StubAIProvider(models: .success([aiSonnet, aiHaiku]))],
+        credentials: InMemoryCredentialStore(), settings: settings)
+
+    // Nothing fetched yet: D-158's ordinary state.
+    #expect(model.selectionStatus == .notFetchedYet)
+
+    await model.refreshModels()
+
+    // The list arrived and does not contain it: the model is gone, and saying
+    // "not fetched yet" here sends the user to a button that cannot help.
+    #expect(model.selectionStatus == .noLongerOffered)
+
+    model.select(modelID: aiSonnet.id)
+    #expect(model.selectionStatus == .offered)
+}
+
+@Test("a selection is not reported as unlisted when there is none")
+@MainActor
+func noSelectionIsNotUnlisted() async throws {
+    let (settings, _) = try scratchAISettings()
+    let model = AISettingsModel(
+        providers: [StubAIProvider()], credentials: InMemoryCredentialStore(), settings: settings)
+
+    #expect(model.selectionStatus == .none)
+    #expect(model.selectionIsUnlisted == false)
+}
+
 @Test("choosing a model writes it where the stand-up path reads it")
 @MainActor
 func choosingAModelWritesThrough() async throws {

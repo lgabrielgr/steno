@@ -87,12 +87,13 @@ func anExistingKeyIsPresentButNotLoaded() async throws {
     #expect(model.keyEntry.isEmpty)
 }
 
-/// A Keychain read that throws reads as "nothing stored", the posture
-/// `AnthropicProvider.apiKey()` already takes: the remedy is the one an absent
-/// key already asks for.
-@Test("a Keychain that cannot be read reports no key rather than trapping")
+/// **A read that throws is not the same as no key, and the pane must not claim
+/// it is.** A locked keychain's remedy is to unlock it, not to paste a new key
+/// — so the no-key caption ("Steno still writes your stand-up from your log
+/// alone") would be an affirmative falsehood about a key that exists.
+@Test("a Keychain that cannot be read says so rather than claiming no key")
 @MainActor
-func anUnreadableKeychainReportsNoKey() async throws {
+func anUnreadableKeychainSaysSo() async throws {
     let (settings, _) = try scratchAISettings()
     let store = InMemoryCredentialStore(failing: KeychainError.interactionNotAllowed)
 
@@ -100,6 +101,45 @@ func anUnreadableKeychainReportsNoKey() async throws {
         providers: [StubAIProvider()], credentials: store, settings: settings)
 
     #expect(model.hasStoredKey == false)
+    #expect(model.keyProblem?.contains("interactionNotAllowed") == true)
+    #expect(model.keyProblem?.contains("could not read") == true)
+}
+
+/// §8, and the narrowing `ModelsSelftest.describe` already does: the `catch`
+/// binds `any Error`, not `KeychainError`, and an arbitrary error's description
+/// can quote the value it was handed — which here is the credential.
+@Test("a store failure that quotes the credential is not rendered")
+@MainActor
+func aLeakyStoreFailureIsNotRendered() async throws {
+    let (settings, _) = try scratchAISettings()
+    let store = InMemoryCredentialStore(failing: LeakyStoreFailure())
+    let model = AISettingsModel(
+        providers: [StubAIProvider()], credentials: store, settings: settings)
+
+    model.keyEntry = "sk-ant-test-key"
+    await model.saveKey()
+
+    let problem = try #require(model.keyProblem)
+    #expect(problem.contains("sk-ant-leaked-value") == false)
+    #expect(problem.contains("LeakyStoreFailure"))
+    #expect(model.hasStoredKey == false)
+}
+
+/// D-157 promises the field is empty on every *appearance*, not merely on
+/// construction — and this model is built once in `StenoApp.init` and held for
+/// the process, so a typed-but-unsaved key would still be in the field when the
+/// window reopened.
+@Test("forgetting the entry clears a typed but unsaved key")
+@MainActor
+func forgettingTheEntryClearsIt() async throws {
+    let (settings, _) = try scratchAISettings()
+    let model = AISettingsModel(
+        providers: [StubAIProvider()], credentials: InMemoryCredentialStore(), settings: settings)
+
+    model.keyEntry = "sk-ant-typed-never-saved"
+    model.forgetEntry()
+
+    #expect(model.keyEntry.isEmpty)
 }
 
 @Test("removing a key deletes it and keeps the selected model")
@@ -128,15 +168,25 @@ func removingAKeyKeepsTheModel() async throws {
 
 /// Deleting what is not there is success, not failure — the caller asked for an
 /// end state, and that end state holds.
-@Test("removing a key that was never stored is not an error")
+///
+/// **The second provider's credential is what makes this test able to fail.**
+/// Both assertions about *this* provider already hold before `removeKey()` runs,
+/// so a `removeKey` that did nothing at all would pass them; what cannot pass is
+/// a delete routed to the wrong provider id.
+@Test("removing an absent key is not an error, and touches no other provider")
 @MainActor
 func removingAnAbsentKeyIsFine() async throws {
     let (settings, _) = try scratchAISettings()
+    let store = InMemoryCredentialStore()
+    try store.store(.apiKey("sk-ant-other-provider"), for: "second")
     let model = AISettingsModel(
-        providers: [StubAIProvider()], credentials: InMemoryCredentialStore(), settings: settings)
+        providers: [
+            StubAIProvider(id: "first"), StubAIProvider(id: "second"),
+        ], credentials: store, settings: settings)
 
     model.removeKey()
 
     #expect(model.keyProblem == nil)
     #expect(model.hasStoredKey == false)
+    #expect(store.contents["second"] == .apiKey("sk-ant-other-provider"))
 }

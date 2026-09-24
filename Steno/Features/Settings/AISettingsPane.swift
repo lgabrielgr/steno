@@ -68,7 +68,11 @@ struct AISettingsPane: View {
                     ForEach(model.modelRows) { row in
                         Text(row.displayName).tag(row.id)
                     }
-                    if model.modelRows.isEmpty {
+                    // Tied to the *selection*, not to the row count: a
+                    // successful refresh with nothing selected (a key saved
+                    // while offline, refreshed later) leaves rows with no tag
+                    // matching the binding's "", which renders a blank picker.
+                    if model.selectedModelID == nil {
                         Text("No model selected").tag("")
                     }
                 }
@@ -77,13 +81,28 @@ struct AISettingsPane: View {
                 Button("Refresh Models") { Task { await model.refreshModels() } }
                     .disabled(model.isBusy)
 
-                if model.selectionIsUnlisted && model.selectedModelID != nil {
+                // `selectionIsUnlisted` covers two situations that need
+                // different sentences: the list has not been fetched (D-158's
+                // ordinary state), and the list was fetched and no longer
+                // offers this model. Telling the second user to press Refresh
+                // sends them to a button that cannot help.
+                switch model.selectionStatus {
+                case .notFetchedYet:
                     Text(
                         "Steno hasn't fetched the model list yet — it only asks when you save a "
                             + "key or press Refresh. Your stand-ups use the model above until then."
                     )
                     .font(.callout)
                     .foregroundStyle(.secondary)
+                case .noLongerOffered:
+                    Text(
+                        "Your provider no longer offers this model. Steno keeps using it until "
+                            + "you pick another — pick one above if your stand-ups stop working."
+                    )
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                case .none, .offered:
+                    EmptyView()
                 }
 
                 if case .failed(let error) = model.listState {
@@ -109,6 +128,12 @@ struct AISettingsPane: View {
             }
         }
         .formStyle(.grouped)
+        // D-157: the model is built once in `StenoApp.init` and held for the
+        // process, so "the field starts empty" is a fact only the view can
+        // make true. On disappear as well as appear, so an unsaved key does not
+        // sit in memory for as long as the app runs.
+        .onAppear { model.forgetEntry() }
+        .onDisappear { model.forgetEntry() }
     }
 
     /// §8: "onboarding must state plainly which content is transmitted to the
@@ -132,7 +157,9 @@ struct AISettingsPane: View {
                     + "the blocked reason, and every event inside that window (your notes, status "
                     + "changes, blocked reasons, and when the task was created) with its timestamp, "
                     + "in the words you typed. Notes are sent whole; nothing is shortened first. "
-                    + "Each task also carries a random identifier so the model can refer to it."
+                    + "Each task also carries a stable internal identifier so the model can "
+                    + "refer to it, and a blocked reason is sent even if you wrote it before "
+                    + "this window."
             )
             Text(
                 "Not sent: other projects, tasks outside the window, and notes you have redacted. "

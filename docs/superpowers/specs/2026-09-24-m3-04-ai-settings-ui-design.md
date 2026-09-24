@@ -41,9 +41,10 @@ D-140 shipped once already.
 
 ## D-157 — The key field is entry-only
 
-`AISettingsModel` holds `keyEntry: String`, bound to a `SecureField`. It starts empty on every
-appearance, including when a key is already stored, and it is cleared the instant a save
-succeeds. **The pane never reads a credential's value back out of the Keychain.** The only
+`AISettingsModel` holds `keyEntry: String`, bound to a `SecureField`. It is cleared the instant a
+save succeeds, and by `forgetEntry()`, which the pane calls on appear and on disappear — the model
+outlives every appearance (it is built once in `StenoApp.init`), so only the view can make "empty
+on every appearance" true. **The pane never reads a credential's value back out of the Keychain.** The only
 Keychain read it performs is a presence check, whose returned `Credential` is tested for `nil`
 and discarded.
 
