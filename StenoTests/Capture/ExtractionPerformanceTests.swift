@@ -81,8 +81,10 @@ final class ExtractionPerformanceTests: XCTestCase {
 
     /// A 250 KB paste carrying 8,000 links and 8,000 keys: the shape that tells
     /// linear cost from quadratic, which the two cases above cannot. Measured at
-    /// 180 ms, worst of ten. The ceiling is 1 s, five times that and still far
-    /// inside §1.1's three seconds — while the O(keys × spans) membership test
+    /// **144-152 ms, mean of ten**, across three runs on this machine (RSD
+    /// 6-7%, the steadiest case in the file; the pre-D-162 figure for this case
+    /// was 180 ms worst-of-ten). The ceiling is 1 s, roughly seven times that
+    /// and still far inside §1.1's three seconds — while the O(keys × spans) membership test
     /// this replaced spent 3.6 s on this very input in its overlap phase alone,
     /// so a regression to it fails here rather than reaching a user's clipboard.
     func testLinkDensePasteScalesLinearly() {

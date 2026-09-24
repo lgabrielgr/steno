@@ -88,13 +88,14 @@ final class MenuBarPerformanceTests: XCTestCase {
     ///
     /// Observed, not fixed, for `prepareForShow()` against 1 project and 20
     /// in-progress tasks: on the order of a few milliseconds per open.
-    /// Worst-of-ten across four runs on this machine — three in this session
-    /// (1.275 ms, 2.509 ms, 3.077 ms) plus one independent rerun during
-    /// review (3.56 ms) — with each run's own average, computed from its raw
-    /// ten values rather than xcodebuild's 3-decimal rounding, landing
-    /// between roughly 0.7 ms and 1.5 ms. Every run sits an order of
-    /// magnitude under the 50 ms ceiling below and three under §1.1's
-    /// ~3-second budget. Read this as the range one machine's noise
+    /// **The assertion is the mean of ten (D-162), measured at 1-2 ms across
+    /// three runs on this machine** at 25-46% RSD. The figures M1-04 recorded
+    /// under the old statistic are kept because they bound the other end: worst
+    /// -of-ten across four runs was 1.275 ms, 2.509 ms, 3.077 ms and 3.56 ms,
+    /// with each run's own average — computed from its raw ten values rather
+    /// than xcodebuild's 3-decimal rounding — landing between roughly 0.7 ms
+    /// and 1.5 ms. Every run sits an order of magnitude under the 50 ms ceiling
+    /// below and three under §1.1's ~3-second budget. Read this as the range one machine's noise
     /// produced, not a constant — a single figure quoted as fixed is what
     /// D-025 got wrong by 16x.
     @MainActor
