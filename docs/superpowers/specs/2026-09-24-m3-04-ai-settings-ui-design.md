@@ -73,9 +73,10 @@ here, never a prerequisite.
 
 ## D-158 — Only an explicit act calls `/v1/models`
 
-Three things fetch the list: saving a key, pressing "Refresh models", and "Test connection"
-(which is `availableModels()` under another name — see `AnthropicProvider.testConnection`).
-Opening the AI tab does not.
+Two things fetch the list: saving a key and pressing "Refresh models". Opening the AI tab does
+not, and "Test connection" reaches the provider but returns no rows — `AIProvider.testConnection()`
+answers a question rather than handing back a list, because how a provider verifies a credential
+is its own business and a second one may do it more cheaply.
 
 The alternative — fetch on appear — makes the picker always current, and it was rejected because
 it makes opening a settings tab a network event. The user who opens Settings to change their
