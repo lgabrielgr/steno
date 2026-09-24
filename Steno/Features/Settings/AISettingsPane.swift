@@ -13,6 +13,14 @@ struct AISettingsPane: View {
 
     var body: some View {
         Form {
+            // The question a user opens this pane asking, answered before they
+            // read anything else. `AISettingsModel.readiness` derives it from
+            // the same two conditions `MainWindowModel.standupPolish` reads, so
+            // it cannot claim the AI is on while §7.4's raw path is what runs.
+            Section {
+                readinessLine
+            }
+
             Section("Provider") {
                 Picker("Provider", selection: $model.selectedProviderID) {
                     ForEach(model.providerChoices, id: \.id) { choice in
@@ -45,14 +53,39 @@ struct AISettingsPane: View {
                 // box for this same reason; this is the editable version of
                 // that fix. `labelsHidden()` keeps the accessibility label
                 // without drawing a second copy of the section header.
-                SecureField("API key", text: $model.keyEntry, prompt: Text("Paste your API key"))
-                    .textContentType(.password)
-                    .textFieldStyle(.roundedBorder)
-                    .labelsHidden()
-                    // Paste, Return, done. `saveKey()` refuses an empty or
-                    // all-whitespace entry, so Return on an empty field is a
-                    // no-op rather than a spurious Keychain write.
-                    .onSubmit { Task { await model.saveKey() } }
+                SecureField(
+                    "API key", text: $model.keyEntry,
+                    prompt: Text(
+                        model.hasStoredKey
+                            ? "Paste a new key to replace the stored one" : "Paste your API key")
+                )
+                .textContentType(.password)
+                .textFieldStyle(.roundedBorder)
+                .labelsHidden()
+                // Paste, Return, done. `saveKey()` refuses an empty or
+                // all-whitespace entry, so Return on an empty field is a
+                // no-op rather than a spurious Keychain write.
+                .onSubmit { Task { await model.saveKey() } }
+
+                // Directly under the field it describes, not three controls
+                // below it: the reporter of this change had a key stored and
+                // said nothing on screen told them so. A glyph carries the
+                // state at a glance; the sentence carries the detail.
+                if model.hasStoredKey {
+                    Label {
+                        Text("A key is stored in your login Keychain. Steno never shows it again.")
+                    } icon: {
+                        Image(systemName: "checkmark.circle.fill").foregroundStyle(.green)
+                    }
+                    .font(.callout)
+                } else {
+                    Label(
+                        "Without a key, Steno still writes your stand-up — from your log alone, "
+                            + "a little rougher.", systemImage: "key.slash"
+                    )
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                }
 
                 HStack {
                     Button(model.hasStoredKey ? "Replace Key" : "Save Key") {
@@ -63,15 +96,6 @@ struct AISettingsPane: View {
                     Button("Remove Key") { model.removeKey() }
                         .disabled(!model.hasStoredKey || model.isBusy)
                 }
-
-                Text(
-                    model.hasStoredKey
-                        ? "A key is stored in your login Keychain. Steno never shows it again."
-                        : "Without a key, Steno still writes your stand-up — from your log alone, "
-                            + "a little rougher."
-                )
-                .font(.callout)
-                .foregroundStyle(.secondary)
 
                 if let problem = model.keyProblem {
                     Label(problem, systemImage: "exclamationmark.triangle")
@@ -151,6 +175,32 @@ struct AISettingsPane: View {
         // sit in memory for as long as the app runs.
         .onAppear { model.forgetEntry() }
         .onDisappear { model.forgetEntry() }
+    }
+
+    /// Whether the AI path will run, in one line.
+    ///
+    /// Three states rather than two, because "a key but no model" is reachable
+    /// — a first key saved while offline adopts no default (D-159) — and its
+    /// remedy is Refresh, not another key. Saying only "off" there would send
+    /// the user back to the field they already filled in correctly.
+    @ViewBuilder
+    private var readinessLine: some View {
+        switch model.readiness {
+        case .ready(let name):
+            Label {
+                Text("AI polishing is on — stand-ups go to \(name).")
+            } icon: {
+                Image(systemName: "checkmark.circle.fill").foregroundStyle(.green)
+            }
+        case .noKey:
+            Label(
+                "AI polishing is off — stand-ups come from your log alone. Add a key below.",
+                systemImage: "info.circle")
+        case .noModel:
+            Label(
+                "AI polishing is off — a key is stored, but no model is selected. "
+                    + "Press Refresh Models below.", systemImage: "info.circle")
+        }
     }
 
     /// §8: "onboarding must state plainly which content is transmitted to the

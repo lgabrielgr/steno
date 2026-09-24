@@ -208,6 +208,38 @@ public final class AISettingsModel {
         selectionStatus == .notFetchedYet || selectionStatus == .noLongerOffered
     }
 
+    /// Whether the AI path will actually run, and why not when it will not.
+    ///
+    /// **The same two conditions `MainWindowModel.standupPolish` reads**, which
+    /// is the point: it builds a provider over the Keychain and passes
+    /// `settings.aiSelectedModelID`, and `StandupSummarizer` takes §7.4's raw
+    /// path unless both are present. A pane that answered "configured?" from
+    /// different evidence would drift from what the stand-up actually does.
+    ///
+    /// Lives here rather than in the pane's `if` statements because the
+    /// unhosted test bundle cannot reach the app target (D-010) — the same
+    /// reasoning `DataSettingsModel.canBackUpNow` records.
+    public enum Readiness: Equatable, Sendable {
+        /// A key is stored and a model is selected. Carries what the picker
+        /// shows, so the line names the model rather than an opaque id.
+        case ready(model: String)
+        /// No credential for this provider.
+        case noKey
+        /// A credential, but the user has not chosen a model — the state a
+        /// first key saved while offline leaves behind (D-159).
+        case noModel
+    }
+
+    public var readiness: Readiness {
+        guard hasStoredKey else { return .noKey }
+        guard let selectedModelID else { return .noModel }
+        // `modelRows` always contains the selection, synthesised from the id
+        // when no list has been fetched, so this is a display name when one is
+        // known and the id otherwise — never blank.
+        return .ready(
+            model: modelRows.first { $0.id == selectedModelID }?.displayName ?? selectedModelID)
+    }
+
     /// Whether a network call is in flight. The pane disables its buttons on it.
     public var isBusy: Bool { listState == .loading || connection == .testing }
 
