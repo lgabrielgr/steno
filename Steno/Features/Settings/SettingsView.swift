@@ -8,13 +8,11 @@ import SwiftUI
 /// exists, so the registry cannot silently acquire a tab that renders nothing
 /// — the one failure mode a registry of this shape has.
 ///
-/// With a single case today the `TabView` draws a toolbar with one segment,
-/// which reads a little oddly until M3-04 lands. Left alone on purpose: a
-/// `count == 1` special case becomes dead code the day the second pane
-/// arrives, and this is the shape all five panes use.
+/// Three panes as of M3-04; two more are sketched in `SettingsPane`.
 struct SettingsView: View {
     let model: SettingsModel
     let dataModel: DataSettingsModel
+    let aiModel: AISettingsModel
     @State private var selection: SettingsPane = .capture
 
     var body: some View {
@@ -37,6 +35,8 @@ struct SettingsView: View {
             CaptureSettingsPane(model: model)
         case .data:
             DataSettingsPane(model: dataModel)
+        case .aiProvider:
+            AISettingsPane(model: aiModel)
         }
     }
 }

@@ -169,3 +169,32 @@ import Testing
         #expect(messages.joined().contains(store.path))
     }
 }
+
+/// The other half of the selftest routing rule.
+///
+/// `CLIEntry` answers both harnesses before a `ModelContainer` is ever opened,
+/// so a runner — which exists to act on the store — should never be handed one.
+/// That claim is asserted here rather than assumed: the arm reports the
+/// misrouting and exits, and it names the subcommand that got there, because
+/// with two harnesses sharing it a message naming only the first would send
+/// whoever hit it to the wrong code.
+///
+/// `CLIEntry.run`'s own selftest branches are deliberately not exercised: they
+/// build the real `KeychainCredentialStore` and the real `AnthropicProvider`,
+/// which would write into the developer's login keychain and reach the network
+/// that §9.4 denies. That is what `make verify-keychain` and `make
+/// verify-models` are for.
+@Suite @MainActor struct CLISelftestRoutingTests {
+    @Test(
+        "a selftest handed to the runner is refused, and says which one",
+        arguments: ["keychain-selftest", "models-selftest"])
+    func misroutedSelftestIsRefused(_ subcommand: String) throws {
+        let harness = try CLIHarness()
+
+        let result = try harness.run([subcommand])
+
+        #expect(result.code == 1)
+        #expect(result.err.joined().contains("\(subcommand) is handled before the store opens"))
+        #expect(result.out.isEmpty)
+    }
+}

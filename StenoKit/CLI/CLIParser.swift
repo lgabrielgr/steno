@@ -31,6 +31,14 @@ public enum CLIParser {
                 throw unexpected(rest[1], of: "keychain-selftest")
             }
             return .keychainSelftest
+        case "models-selftest":
+            // Takes no flags, for `keychain-selftest`'s reason: accepting and
+            // ignoring them would let `models-selftest --replace` look like it
+            // did something.
+            guard rest.count == 1 else {
+                throw unexpected(rest[1], of: "models-selftest")
+            }
+            return .modelsSelftest
         default:
             throw CLIUsageError(
                 "steno: unknown subcommand \"\(subcommand)\".\n\n\(CLIUsage.text)")

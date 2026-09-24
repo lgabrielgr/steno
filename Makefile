@@ -244,6 +244,21 @@ import: build ## Merge an export into the store (FILE=path required)
 verify-keychain: build ## Round-trip the real Keychain (signed build; §8, D-138)
 	@"$(BIN)" keychain-selftest
 
+# §7.1's network path, run against the live API with the key you actually use.
+#
+# `make test` denies outbound networking (§9.4, D-012), so `URLSessionTransport`
+# has no automated execution at all (D-143) and `/v1/models`'s shape — paging,
+# field names, the `structured_outputs` nesting — was confirmed by hand exactly
+# once, on 2026-09-22. A renamed field a year from now fails silently: the
+# paging guards turn it into a short list rather than an error. This target is
+# the repeatable check, and it prints the ranked list so D-141's ordering can be
+# read against what the API actually returns.
+#
+# It spends one GET against your key, and it never prints the key. Run it after
+# any change to AnthropicWire, ModelRanking, HTTPTransport or URLSessionTransport.
+verify-models: build ## Fetch the live model list with the stored key (signed build; §7.1, D-161)
+	@"$(BIN)" models-selftest
+
 # The swiftlint check lives here rather than in `preflight`, which gates
 # build/run/release — none of which should start requiring a linter.
 #

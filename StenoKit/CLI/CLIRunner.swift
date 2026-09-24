@@ -105,19 +105,23 @@ public struct CLIRunner {
         case .importFile(let url, let mode):
             importFile(url, mode: mode)
         case .keychainSelftest:
-            misroutedSelftest()
+            misroutedSelftest("keychain-selftest")
+        case .modelsSelftest:
+            misroutedSelftest("models-selftest")
         }
     }
 
-    /// `CLIEntry` answers `keychain-selftest` before a store is ever opened, so
-    /// a runner — which exists to act on the store — should never be handed one.
+    /// `CLIEntry` answers both selftests before a store is ever opened, so a
+    /// runner — which exists to act on the store — should never be handed one.
     ///
     /// **Reported, not trapped.** `preconditionFailure` would turn a wiring
-    /// mistake into a crash report; a message names the mistake and exits. It is
-    /// reachable from a test, which is the point: the claim above is asserted
-    /// rather than assumed.
-    private func misroutedSelftest() -> Int32 {
-        err("steno: keychain-selftest is handled before the store opens.")
+    /// mistake into a crash report; a message names the mistake and exits.
+    ///
+    /// The subcommand is a parameter rather than a fixed string: with two
+    /// harnesses sharing this arm, a message naming only the first would send
+    /// whoever hit it looking at the wrong code.
+    private func misroutedSelftest(_ subcommand: String) -> Int32 {
+        err("steno: \(subcommand) is handled before the store opens.")
         return ExitCode.failure
     }
 }

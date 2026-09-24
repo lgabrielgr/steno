@@ -4291,3 +4291,132 @@ turns the second red — the check that the fix did not overshoot into the failu
 The blank-bullet mutation also had to be run against *both* arms of `reportedTaskIDs`: the daily
 test alone left the periodic arm unguarded, which the sweep caught and a reading would not
 have.
+
+### D-157 — The key field is entry-only, so §8 holds by construction
+
+`AISettingsModel.keyEntry` is the `SecureField`'s binding and holds only what the user is
+typing. `saveKey()` clears it the instant the write succeeds, and the pane calls `forgetEntry()`
+on appear and on disappear — **the model is built once in `StenoApp.init` and held for the
+process**, so "the field is empty on every appearance" is a fact only the view can make true; a
+model that merely started empty would still be holding an unsaved key when the window reopened,
+and holding it in memory until the app quit. The pane's only Keychain read is a presence check
+whose result is a `Bool`; nothing in the type can hold a credential's value.
+
+**What `keyProblem` may render is narrowed for the same reason.** Its `catch` binds `any Error`,
+not `KeychainError`: `KeychainCredentialStore.store` encodes the `Credential` before it reaches
+`SecItem*`, and an `EncodingError` describes itself by quoting the value it choked on — which is
+the key. `detail(for:)` renders a `KeychainError` in full and anything else by type name only,
+the narrowing `ModelsSelftest.describe` already makes.
+
+**A refused read is its own state, not "absent".** `AnthropicProvider.apiKey()` collapses the two
+because its caller's remedy is the same either way. A Settings pane's is not: a locked keychain
+is unlocked, not re-keyed, and a pane that answered `errSecInteractionNotAllowed` with "no key is
+stored — Steno will use your log alone" would state a falsehood about a key that exists. So the
+presence check has three outcomes and the refusal sets `keyProblem`.
+
+The acceptance criterion is "the key is never displayed in full after entry and never appears in
+logs". A field that loaded the stored key so it could be edited in place would satisfy that
+through AppKit: dots on screen, and `NSSecureTextField`'s exclusion from screen capture. That
+makes §8 a property of a framework. Entry-only makes it a property of this code — there is no
+path on which the stored value reaches view state, so no later edit to the pane can expose it,
+and a screenshot, an accessibility dump or a scrollback cannot contain what was never loaded.
+
+The user chose the `SecureField` shape over a write-only field after the trade was put to them;
+the read-back is the half that was declined, and this entry records which half.
+
+The cost is that "which key is stored?" has no answer beyond "one is". For a single-user recall
+tool with one provider that is the right trade: the remedy for a key you no longer recognise is
+to paste a new one, which is one click either way.
+
+**Removing a key leaves `aiSelectedModelID` alone.** A model id is not a secret, a picker should
+not lose its place because a key was rotated, and re-entering a key restores the previous
+behaviour with nothing to redo. §7.4 covers the interval: the provider throws `.notConfigured`
+and the stand-up is M2-02's raw report.
+
+### D-158 — `/v1/models` is called only on an explicit act, and there is no cache
+
+Saving a key and pressing "Refresh models" fetch the list. Opening the AI tab does not, and
+"Test connection" reaches the provider but returns no rows — `AIProvider.testConnection()`
+answers a question, not a list, because how a provider verifies a credential is its own business
+and a second one may do it more cheaply.
+
+Fetching on appear would keep the picker current at the price of making a settings tab a network
+event. Someone opening Settings to change their capture hotkey has no interest in Anthropic's
+catalogue, and offline that tab would spend ten seconds of `settingsTimeout` before it could say
+anything.
+
+**The visible consequence is stated rather than hidden:** with a key stored and no fetch yet, the
+picker holds exactly one row — the stored model id — selected. Changing models is then two acts.
+That is the honest rendering of "we have not asked", and it doubles as the offline rendering,
+which is the second acceptance criterion: an unreachable list cannot block using a previously
+selected model, because the selection was never sourced from the list.
+
+**No cache.** Persisting the last good list would fill the offline picker at the price of an
+`AppSettings` key — one that grows `allKeys`, which `AISecretsTests` counts, and that holds
+vendor ids going stale with nothing to notice. The stored selection is the only piece of that
+list the app needs to keep.
+
+### D-159 — Saving a key adopts element zero, and that is what turns the AI on
+
+A successful save fetches the list and writes `models[0].id` to `AppSettings.aiSelectedModelID`
+— but only when the current selection is `nil` or names a model the fetched list no longer
+offers. A still-offered selection is never overwritten, and `refreshModels()` never re-points
+anything: silently moving a user onto a different model is the one thing a picker must not do on
+its own.
+
+§7.1 asks for a default of "a mid-tier model … this is not a reasoning-heavy workload", and
+D-141 put that choice in the provider's ordering. This is the one place that ordering is
+consumed. Without it a user pastes a key, presses nothing else, and gets raw reports forever
+while the picker displays a model that is not in use — the state where the app looks configured
+and is not.
+
+So entering a key is read as intent to use the AI, and there is no second on/off switch: the key
+is the switch, and a control that could disagree with it is a state to explain. A fetch that
+fails after a successful save leaves the key stored and the selection exactly as it was — on a
+first key, that means no selection and §7.4's raw path, with the pane saying the list could not
+be fetched and offering Refresh. The key is not rolled back; it is almost certainly correct, and
+the network is what failed.
+
+### D-160 — The provider picker renders a list and stores nothing
+
+`AISettingsModel` takes `providers: [any AIProvider]` — one in production, two in tests — and
+holds `selectedProviderID` in memory, defaulting to the first. Switching clears the model list,
+the connection result and the stored-key flag, because each is an answer about one vendor.
+
+FR-6 names a provider picker and §7.1 exists so a second provider can be plugged in, so the pane
+renders from a list rather than hard-coding "Anthropic" in a `Text`. But a *setting* with one
+possible value is the field D-141 already refused: it would add a key to `AppSettings`, grow the
+count `AISecretsTests` asserts, and hand a future task a stored value to honour or migrate.
+Holding the selection in memory costs nothing and keeps the abstraction exercised — the tests
+drive two `StubAIProvider`s and assert that switching routes the next call, which a disabled
+picker could never demonstrate.
+
+§7.2's rule needs no new enforcement here: `CredentialKind.userSelectable` is `[.apiKey]` and the
+pane renders from it rather than from `allCases`, which is what D-136 built it for. One
+selectable kind renders as a label, because a picker of one is a label.
+
+### D-161 — `models-selftest`, the network twin of `make verify-keychain`
+
+A hidden `steno models-selftest` subcommand, absent from `CLIUsage.text`, handled in `CLIEntry`
+before the store is opened, and exposed as `make verify-models` so a human runs it against a
+signed build. It reads the stored Anthropic credential, calls `availableModels()` through the
+real `URLSessionTransport`, and prints the ranked list with element zero marked.
+
+D-138 set the shape and this applies it to the two gaps M3-02 left open. `URLSessionTransport`
+has no automated test at all (D-143) — its only untested behaviour is "Foundation does what
+Foundation does", so a `URLProtocol` harness was judged not worth its cost, which left the real
+adapter first executed by a user in the pane they were trying to configure. And `/v1/models`'s
+shape was confirmed by hand exactly once, on 2026-09-22; a renamed field a year from now fails
+*silently*, because the paging guards turn it into a short list rather than an error and
+`ModelRanking` dedupes by id. Printing the ranked list is also how D-141's ordering gets checked
+against what the API actually returns rather than against what its unit tests assume.
+
+Unlike `KeychainSelftest`, it reads the **real** provider id: there is no way to ask Anthropic a
+question with a sentinel key, and every call it makes is a read. It never prints the credential
+on any path — an `AIError` describes itself without quoting a payload (D-132), and anything else
+is reported by type name only, because an arbitrary error's description can carry a response
+body.
+
+`CLIRunner`'s misroute arm now names the subcommand it was handed: with two harnesses sharing
+that arm, a message naming only the first would send whoever hit it to the wrong code. It is
+covered by a test, which the claim in its doc comment previously was not.

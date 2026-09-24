@@ -160,4 +160,37 @@ import Testing
         }
         #expect(error.message.contains("--compress"))
     }
+
+    // MARK: - The hidden harnesses
+
+    @Test(
+        "each selftest parses on its own",
+        arguments: [
+            (["keychain-selftest"], CLICommand.keychainSelftest),
+            (["models-selftest"], CLICommand.modelsSelftest),
+        ])
+    func selftestParses(_ arguments: [String], _ expected: CLICommand) throws {
+        #expect(try parse(arguments) == expected)
+    }
+
+    /// Accepting and ignoring a flag would let `models-selftest --replace` look
+    /// like it did something.
+    @Test(
+        "a selftest takes no flags",
+        arguments: [
+            ["keychain-selftest", "--replace"], ["models-selftest", "--output", "/tmp/a"],
+        ])
+    func selftestTakesNoFlags(_ arguments: [String]) throws {
+        let error = try #require(throws: CLIUsageError.self) { try parse(arguments) }
+        #expect(error.message.contains("unexpected argument"))
+    }
+
+    /// **Both harnesses are hidden.** They are verification tools, not
+    /// features: `steno --help` describes what §10.5 shipped for a user to run,
+    /// and a list that advertised a live API call against their key would be
+    /// inviting one.
+    @Test("neither selftest appears in the usage text")
+    func selftestsAreHidden() {
+        #expect(CLIUsage.text.contains("selftest") == false)
+    }
 }

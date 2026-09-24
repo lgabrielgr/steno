@@ -30,6 +30,12 @@ struct StenoApp: App {
     /// FR-6's Data pane, built here for the reason above.
     private let dataSettingsModel: DataSettingsModel
 
+    /// FR-6's AI pane, built here for the reason above — and built outside the
+    /// `store` switch below, unlike its two siblings: a credential lives in the
+    /// Keychain and a model id in `UserDefaults`, so this pane is fully
+    /// functional in a build whose store will not open (§13).
+    private let aiSettingsModel: AISettingsModel
+
     /// §10.5's auto-export. Held for the whole process because it owns a timer
     /// and a termination observation — a controller that went out of scope
     /// would take both with it, and the backup would quietly stop happening.
@@ -50,6 +56,13 @@ struct StenoApp: App {
         print("Steno launched")
         fflush(stdout)
         Log.app.info("Steno launched")
+
+        // §7.1's list, with the one provider that ships. The two
+        // `KeychainCredentialStore` values are separate instances of a
+        // stateless struct, the posture D-109 records for `AppKitFilePanels`.
+        aiSettingsModel = AISettingsModel(
+            providers: [AnthropicProvider(credentials: KeychainCredentialStore())],
+            credentials: KeychainCredentialStore())
 
         let path = (try? StenoStore.defaultURL.path) ?? "<could not resolve Application Support>"
         storePath = path
@@ -171,7 +184,8 @@ struct StenoApp: App {
         // `NSApp.activate`), so the application menu is reachable even with no
         // window open, and M1-04's popover is left as it was built.
         Settings {
-            SettingsView(model: settingsModel, dataModel: dataSettingsModel)
+            SettingsView(
+                model: settingsModel, dataModel: dataSettingsModel, aiModel: aiSettingsModel)
         }
     }
 }
