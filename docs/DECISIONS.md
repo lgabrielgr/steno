@@ -4420,3 +4420,55 @@ body.
 `CLIRunner`'s misroute arm now names the subcommand it was handed: with two harnesses sharing
 that arm, a message naming only the first would send whoever hit it to the wrong code. It is
 covered by a test, which the claim in its doc comment previously was not.
+
+### D-162 — The last six worst-of-ten perf gates move to the mean, two milestones after D-064
+
+**2026-09-24** · follow-up to M1-07/M1-08, found by M3-04's CI · **Status:** accepted ·
+**completes D-053 and D-064**
+
+`ExtractionPerformanceTests` (3 cases) and `MenuBarPerformanceTests` (3 cases) now assert the
+**mean** of `measure`'s ten iterations. Every ceiling is unchanged — 1 ms, 20 ms, 1 s, and three
+at 50 ms. No production code changed.
+
+**The evidence is a CI failure on a PR that touched no capture code.**
+`testLongNoteBodyStaysFarInsideBudget` failed `build-test-lint` on PR #38 (M3-04, the AI Settings
+pane) at **20.286 ms against a 20 ms ceiling**, worst of ten. Local measurement on the same commit
+is **2.2–2.3 ms, mean of ten, across three runs** — so one iteration ran roughly nine times the
+other nine. The PR-triggered run then passed on its own. That is D-053's signature exactly: the
+mean is stable and one pathological iteration destroys the worst.
+
+**Why this took two milestones to reach.** D-053 diagnosed the statistic and fixed one case.
+D-064 fixed the other two in `CapturePerformanceTests` and wrote "all three cases in
+`CapturePerformanceTests` are now on the same statistic" — true, and it left six assertions in two
+other files on the statistic it had just called the cause. `AutoExportLatencyTests`, written
+afterwards, cites D-064 and uses the mean, so the *rule* propagated forward while the *fix* did
+not propagate sideways. A fix lands on the file in the diff; the sweep for its siblings is a
+separate act, and this is the third time this repo has paid for skipping it.
+
+**The variance says these six were the most exposed, not the least.** Measured across three
+isolated runs on this machine: extraction's RSD is 6–33%, and the menu-bar cases run **26–70%** —
+higher than anything D-064 fixed. `testCaptureWithNoMenuBarModelObserving` alone reported 70.4%,
+54.3% and 26.3% on three consecutive runs of identical code.
+
+**What the mean gives up, and why the gates still hold.** A single slow iteration no longer fails
+a run. Each ceiling was verified to still catch a real regression, by mutation:
+
+| Mutation | Gate that failed |
+|---|---|
+| `Thread.sleep(0.025)` per extraction | capture string (0.0291 s vs 0.001), long note (0.0329 s vs 0.020) |
+| extraction repeated 8x | link-dense paste (1.155 s vs 1.0) |
+| `Thread.sleep(0.060)` in `prepareForShow` | popover open (0.0659 s vs 0.050) |
+| `Thread.sleep(0.060)` in `CaptureService.capture` | both capture cases (0.0698 s, 0.0714 s vs 0.050) |
+
+Margins after the change, mean of ten over three runs: 100 µs against 1 ms, 2.3 ms against 20 ms,
+145 ms against 1 s, and 1–4 ms against 50 ms. Every gate keeps at least a 6.8x margin, and the
+smallest — the link-dense paste — is also the steadiest case in the suite at 6% RSD.
+
+Each case also gained `XCTAssertGreaterThan(runs, 0)`, the guard `AutoExportLatencyTests` already
+carried: a mean computed over zero iterations is a division that never runs, and a block that
+never ran would otherwise pass silently.
+
+**Not fixed here, and deliberately:** nothing was done about the underlying spike. D-064 already
+tried the root-cause fix — an untimed warm-up before `measure` — and measured it doing nothing
+(9.5 → 9.6 ms), because the overhead is in XCTest's measurement harness rather than in the code
+under test. Do not retry it.
