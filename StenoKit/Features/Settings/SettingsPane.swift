@@ -27,7 +27,18 @@ public enum SettingsPane: String, CaseIterable, Identifiable, Sendable {
     /// exist, and a button that purges nothing is one nobody can verify
     /// (D-127).
     case data
-    // case ai           — M3-04: provider, Keychain-backed key, model picker
+
+    /// FR-6's AI area: the provider, the Keychain-backed key, the model picker
+    /// and "Test connection" (§7.1, §7.2, §8).
+    ///
+    /// Last of the three that ship today, because it is the one the product
+    /// works without: §7.4 produces a stand-up with no key configured at all,
+    /// and the tab order should not imply otherwise.
+    ///
+    /// Named `aiProvider` rather than `ai` because SwiftLint's
+    /// `identifier_name` rejects a two-character name — the same rule that
+    /// named `Log.aiLayer`. The *tab* still reads "AI".
+    case aiProvider
     // case integrations — M4-04: Atlassian site, credentials, MCP servers
     // case stale        — M6-01: the global default N in days
 
@@ -38,6 +49,7 @@ public enum SettingsPane: String, CaseIterable, Identifiable, Sendable {
         switch self {
         case .capture: return "Capture"
         case .data: return "Data"
+        case .aiProvider: return "AI"
         }
     }
 
@@ -46,6 +58,7 @@ public enum SettingsPane: String, CaseIterable, Identifiable, Sendable {
         switch self {
         case .capture: return "keyboard"
         case .data: return "externaldrive"
+        case .aiProvider: return "sparkles"
         }
     }
 }

@@ -31,6 +31,14 @@ public enum CLICommand: Equatable, Sendable {
     /// the event log and a harness that created the user's store as a side
     /// effect would be a worse tool than no harness. See `KeychainSelftest`.
     case keychainSelftest
+
+    /// `steno models-selftest` — hidden, and absent from `CLIUsage.text`.
+    ///
+    /// **Carries no store either**, for `keychainSelftest`'s reason: fetching a
+    /// provider's model list has nothing to do with the event log. It reads the
+    /// stored credential and makes one `GET`, so it is the network twin of the
+    /// Keychain harness. See `ModelsSelftest`.
+    case modelsSelftest
 }
 
 /// A command line this build cannot act on.

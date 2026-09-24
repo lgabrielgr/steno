@@ -82,6 +82,15 @@ public enum CLIEntry {
             return KeychainSelftest.run(store: KeychainCredentialStore())
         }
 
+        // Before the store for the same reason, and with the same shape: this
+        // one reads the stored credential and asks the provider for its model
+        // list (D-161). `runSynchronously` blocks this thread while the call
+        // runs on the cooperative pool — see `ModelsSelftest`.
+        if case .modelsSelftest = command {
+            return ModelsSelftest.runSynchronously(
+                provider: AnthropicProvider(credentials: KeychainCredentialStore()))
+        }
+
         // **Before the store is opened, not after.** `StenoStore.live` creates
         // the store directory and, on a fresh path, the store itself — so a
         // refusal raised further in had already written to disk, and could fail
