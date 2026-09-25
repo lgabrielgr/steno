@@ -37,21 +37,6 @@ public final class AISettingsModel {
         case failed(AIError)
     }
 
-    /// What the user can do about a failure.
-    ///
-    /// **Lives here rather than in the pane's `if` statements** for
-    /// `DataSettingsModel.canBackUpNow`'s reason: the unhosted test bundle
-    /// cannot reach the app target (D-010), so a rule only a view knows is a
-    /// rule no test can hold. The third acceptance criterion — "Test
-    /// connection" distinguishes an invalid key from a network failure — is
-    /// exactly such a rule.
-    public enum Advice: Equatable, Sendable {
-        /// The key is wrong or missing. The field above is the fix.
-        case fixTheKey
-        /// Nothing here is wrong. Try again later.
-        case tryAgainLater
-    }
-
     // MARK: - Key entry
 
     /// The `SecureField`'s binding — **what the user is typing, never what is
@@ -76,7 +61,14 @@ public final class AISettingsModel {
     /// stored — the two are indistinguishable to a caller — which is why that
     /// case also sets `keyProblem`. Reporting only "no key" would tell a user
     /// with a locked keychain to paste a new one, which cannot work.
-    public internal(set) var hasStoredKey: Bool = false
+    public internal(set) var storedKey: StoredKeyState = .absent
+
+    /// Whether a credential is definitely there.
+    ///
+    /// Derived rather than stored, so it cannot disagree with `storedKey` —
+    /// and so "refused the read" keeps its own identity for the surfaces that
+    /// need to tell the two apart (`readiness`, and the row under the field).
+    public var hasStoredKey: Bool { storedKey == .present }
 
     /// Why the last store or delete was refused, if it was.
     ///
@@ -115,6 +107,15 @@ public final class AISettingsModel {
 
     public internal(set) var connection: ConnectionState = .untested
 
+    /// Whether a save is in flight, from the store through the fetch that
+    /// follows it.
+    ///
+    /// **Distinct from `listState == .loading`, which a save also sets.** The
+    /// fetch is the slow half of a save, but the user's attention is on the
+    /// Save button, so the two need separate progress: one flag per thing a
+    /// person can click.
+    public internal(set) var isSavingKey: Bool = false
+
     // MARK: - Providers
 
     /// Which provider the pane is configuring (D-160).
@@ -134,16 +135,11 @@ public final class AISettingsModel {
             listState = .idle
             connection = .untested
             keyEntry = ""
-            switch Self.storedKey(in: credentials, for: selectedProviderID) {
-            case .present:
-                hasStoredKey = true
-                keyProblem = nil
-            case .absent:
-                hasStoredKey = false
-                keyProblem = nil
-            case .unreadable(let detail):
-                hasStoredKey = false
+            storedKey = Self.storedKey(in: credentials, for: selectedProviderID)
+            if case .unreadable(let detail) = storedKey {
                 keyProblem = "macOS could not read your stored key: \(detail)."
+            } else {
+                keyProblem = nil
             }
         }
     }
@@ -162,83 +158,6 @@ public final class AISettingsModel {
     public var credentialKinds: [CredentialKind] { CredentialKind.userSelectable }
 
     // MARK: - Derived
-
-    /// What the model picker shows.
-    ///
-    /// **The stored selection is always a row, even when the list does not
-    /// contain it** — because it has not been fetched yet (D-158), because the
-    /// network is unreachable, or because the vendor retired the model. This is
-    /// the second acceptance criterion: an unreachable model list must not
-    /// block using a previously selected model. The selection is never
-    /// reassigned by a fetch that fails to mention it; `saveKey()` is the only
-    /// path that re-points it, and only onto element zero (D-159).
-    public var modelRows: [AIModel] {
-        guard let selectedModelID, !models.contains(where: { $0.id == selectedModelID }) else {
-            return models
-        }
-        return [AIModel(id: selectedModelID, displayName: selectedModelID)] + models
-    }
-
-    /// Where the selected model stands against the list that was fetched.
-    ///
-    /// **Three cases, because the pane has three different things to say.** An
-    /// unlisted selection before any fetch is D-158's ordinary state ("we have
-    /// not asked"); an unlisted selection *after* a fetch means the provider
-    /// retired the model, and telling that user the list has not been fetched
-    /// sends them to a Refresh button that cannot help them.
-    public enum SelectionStatus: Equatable, Sendable {
-        /// Nothing is selected.
-        case none
-        /// The fetched list contains it.
-        case offered
-        /// No list has been fetched yet (D-158).
-        case notFetchedYet
-        /// A list was fetched and does not contain it.
-        case noLongerOffered
-    }
-
-    public var selectionStatus: SelectionStatus {
-        guard let selectedModelID else { return .none }
-        if models.contains(where: { $0.id == selectedModelID }) { return .offered }
-        return hasFetchedModels ? .noLongerOffered : .notFetchedYet
-    }
-
-    /// Whether the selected model is a row the provider did not offer.
-    public var selectionIsUnlisted: Bool {
-        selectionStatus == .notFetchedYet || selectionStatus == .noLongerOffered
-    }
-
-    /// Whether a network call is in flight. The pane disables its buttons on it.
-    public var isBusy: Bool { listState == .loading || connection == .testing }
-
-    /// What the user should do about the last failed fetch, if it failed.
-    public var listAdvice: Advice? {
-        guard case .failed(let error) = listState else { return nil }
-        return Self.advice(for: error)
-    }
-
-    /// What the user should do about the last connection test, if it failed.
-    public var connectionAdvice: Advice? {
-        guard case .failed(let error) = connection else { return nil }
-        return Self.advice(for: error)
-    }
-
-    /// The third acceptance criterion, as a function.
-    ///
-    /// `.invalidCredential` and `.notConfigured` point at the field above;
-    /// everything else is not something this pane can fix. The *sentence* the
-    /// user reads stays `AIError.errorDescription` — a second vocabulary here
-    /// would be a second place for "the provider rejected this credential" to
-    /// be worded, free to drift from the one M3-02 already ships.
-    static func advice(for error: AIError) -> Advice {
-        switch error {
-        case .notConfigured, .invalidCredential:
-            return .fixTheKey
-        case .invalidRequest, .network, .timedOut, .rateLimited, .providerUnavailable,
-            .invalidResponse, .unknownTaskIDs:
-            return .tryAgainLater
-        }
-    }
 
     // Internal rather than private: `private` is file-scoped, and the
     // credential half of this type lives in `AISettingsModel+Credential.swift`.
@@ -272,13 +191,8 @@ public final class AISettingsModel {
         self.selectedProviderID = providers.first?.id ?? ""
         self.selectedModelID = settings.aiSelectedModelID
 
-        switch Self.storedKey(in: credentials, for: providers.first?.id ?? "") {
-        case .present:
-            self.hasStoredKey = true
-        case .absent:
-            self.hasStoredKey = false
-        case .unreadable(let detail):
-            self.hasStoredKey = false
+        self.storedKey = Self.storedKey(in: credentials, for: providers.first?.id ?? "")
+        if case .unreadable(let detail) = self.storedKey {
             self.keyProblem = "macOS could not read your stored key: \(detail)."
         }
     }
@@ -292,6 +206,7 @@ public final class AISettingsModel {
     /// silently moving a user onto a different model is the one thing a picker
     /// must never do on its own.
     public func refreshModels() async {
+        guard !isBusy else { return }
         await fetchModels(adoptingRecommendedDefault: false)
     }
 
@@ -303,7 +218,7 @@ public final class AISettingsModel {
     /// It therefore populates no rows — "Refresh models" is what fills the
     /// picker.
     public func testConnection() async {
-        guard let provider else { return }
+        guard !isBusy, let provider else { return }
         connection = .testing
         do {
             try await provider.testConnection()

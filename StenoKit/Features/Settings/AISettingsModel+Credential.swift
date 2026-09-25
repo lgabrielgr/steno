@@ -20,9 +20,21 @@ extension AISettingsModel {
     /// entry stores nothing, since `UserDefaults`-shaped "it saved!" feedback
     /// for an empty key would be a lie the user only discovers at a stand-up.
     public func saveKey() async {
-        guard let provider else { return }
+        // **The busy guard lives here, not only on the buttons.** Return in the
+        // key field submits, and the field is reachable while a refresh or a
+        // connection test is in flight — so without this a keystroke could
+        // start a second fetch that raced the first and left `models` set by
+        // whichever finished last. A rule only a view knows is a rule no test
+        // can hold (D-010). Raised by Copilot on PR #41.
+        guard !isBusy, let provider else { return }
         let trimmed = keyEntry.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
+
+        // Raised before the Keychain write and lowered on every exit, so the
+        // pane can show progress across the whole act rather than only across
+        // the fetch at the end of it.
+        isSavingKey = true
+        defer { isSavingKey = false }
 
         do {
             try credentials.store(.apiKey(trimmed), for: provider.id)
@@ -38,7 +50,7 @@ extension AISettingsModel {
 
         keyProblem = nil
         keyEntry = ""
-        hasStoredKey = true
+        storedKey = .present
         connection = .untested
         await fetchModels(adoptingRecommendedDefault: true)
     }
@@ -70,7 +82,7 @@ extension AISettingsModel {
         }
         keyProblem = nil
         keyEntry = ""
-        hasStoredKey = false
+        storedKey = .absent
         models = []
         hasFetchedModels = false
         listState = .idle
@@ -87,9 +99,11 @@ extension AISettingsModel {
     /// collapses the two because its caller's remedy is the same either way; a
     /// Settings pane's is not — a locked keychain is unlocked, not re-keyed —
     /// and the pane would otherwise state as fact that no key is stored.
-    enum StoredKeyState: Equatable {
+    public enum StoredKeyState: Equatable, Sendable {
         case present
         case absent
+        /// The read itself was refused — a locked keychain, most likely.
+        /// Carries what is safe to show (`detail(for:)`), never the credential.
         case unreadable(String)
     }
 

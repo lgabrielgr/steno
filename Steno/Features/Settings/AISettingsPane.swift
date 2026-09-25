@@ -13,6 +13,14 @@ struct AISettingsPane: View {
 
     var body: some View {
         Form {
+            // The question a user opens this pane asking, answered before they
+            // read anything else. `AISettingsModel.readiness` derives it from
+            // the same two conditions `MainWindowModel.standupPolish` reads, so
+            // it cannot claim the AI is on while §7.4's raw path is what runs.
+            Section {
+                readinessLine
+            }
+
             Section("Provider") {
                 Picker("Provider", selection: $model.selectedProviderID) {
                     ForEach(model.providerChoices, id: \.id) { choice in
@@ -34,8 +42,64 @@ struct AISettingsPane: View {
             Section("API key") {
                 // Entry only (D-157): this field never receives the stored key,
                 // so what is on screen is what the user just typed.
-                SecureField("Paste your API key", text: $model.keyEntry)
-                    .textContentType(.password)
+                //
+                // **The string is the `prompt`, not the label, and the style is
+                // explicit.** A grouped `Form` renders a labelled field as a
+                // left-hand label plus whatever width is left over, so
+                // `SecureField("Paste your API key", …)` drew that sentence as
+                // static text and left a caret-width control against the right
+                // edge — the user reported clicking the words and nothing
+                // happening. `BackupFolderField` already draws its own bordered
+                // box for this same reason; this is the editable version of
+                // that fix. `labelsHidden()` keeps the accessibility label
+                // without drawing a second copy of the section header.
+                SecureField(
+                    "API key", text: $model.keyEntry,
+                    prompt: Text(
+                        model.hasStoredKey
+                            ? "Paste a new key to replace the stored one" : "Paste your API key")
+                )
+                .textContentType(.password)
+                .textFieldStyle(.roundedBorder)
+                .labelsHidden()
+                // Paste, Return, done. `saveKey()` refuses an empty or
+                // all-whitespace entry, so Return on an empty field is a
+                // no-op rather than a spurious Keychain write.
+                .onSubmit { Task { await model.saveKey() } }
+                // `saveKey()` refuses while another call is in flight, so Return
+                // cannot start a racing fetch; disabling the field as well is
+                // what makes that visible rather than silent.
+                .disabled(model.isBusy)
+
+                // Directly under the field it describes, not three controls
+                // below it: the reporter of this change had a key stored and
+                // said nothing on screen told them so. A glyph carries the
+                // state at a glance; the sentence carries the detail.
+                if model.hasStoredKey {
+                    Label {
+                        Text("A key is stored in your login Keychain. Steno never shows it again.")
+                    } icon: {
+                        Image(systemName: "checkmark.circle.fill").foregroundStyle(.green)
+                    }
+                    .font(.callout)
+                } else if case .unreadable = model.storedKey {
+                    // Distinct from "no key": saying a key is absent when the
+                    // read was refused is a claim about the user's Keychain
+                    // that Steno cannot make.
+                    Label(
+                        "Steno couldn't read this provider's key — it may still be there.",
+                        systemImage: "exclamationmark.triangle"
+                    )
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                } else {
+                    Label(
+                        "Without a key, Steno still writes your stand-up — from your log alone, "
+                            + "a little rougher.", systemImage: "key.slash"
+                    )
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                }
 
                 HStack {
                     Button(model.hasStoredKey ? "Replace Key" : "Save Key") {
@@ -45,16 +109,13 @@ struct AISettingsPane: View {
 
                     Button("Remove Key") { model.removeKey() }
                         .disabled(!model.hasStoredKey || model.isBusy)
-                }
 
-                Text(
-                    model.hasStoredKey
-                        ? "A key is stored in your login Keychain. Steno never shows it again."
-                        : "Without a key, Steno still writes your stand-up — from your log alone, "
-                            + "a little rougher."
-                )
-                .font(.callout)
-                .foregroundStyle(.secondary)
+                    // A save stores the key and then fetches the model list, so
+                    // it is the one button here that waits on the network.
+                    if model.isSavingKey {
+                        progress("Storing your key and fetching models…")
+                    }
+                }
 
                 if let problem = model.keyProblem {
                     Label(problem, systemImage: "exclamationmark.triangle")
@@ -78,8 +139,17 @@ struct AISettingsPane: View {
                 }
                 .disabled(model.isBusy)
 
-                Button("Refresh Models") { Task { await model.refreshModels() } }
-                    .disabled(model.isBusy)
+                HStack {
+                    Button("Refresh Models") { Task { await model.refreshModels() } }
+                        .disabled(model.isBusy)
+
+                    // D-145 gives these calls a 10-second budget, which is long
+                    // enough that a button which merely greys out reads as a
+                    // click that did nothing.
+                    if model.listState == .loading && !model.isSavingKey {
+                        progress("Asking the provider…")
+                    }
+                }
 
                 // `selectionIsUnlisted` covers two situations that need
                 // different sentences: the list has not been fetched (D-158's
@@ -111,14 +181,20 @@ struct AISettingsPane: View {
             }
 
             Section("Connection") {
-                Button("Test Connection") { Task { await model.testConnection() } }
-                    .disabled(model.isBusy)
+                HStack {
+                    Button("Test Connection") { Task { await model.testConnection() } }
+                        .disabled(model.isBusy)
+
+                    if model.connection == .testing {
+                        progress("Asking the provider…")
+                    }
+                }
 
                 switch model.connection {
-                case .untested:
+                case .untested, .testing:
+                    // `.testing` draws beside the button above rather than
+                    // twice.
                     EmptyView()
-                case .testing:
-                    Text("Asking the provider…").font(.callout).foregroundStyle(.secondary)
                 case .passed:
                     Label("The key works.", systemImage: "checkmark.circle")
                         .font(.callout)
@@ -134,6 +210,39 @@ struct AISettingsPane: View {
         // sit in memory for as long as the app runs.
         .onAppear { model.forgetEntry() }
         .onDisappear { model.forgetEntry() }
+    }
+
+    /// Whether the AI path will run, in one line.
+    ///
+    /// Three states rather than two, because "a key but no model" is reachable
+    /// — a first key saved while offline adopts no default (D-159) — and its
+    /// remedy is Refresh, not another key. Saying only "off" there would send
+    /// the user back to the field they already filled in correctly.
+    @ViewBuilder
+    private var readinessLine: some View {
+        switch model.readiness {
+        case .ready(let name):
+            Label {
+                Text("AI polishing is on — stand-ups go to \(name).")
+            } icon: {
+                Image(systemName: "checkmark.circle.fill").foregroundStyle(.green)
+            }
+        case .noKey:
+            Label(
+                "AI polishing is off — stand-ups come from your log alone. Add a key below.",
+                systemImage: "info.circle")
+        case .keyUnreadable:
+            Label(
+                "Steno couldn't read your stored key, so it can't tell whether one is set. "
+                    + "Unlock your login Keychain and reopen this window.",
+                systemImage: "exclamationmark.triangle")
+        case .noModel(let remedy):
+            // Three remedies, and only one of them is Refresh: a successful
+            // refresh can leave a full picker with nothing chosen (D-159), or
+            // an empty one for a key with access to nothing (§7.1). Pointing
+            // either of those users at Refresh is a loop with no exit.
+            Label(noModelMessage(remedy), systemImage: "info.circle")
+        }
     }
 
     /// §8: "onboarding must state plainly which content is transmitted to the
@@ -176,6 +285,32 @@ struct AISettingsPane: View {
         }
         .font(.callout)
         .foregroundStyle(.secondary)
+    }
+
+    /// The sentence for each way "no model is selected" can come about.
+    private func noModelMessage(_ remedy: AISettingsModel.NoModelRemedy) -> String {
+        let prefix = "AI polishing is off — a key is stored, but no model is selected. "
+        switch remedy {
+        case .chooseOne:
+            return prefix + "Choose one in Model below."
+        case .fetchTheList:
+            return prefix + "Press Refresh Models below."
+        case .noneOffered:
+            return "AI polishing is off — this key can't use any models. "
+                + "Check the key, or try one with model access."
+        }
+    }
+
+    /// A spinner and a sentence, for a button that is waiting on the network.
+    ///
+    /// `.controlSize(.small)` so it sits on a button's baseline rather than
+    /// growing the row, and the label says *what* is being waited on — a bare
+    /// spinner next to three buttons does not say which one is working.
+    private func progress(_ label: String) -> some View {
+        HStack(spacing: 6) {
+            ProgressView().controlSize(.small)
+            Text(label).font(.callout).foregroundStyle(.secondary)
+        }
     }
 
     /// One failure, worded by `AIError` and pointed by the model's advice.

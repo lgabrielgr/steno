@@ -103,6 +103,12 @@ func anUnreadableKeychainSaysSo() async throws {
     #expect(model.hasStoredKey == false)
     #expect(model.keyProblem?.contains("interactionNotAllowed") == true)
     #expect(model.keyProblem?.contains("could not read") == true)
+    // **Not `.absent`, and not `.noKey`.** Both the readiness line and the row
+    // under the field would otherwise tell a user whose keychain is merely
+    // locked that no key exists, and send them to paste another one — the one
+    // remedy that cannot work. Raised by Copilot on PR #41.
+    #expect(model.storedKey == .unreadable("interactionNotAllowed"))
+    #expect(model.readiness == .keyUnreadable)
 }
 
 /// §8, and the narrowing `ModelsSelftest.describe` already does: the `catch`
@@ -164,6 +170,78 @@ func removingAKeyKeepsTheModel() async throws {
     // previous behaviour with nothing to redo.
     #expect(settings.aiSelectedModelID == aiSonnet.id)
     #expect(model.selectedModelID == aiSonnet.id)
+}
+
+/// **The flag has to be true while the work is in flight, which is the only
+/// part worth testing.** A test that awaited `saveKey()` and then asserted
+/// `isSavingKey == false` would pass against a flag that was never set at all —
+/// and the pane would show no spinner for the one button here that waits on the
+/// network.
+///
+/// The stub holds for 200 ms so there is a window to observe, and the loop
+/// yields until the flag flips rather than sleeping a fixed time: a `Task` has
+/// not started when the function that created it returns.
+@Test("a save reports itself as in flight, and stops when it finishes")
+@MainActor
+func aSaveReportsItselfInFlight() async throws {
+    let (settings, _) = try scratchAISettings()
+    let model = AISettingsModel(
+        providers: [StubAIProvider(models: .success([aiSonnet]), delay: .milliseconds(200))],
+        credentials: InMemoryCredentialStore(), settings: settings)
+
+    model.keyEntry = "sk-ant-test-key"
+    #expect(model.isSavingKey == false)
+    #expect(model.isBusy == false)
+
+    let save = Task { await model.saveKey() }
+
+    var spins = 0
+    while !model.isSavingKey && spins < 10_000 {
+        await Task.yield()
+        spins += 1
+    }
+
+    #expect(model.isSavingKey, "the save never reported itself in flight")
+    #expect(model.isBusy, "isBusy must cover a save, or the buttons stay live during one")
+
+    await save.value
+
+    #expect(model.isSavingKey == false)
+    #expect(model.isBusy == false)
+    #expect(settings.aiSelectedModelID == aiSonnet.id)
+}
+
+/// **Return in the key field is reachable while another call is in flight**, so
+/// the guard cannot live only on the buttons: a keystroke could otherwise start
+/// a save whose fetch raced a refresh, leaving `models` set by whichever
+/// finished last. Raised by Copilot on PR #41.
+@Test("a save refuses to start while another call is in flight")
+@MainActor
+func aSaveRefusesWhileBusy() async throws {
+    let (settings, _) = try scratchAISettings()
+    let store = InMemoryCredentialStore()
+    let model = AISettingsModel(
+        providers: [StubAIProvider(models: .success([aiSonnet]), delay: .milliseconds(200))],
+        credentials: store, settings: settings)
+
+    let refresh = Task { await model.refreshModels() }
+    var spins = 0
+    while model.listState != .loading && spins < 10_000 {
+        await Task.yield()
+        spins += 1
+    }
+    #expect(model.listState == .loading, "the refresh never started")
+
+    // What Return does while that is in flight.
+    model.keyEntry = "sk-ant-typed-during-a-refresh"
+    await model.saveKey()
+
+    #expect(store.contents.isEmpty, "the save started underneath a refresh")
+    #expect(model.isSavingKey == false)
+    #expect(model.keyEntry == "sk-ant-typed-during-a-refresh", "the entry must survive a refusal")
+
+    await refresh.value
+    #expect(model.models == [aiSonnet])
 }
 
 /// Deleting what is not there is success, not failure — the caller asked for an
