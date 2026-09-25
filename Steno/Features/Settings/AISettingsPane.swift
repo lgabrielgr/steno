@@ -236,10 +236,16 @@ struct AISettingsPane: View {
                 "Steno couldn't read your stored key, so it can't tell whether one is set. "
                     + "Unlock your login Keychain and reopen this window.",
                 systemImage: "exclamationmark.triangle")
-        case .noModel:
+        case .noModel(let canChooseNow):
+            // Two remedies, because D-159 means a successful refresh can leave
+            // a full picker and no selection — and "press Refresh" there is a
+            // loop the user cannot get out of.
             Label(
-                "AI polishing is off — a key is stored, but no model is selected. "
-                    + "Press Refresh Models below.", systemImage: "info.circle")
+                canChooseNow
+                    ? "AI polishing is off — a key is stored, but no model is selected. "
+                        + "Choose one in Model below."
+                    : "AI polishing is off — a key is stored, but no model is selected. "
+                        + "Press Refresh Models below.", systemImage: "info.circle")
         }
     }
 

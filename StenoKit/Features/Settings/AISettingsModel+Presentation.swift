@@ -100,13 +100,19 @@ extension AISettingsModel {
         case keyUnreadable
         /// A credential, but the user has not chosen a model — the state a
         /// first key saved while offline leaves behind (D-159).
-        case noModel
+        ///
+        /// **Carries whether there is anything to choose from**, because the
+        /// remedy differs and D-159 is why: a refresh deliberately adopts no
+        /// default, so a successful refresh leaves a populated picker and no
+        /// selection. Telling that user to press Refresh again is a loop with
+        /// no exit. Raised by Copilot on PR #41.
+        case noModel(canChooseNow: Bool)
     }
 
     public var readiness: Readiness {
         if case .unreadable = storedKey { return .keyUnreadable }
         guard hasStoredKey else { return .noKey }
-        guard let selectedModelID else { return .noModel }
+        guard let selectedModelID else { return .noModel(canChooseNow: !models.isEmpty) }
         // `modelRows` always contains the selection, synthesised from the id
         // when no list has been fetched, so this is a display name when one is
         // known and the id otherwise — never blank.

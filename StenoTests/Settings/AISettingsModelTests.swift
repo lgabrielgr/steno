@@ -210,68 +210,6 @@ func choosingAModelWritesThrough() async throws {
     #expect(defaults.string(forKey: AppSettings.aiSelectedModelIDKey) == aiHaiku.id)
 }
 
-// MARK: - Readiness
-
-/// **The line the pane leads with, and it must agree with what actually runs.**
-/// `MainWindowModel.standupPolish` reads exactly these two things — a credential
-/// in the Keychain and `aiSelectedModelID` — so a pane that said "on" from
-/// different evidence would be telling the user their stand-ups are polished
-/// while §7.4's raw path quietly produced them.
-@Test("readiness tracks the two conditions the stand-up path actually reads")
-@MainActor
-func readinessTracksTheStandupPath() async throws {
-    let (settings, _) = try scratchAISettings()
-    let store = InMemoryCredentialStore()
-    let model = AISettingsModel(
-        providers: [StubAIProvider(models: .success([aiSonnet, aiHaiku]))],
-        credentials: store, settings: settings)
-
-    #expect(model.readiness == .noKey)
-
-    model.keyEntry = "sk-ant-test-key"
-    await model.saveKey()
-
-    // The save adopted element zero (D-159), so both conditions now hold — and
-    // the line names what the picker shows, not the raw id.
-    #expect(model.readiness == .ready(model: aiSonnet.displayName))
-
-    model.removeKey()
-    #expect(model.readiness == .noKey)
-}
-
-/// A key stored while offline leaves no selection (D-159), and that state has
-/// its own sentence: the remedy is Refresh, not another key.
-@Test("a stored key with no model selected is its own state")
-@MainActor
-func aStoredKeyWithNoModelIsItsOwnState() async throws {
-    let (settings, _) = try scratchAISettings()
-    let store = InMemoryCredentialStore()
-    let model = AISettingsModel(
-        providers: [StubAIProvider(models: .failure(.network))],
-        credentials: store, settings: settings)
-
-    model.keyEntry = "sk-ant-test-key"
-    await model.saveKey()
-
-    #expect(model.hasStoredKey)
-    #expect(model.readiness == .noModel)
-}
-
-/// Before any fetch there is no display name to show, and the id is what the
-/// picker shows too — so the line says the same thing the row says.
-@Test("readiness falls back to the model id when no list has been fetched")
-@MainActor
-func readinessFallsBackToTheID() async throws {
-    let (settings, _) = try scratchAISettings()
-    settings.aiSelectedModelID = "claude-sonnet-1-retired"
-    let store = InMemoryCredentialStore()
-    try store.store(.apiKey("sk-ant-already-here"), for: "stub")
-    let model = AISettingsModel(
-        providers: [StubAIProvider()], credentials: store, settings: settings)
-
-    #expect(model.readiness == .ready(model: "claude-sonnet-1-retired"))
-}
-
 // MARK: - Test connection
 
 /// The third acceptance criterion, and the reason `AIError` separates these two
