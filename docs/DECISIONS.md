@@ -4472,3 +4472,35 @@ never ran would otherwise pass silently.
 tried the root-cause fix — an untimed warm-up before `measure` — and measured it doing nothing
 (9.5 → 9.6 ms), because the overhead is in XCTest's measurement harness rather than in the code
 under test. Do not retry it.
+
+### D-163 — An empty collection is never evidence that nothing was fetched
+
+**2026-09-25** · follow-up to M3-04 · **Status:** accepted · found three times in one PR
+
+`AISettingsModel` keeps `hasFetchedModels` alongside `models`, and every surface that asks "did we
+ask yet?" reads the flag rather than `models.isEmpty`. `Readiness.noModel` carries a
+`NoModelRemedy` — `.chooseOne`, `.fetchTheList`, `.noneOffered` — rather than a boolean, because
+those three states need three different sentences and only one of them is "press Refresh".
+
+**The rule exists because the same confusion produced three separate defects in PR #41's review,
+each caught only after shipping the previous fix:**
+
+1. `selectionStatus` read `models.isEmpty` and reported `.notFetchedYet` after a *successful* empty
+   fetch, so a user whose key had access to nothing was told the list had not been fetched.
+2. `readiness` then repeated it: `.noModel(canChooseNow: !models.isEmpty)` told a user with a
+   populated picker to press Refresh Models, which had just succeeded and would keep succeeding.
+3. The fix for (2) still read the array, so a successful *empty* fetch produced "press Refresh
+   Models" forever — a loop with no exit, for the one user who cannot escape it by refreshing.
+
+§7.1 is what makes this a real state rather than a hypothetical: "an empty result is legitimate — a
+key with access to nothing — and is not an error". So an empty array is two facts wearing the same
+clothes, and only a separate flag tells them apart.
+
+**Where this generalizes.** M4's `SourceConnector` will have the same shape — an empty issue list
+from a working query is not an unfetched one — and so will any cache with a "never populated"
+state. A collection answers *what* was returned. It never answers *whether anyone asked*.
+
+**Falsified by** `a successful fetch that returns nothing is not reported as never fetched`,
+`once a list arrives, the remedy becomes choosing rather than refreshing`, and `a key that can use
+no models is told so, not told to refresh`. Each was mutation-checked by restoring the array as the
+evidence; each turns red alone.

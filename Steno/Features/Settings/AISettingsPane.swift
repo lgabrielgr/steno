@@ -236,16 +236,12 @@ struct AISettingsPane: View {
                 "Steno couldn't read your stored key, so it can't tell whether one is set. "
                     + "Unlock your login Keychain and reopen this window.",
                 systemImage: "exclamationmark.triangle")
-        case .noModel(let canChooseNow):
-            // Two remedies, because D-159 means a successful refresh can leave
-            // a full picker and no selection — and "press Refresh" there is a
-            // loop the user cannot get out of.
-            Label(
-                canChooseNow
-                    ? "AI polishing is off — a key is stored, but no model is selected. "
-                        + "Choose one in Model below."
-                    : "AI polishing is off — a key is stored, but no model is selected. "
-                        + "Press Refresh Models below.", systemImage: "info.circle")
+        case .noModel(let remedy):
+            // Three remedies, and only one of them is Refresh: a successful
+            // refresh can leave a full picker with nothing chosen (D-159), or
+            // an empty one for a key with access to nothing (§7.1). Pointing
+            // either of those users at Refresh is a loop with no exit.
+            Label(noModelMessage(remedy), systemImage: "info.circle")
         }
     }
 
@@ -289,6 +285,20 @@ struct AISettingsPane: View {
         }
         .font(.callout)
         .foregroundStyle(.secondary)
+    }
+
+    /// The sentence for each way "no model is selected" can come about.
+    private func noModelMessage(_ remedy: AISettingsModel.NoModelRemedy) -> String {
+        let prefix = "AI polishing is off — a key is stored, but no model is selected. "
+        switch remedy {
+        case .chooseOne:
+            return prefix + "Choose one in Model below."
+        case .fetchTheList:
+            return prefix + "Press Refresh Models below."
+        case .noneOffered:
+            return "AI polishing is off — this key can't use any models. "
+                + "Check the key, or try one with model access."
+        }
     }
 
     /// A spinner and a sentence, for a button that is waiting on the network.

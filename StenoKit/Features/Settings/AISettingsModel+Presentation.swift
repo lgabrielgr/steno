@@ -101,18 +101,38 @@ extension AISettingsModel {
         /// A credential, but the user has not chosen a model — the state a
         /// first key saved while offline leaves behind (D-159).
         ///
-        /// **Carries whether there is anything to choose from**, because the
-        /// remedy differs and D-159 is why: a refresh deliberately adopts no
-        /// default, so a successful refresh leaves a populated picker and no
-        /// selection. Telling that user to press Refresh again is a loop with
-        /// no exit. Raised by Copilot on PR #41.
-        case noModel(canChooseNow: Bool)
+        /// **Carries the remedy**, because there are three of them and only
+        /// one is "press Refresh". D-159 means a successful refresh adopts no
+        /// default, and §7.1 means a successful refresh can return nothing at
+        /// all — so "no model selected" reaches the user from three different
+        /// places, two of which Refresh cannot fix. Raised by Copilot on PR #41,
+        /// twice.
+        case noModel(remedy: NoModelRemedy)
+    }
+
+    /// What a user with a key and no model should actually do.
+    ///
+    /// **`models.isEmpty` answers none of this on its own** — that is the trap
+    /// this enum exists to close, and the third bug it caused. An empty array
+    /// is "we have not asked" *and* "we asked and this key may use nothing"
+    /// (§7.1 calls the second legitimate), and the two need opposite advice.
+    /// `hasFetchedModels` is the evidence; the array is not.
+    public enum NoModelRemedy: Equatable, Sendable {
+        /// Rows are there to pick from.
+        case chooseOne
+        /// Nothing has been fetched yet (D-158's ordinary state).
+        case fetchTheList
+        /// The provider was asked and offered nothing for this key.
+        case noneOffered
     }
 
     public var readiness: Readiness {
         if case .unreadable = storedKey { return .keyUnreadable }
         guard hasStoredKey else { return .noKey }
-        guard let selectedModelID else { return .noModel(canChooseNow: !models.isEmpty) }
+        guard let selectedModelID else {
+            if !models.isEmpty { return .noModel(remedy: .chooseOne) }
+            return .noModel(remedy: hasFetchedModels ? .noneOffered : .fetchTheList)
+        }
         // `modelRows` always contains the selection, synthesised from the id
         // when no list has been fetched, so this is a display name when one is
         // known and the id otherwise — never blank.

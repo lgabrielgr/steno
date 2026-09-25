@@ -48,7 +48,7 @@ func aStoredKeyWithNoModelIsItsOwnState() async throws {
     await model.saveKey()
 
     #expect(model.hasStoredKey)
-    #expect(model.readiness == .noModel(canChooseNow: false))
+    #expect(model.readiness == .noModel(remedy: .fetchTheList))
 }
 
 /// **A refresh that succeeds changes the remedy, not the state.** D-159 keeps
@@ -65,13 +65,13 @@ func theRemedyChangesOnceAListArrives() async throws {
         providers: [StubAIProvider(models: .success([aiSonnet, aiHaiku]))],
         credentials: store, settings: settings)
 
-    #expect(model.readiness == .noModel(canChooseNow: false))
+    #expect(model.readiness == .noModel(remedy: .fetchTheList))
 
     await model.refreshModels()
 
     #expect(model.models == [aiSonnet, aiHaiku])
     #expect(model.selectedModelID == nil, "a refresh must not adopt a default (D-159)")
-    #expect(model.readiness == .noModel(canChooseNow: true))
+    #expect(model.readiness == .noModel(remedy: .chooseOne))
 }
 
 /// Before any fetch there is no display name to show, and the id is what the
@@ -87,4 +87,30 @@ func readinessFallsBackToTheID() async throws {
         providers: [StubAIProvider()], credentials: store, settings: settings)
 
     #expect(model.readiness == .ready(model: "claude-sonnet-1-retired"))
+}
+
+/// **The third way "no model" happens, and Refresh cannot fix it.** §7.1 calls
+/// an empty list legitimate — "a key with access to nothing" — so a successful
+/// refresh can leave both the picker and `models` empty. Reading that state off
+/// `models.isEmpty` gave the same advice as "never fetched", which sent the
+/// user into a refresh loop that could never end. Raised by Copilot on PR #41.
+@Test("a key that can use no models is told so, not told to refresh")
+@MainActor
+func aKeyWithNoModelsIsToldSo() async throws {
+    let (settings, _) = try scratchAISettings()
+    let store = InMemoryCredentialStore()
+    try store.store(.apiKey("sk-ant-already-here"), for: "stub")
+    let model = AISettingsModel(
+        providers: [StubAIProvider(models: .success([]))],
+        credentials: store, settings: settings)
+
+    // Before asking, the remedy is to ask.
+    #expect(model.readiness == .noModel(remedy: .fetchTheList))
+
+    await model.refreshModels()
+
+    // After asking and being offered nothing, it is not.
+    #expect(model.models.isEmpty)
+    #expect(model.hasFetchedModels)
+    #expect(model.readiness == .noModel(remedy: .noneOffered))
 }
