@@ -66,6 +66,10 @@ struct AISettingsPane: View {
                 // all-whitespace entry, so Return on an empty field is a
                 // no-op rather than a spurious Keychain write.
                 .onSubmit { Task { await model.saveKey() } }
+                // `saveKey()` refuses while another call is in flight, so Return
+                // cannot start a racing fetch; disabling the field as well is
+                // what makes that visible rather than silent.
+                .disabled(model.isBusy)
 
                 // Directly under the field it describes, not three controls
                 // below it: the reporter of this change had a key stored and
@@ -78,6 +82,16 @@ struct AISettingsPane: View {
                         Image(systemName: "checkmark.circle.fill").foregroundStyle(.green)
                     }
                     .font(.callout)
+                } else if case .unreadable = model.storedKey {
+                    // Distinct from "no key": saying a key is absent when the
+                    // read was refused is a claim about the user's Keychain
+                    // that Steno cannot make.
+                    Label(
+                        "Steno couldn't read this provider's key — it may still be there.",
+                        systemImage: "exclamationmark.triangle"
+                    )
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
                 } else {
                     Label(
                         "Without a key, Steno still writes your stand-up — from your log alone, "
@@ -217,6 +231,11 @@ struct AISettingsPane: View {
             Label(
                 "AI polishing is off — stand-ups come from your log alone. Add a key below.",
                 systemImage: "info.circle")
+        case .keyUnreadable:
+            Label(
+                "Steno couldn't read your stored key, so it can't tell whether one is set. "
+                    + "Unlock your login Keychain and reopen this window.",
+                systemImage: "exclamationmark.triangle")
         case .noModel:
             Label(
                 "AI polishing is off — a key is stored, but no model is selected. "

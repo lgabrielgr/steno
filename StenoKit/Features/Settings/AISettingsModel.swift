@@ -61,7 +61,14 @@ public final class AISettingsModel {
     /// stored — the two are indistinguishable to a caller — which is why that
     /// case also sets `keyProblem`. Reporting only "no key" would tell a user
     /// with a locked keychain to paste a new one, which cannot work.
-    public internal(set) var hasStoredKey: Bool = false
+    public internal(set) var storedKey: StoredKeyState = .absent
+
+    /// Whether a credential is definitely there.
+    ///
+    /// Derived rather than stored, so it cannot disagree with `storedKey` —
+    /// and so "refused the read" keeps its own identity for the surfaces that
+    /// need to tell the two apart (`readiness`, and the row under the field).
+    public var hasStoredKey: Bool { storedKey == .present }
 
     /// Why the last store or delete was refused, if it was.
     ///
@@ -128,16 +135,11 @@ public final class AISettingsModel {
             listState = .idle
             connection = .untested
             keyEntry = ""
-            switch Self.storedKey(in: credentials, for: selectedProviderID) {
-            case .present:
-                hasStoredKey = true
-                keyProblem = nil
-            case .absent:
-                hasStoredKey = false
-                keyProblem = nil
-            case .unreadable(let detail):
-                hasStoredKey = false
+            storedKey = Self.storedKey(in: credentials, for: selectedProviderID)
+            if case .unreadable(let detail) = storedKey {
                 keyProblem = "macOS could not read your stored key: \(detail)."
+            } else {
+                keyProblem = nil
             }
         }
     }
@@ -189,13 +191,8 @@ public final class AISettingsModel {
         self.selectedProviderID = providers.first?.id ?? ""
         self.selectedModelID = settings.aiSelectedModelID
 
-        switch Self.storedKey(in: credentials, for: providers.first?.id ?? "") {
-        case .present:
-            self.hasStoredKey = true
-        case .absent:
-            self.hasStoredKey = false
-        case .unreadable(let detail):
-            self.hasStoredKey = false
+        self.storedKey = Self.storedKey(in: credentials, for: providers.first?.id ?? "")
+        if case .unreadable(let detail) = self.storedKey {
             self.keyProblem = "macOS could not read your stored key: \(detail)."
         }
     }
@@ -209,6 +206,7 @@ public final class AISettingsModel {
     /// silently moving a user onto a different model is the one thing a picker
     /// must never do on its own.
     public func refreshModels() async {
+        guard !isBusy else { return }
         await fetchModels(adoptingRecommendedDefault: false)
     }
 
@@ -220,7 +218,7 @@ public final class AISettingsModel {
     /// It therefore populates no rows — "Refresh models" is what fills the
     /// picker.
     public func testConnection() async {
-        guard let provider else { return }
+        guard !isBusy, let provider else { return }
         connection = .testing
         do {
             try await provider.testConnection()

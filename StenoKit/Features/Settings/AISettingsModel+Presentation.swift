@@ -91,12 +91,20 @@ extension AISettingsModel {
         case ready(model: String)
         /// No credential for this provider.
         case noKey
+        /// The Keychain refused the read, so whether a key exists is unknown.
+        ///
+        /// **Not `.noKey`.** The remedy is to unlock the keychain, not to paste
+        /// another key, and a line that said "add a key below" would send a
+        /// user with a perfectly good key to do the one thing that cannot help.
+        /// `keyProblem` carries the detail. Raised by Copilot on PR #41.
+        case keyUnreadable
         /// A credential, but the user has not chosen a model — the state a
         /// first key saved while offline leaves behind (D-159).
         case noModel
     }
 
     public var readiness: Readiness {
+        if case .unreadable = storedKey { return .keyUnreadable }
         guard hasStoredKey else { return .noKey }
         guard let selectedModelID else { return .noModel }
         // `modelRows` always contains the selection, synthesised from the id
