@@ -24,6 +24,12 @@ extension AISettingsModel {
         let trimmed = keyEntry.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
 
+        // Raised before the Keychain write and lowered on every exit, so the
+        // pane can show progress across the whole act rather than only across
+        // the fetch at the end of it.
+        isSavingKey = true
+        defer { isSavingKey = false }
+
         do {
             try credentials.store(.apiKey(trimmed), for: provider.id)
         } catch {

@@ -37,21 +37,6 @@ public final class AISettingsModel {
         case failed(AIError)
     }
 
-    /// What the user can do about a failure.
-    ///
-    /// **Lives here rather than in the pane's `if` statements** for
-    /// `DataSettingsModel.canBackUpNow`'s reason: the unhosted test bundle
-    /// cannot reach the app target (D-010), so a rule only a view knows is a
-    /// rule no test can hold. The third acceptance criterion — "Test
-    /// connection" distinguishes an invalid key from a network failure — is
-    /// exactly such a rule.
-    public enum Advice: Equatable, Sendable {
-        /// The key is wrong or missing. The field above is the fix.
-        case fixTheKey
-        /// Nothing here is wrong. Try again later.
-        case tryAgainLater
-    }
-
     // MARK: - Key entry
 
     /// The `SecureField`'s binding — **what the user is typing, never what is
@@ -115,6 +100,15 @@ public final class AISettingsModel {
 
     public internal(set) var connection: ConnectionState = .untested
 
+    /// Whether a save is in flight, from the store through the fetch that
+    /// follows it.
+    ///
+    /// **Distinct from `listState == .loading`, which a save also sets.** The
+    /// fetch is the slow half of a save, but the user's attention is on the
+    /// Save button, so the two need separate progress: one flag per thing a
+    /// person can click.
+    public internal(set) var isSavingKey: Bool = false
+
     // MARK: - Providers
 
     /// Which provider the pane is configuring (D-160).
@@ -162,115 +156,6 @@ public final class AISettingsModel {
     public var credentialKinds: [CredentialKind] { CredentialKind.userSelectable }
 
     // MARK: - Derived
-
-    /// What the model picker shows.
-    ///
-    /// **The stored selection is always a row, even when the list does not
-    /// contain it** — because it has not been fetched yet (D-158), because the
-    /// network is unreachable, or because the vendor retired the model. This is
-    /// the second acceptance criterion: an unreachable model list must not
-    /// block using a previously selected model. The selection is never
-    /// reassigned by a fetch that fails to mention it; `saveKey()` is the only
-    /// path that re-points it, and only onto element zero (D-159).
-    public var modelRows: [AIModel] {
-        guard let selectedModelID, !models.contains(where: { $0.id == selectedModelID }) else {
-            return models
-        }
-        return [AIModel(id: selectedModelID, displayName: selectedModelID)] + models
-    }
-
-    /// Where the selected model stands against the list that was fetched.
-    ///
-    /// **Three cases, because the pane has three different things to say.** An
-    /// unlisted selection before any fetch is D-158's ordinary state ("we have
-    /// not asked"); an unlisted selection *after* a fetch means the provider
-    /// retired the model, and telling that user the list has not been fetched
-    /// sends them to a Refresh button that cannot help them.
-    public enum SelectionStatus: Equatable, Sendable {
-        /// Nothing is selected.
-        case none
-        /// The fetched list contains it.
-        case offered
-        /// No list has been fetched yet (D-158).
-        case notFetchedYet
-        /// A list was fetched and does not contain it.
-        case noLongerOffered
-    }
-
-    public var selectionStatus: SelectionStatus {
-        guard let selectedModelID else { return .none }
-        if models.contains(where: { $0.id == selectedModelID }) { return .offered }
-        return hasFetchedModels ? .noLongerOffered : .notFetchedYet
-    }
-
-    /// Whether the selected model is a row the provider did not offer.
-    public var selectionIsUnlisted: Bool {
-        selectionStatus == .notFetchedYet || selectionStatus == .noLongerOffered
-    }
-
-    /// Whether the AI path will actually run, and why not when it will not.
-    ///
-    /// **The same two conditions `MainWindowModel.standupPolish` reads**, which
-    /// is the point: it builds a provider over the Keychain and passes
-    /// `settings.aiSelectedModelID`, and `StandupSummarizer` takes §7.4's raw
-    /// path unless both are present. A pane that answered "configured?" from
-    /// different evidence would drift from what the stand-up actually does.
-    ///
-    /// Lives here rather than in the pane's `if` statements because the
-    /// unhosted test bundle cannot reach the app target (D-010) — the same
-    /// reasoning `DataSettingsModel.canBackUpNow` records.
-    public enum Readiness: Equatable, Sendable {
-        /// A key is stored and a model is selected. Carries what the picker
-        /// shows, so the line names the model rather than an opaque id.
-        case ready(model: String)
-        /// No credential for this provider.
-        case noKey
-        /// A credential, but the user has not chosen a model — the state a
-        /// first key saved while offline leaves behind (D-159).
-        case noModel
-    }
-
-    public var readiness: Readiness {
-        guard hasStoredKey else { return .noKey }
-        guard let selectedModelID else { return .noModel }
-        // `modelRows` always contains the selection, synthesised from the id
-        // when no list has been fetched, so this is a display name when one is
-        // known and the id otherwise — never blank.
-        return .ready(
-            model: modelRows.first { $0.id == selectedModelID }?.displayName ?? selectedModelID)
-    }
-
-    /// Whether a network call is in flight. The pane disables its buttons on it.
-    public var isBusy: Bool { listState == .loading || connection == .testing }
-
-    /// What the user should do about the last failed fetch, if it failed.
-    public var listAdvice: Advice? {
-        guard case .failed(let error) = listState else { return nil }
-        return Self.advice(for: error)
-    }
-
-    /// What the user should do about the last connection test, if it failed.
-    public var connectionAdvice: Advice? {
-        guard case .failed(let error) = connection else { return nil }
-        return Self.advice(for: error)
-    }
-
-    /// The third acceptance criterion, as a function.
-    ///
-    /// `.invalidCredential` and `.notConfigured` point at the field above;
-    /// everything else is not something this pane can fix. The *sentence* the
-    /// user reads stays `AIError.errorDescription` — a second vocabulary here
-    /// would be a second place for "the provider rejected this credential" to
-    /// be worded, free to drift from the one M3-02 already ships.
-    static func advice(for error: AIError) -> Advice {
-        switch error {
-        case .notConfigured, .invalidCredential:
-            return .fixTheKey
-        case .invalidRequest, .network, .timedOut, .rateLimited, .providerUnavailable,
-            .invalidResponse, .unknownTaskIDs:
-            return .tryAgainLater
-        }
-    }
 
     // Internal rather than private: `private` is file-scoped, and the
     // credential half of this type lives in `AISettingsModel+Credential.swift`.

@@ -166,6 +166,45 @@ func removingAKeyKeepsTheModel() async throws {
     #expect(model.selectedModelID == aiSonnet.id)
 }
 
+/// **The flag has to be true while the work is in flight, which is the only
+/// part worth testing.** A test that awaited `saveKey()` and then asserted
+/// `isSavingKey == false` would pass against a flag that was never set at all —
+/// and the pane would show no spinner for the one button here that waits on the
+/// network.
+///
+/// The stub holds for 200 ms so there is a window to observe, and the loop
+/// yields until the flag flips rather than sleeping a fixed time: a `Task` has
+/// not started when the function that created it returns.
+@Test("a save reports itself as in flight, and stops when it finishes")
+@MainActor
+func aSaveReportsItselfInFlight() async throws {
+    let (settings, _) = try scratchAISettings()
+    let model = AISettingsModel(
+        providers: [StubAIProvider(models: .success([aiSonnet]), delay: .milliseconds(200))],
+        credentials: InMemoryCredentialStore(), settings: settings)
+
+    model.keyEntry = "sk-ant-test-key"
+    #expect(model.isSavingKey == false)
+    #expect(model.isBusy == false)
+
+    let save = Task { await model.saveKey() }
+
+    var spins = 0
+    while !model.isSavingKey && spins < 10_000 {
+        await Task.yield()
+        spins += 1
+    }
+
+    #expect(model.isSavingKey, "the save never reported itself in flight")
+    #expect(model.isBusy, "isBusy must cover a save, or the buttons stay live during one")
+
+    await save.value
+
+    #expect(model.isSavingKey == false)
+    #expect(model.isBusy == false)
+    #expect(settings.aiSelectedModelID == aiSonnet.id)
+}
+
 /// Deleting what is not there is success, not failure — the caller asked for an
 /// end state, and that end state holds.
 ///

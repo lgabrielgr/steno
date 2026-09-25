@@ -95,6 +95,12 @@ struct AISettingsPane: View {
 
                     Button("Remove Key") { model.removeKey() }
                         .disabled(!model.hasStoredKey || model.isBusy)
+
+                    // A save stores the key and then fetches the model list, so
+                    // it is the one button here that waits on the network.
+                    if model.isSavingKey {
+                        progress("Storing your key and fetching models…")
+                    }
                 }
 
                 if let problem = model.keyProblem {
@@ -119,8 +125,17 @@ struct AISettingsPane: View {
                 }
                 .disabled(model.isBusy)
 
-                Button("Refresh Models") { Task { await model.refreshModels() } }
-                    .disabled(model.isBusy)
+                HStack {
+                    Button("Refresh Models") { Task { await model.refreshModels() } }
+                        .disabled(model.isBusy)
+
+                    // D-145 gives these calls a 10-second budget, which is long
+                    // enough that a button which merely greys out reads as a
+                    // click that did nothing.
+                    if model.listState == .loading && !model.isSavingKey {
+                        progress("Asking the provider…")
+                    }
+                }
 
                 // `selectionIsUnlisted` covers two situations that need
                 // different sentences: the list has not been fetched (D-158's
@@ -152,14 +167,20 @@ struct AISettingsPane: View {
             }
 
             Section("Connection") {
-                Button("Test Connection") { Task { await model.testConnection() } }
-                    .disabled(model.isBusy)
+                HStack {
+                    Button("Test Connection") { Task { await model.testConnection() } }
+                        .disabled(model.isBusy)
+
+                    if model.connection == .testing {
+                        progress("Asking the provider…")
+                    }
+                }
 
                 switch model.connection {
-                case .untested:
+                case .untested, .testing:
+                    // `.testing` draws beside the button above rather than
+                    // twice.
                     EmptyView()
-                case .testing:
-                    Text("Asking the provider…").font(.callout).foregroundStyle(.secondary)
                 case .passed:
                     Label("The key works.", systemImage: "checkmark.circle")
                         .font(.callout)
@@ -243,6 +264,18 @@ struct AISettingsPane: View {
         }
         .font(.callout)
         .foregroundStyle(.secondary)
+    }
+
+    /// A spinner and a sentence, for a button that is waiting on the network.
+    ///
+    /// `.controlSize(.small)` so it sits on a button's baseline rather than
+    /// growing the row, and the label says *what* is being waited on — a bare
+    /// spinner next to three buttons does not say which one is working.
+    private func progress(_ label: String) -> some View {
+        HStack(spacing: 6) {
+            ProgressView().controlSize(.small)
+            Text(label).font(.callout).foregroundStyle(.secondary)
+        }
     }
 
     /// One failure, worded by `AIError` and pointed by the model's advice.
