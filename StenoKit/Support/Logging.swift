@@ -47,6 +47,25 @@ public enum Log {
     /// the `log show` predicate above matches on.
     public static let aiLayer = Logger(subsystem: subsystem, category: "ai")
 
+    /// The source layer (§5).
+    ///
+    /// Its own category so a refresh pass can be found without reading every
+    /// `app` line, and because §5.5's launch pass is deliberately invisible in the
+    /// UI (D-176) — this is the only place it reports what it did:
+    ///
+    ///     /usr/bin/log show --last 1h --info --predicate \
+    ///       'subsystem == "com.lgabrielgr.steno" AND category == "sources"'
+    ///
+    /// Spell out `/usr/bin/log` — zsh has a `log` builtin that shadows it. And
+    /// `--info`, or `info`-level lines are filtered out and the command returns
+    /// nothing at all.
+    ///
+    /// **Counts and connector ids only.** A ticket summary, a comment body and an
+    /// assignee name are all external content about the user's work, which §8
+    /// keeps out of the log; `SourceError` carries no free-form string so that
+    /// this stays true by construction rather than by care at each call site.
+    public static let sources = Logger(subsystem: subsystem, category: "sources")
+
     /// Intervals around the capture path.
     ///
     /// §1.1 makes capture latency a P0 functional requirement and §13 requires
