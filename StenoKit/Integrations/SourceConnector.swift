@@ -100,6 +100,25 @@ public protocol SourceConnector: Sendable {
 
     /// Fetch the current state, and the changes since `since`.
     ///
+    /// **Must be cancellation-aware, and that is a requirement rather than a
+    /// nicety.** `SourceRefreshService` enforces its per-fetch deadline and its
+    /// pass budget with `withDeadline`, whose task group awaits this call before
+    /// returning — Swift cancellation is cooperative, so an implementation that
+    /// performs non-cancellable I/O holds the whole pass past both limits, and
+    /// §5.5's never-block guarantee degrades from "the report is never delayed" to
+    /// "the report is delayed by however long this takes". `Deadline.swift` records
+    /// the same limit for the same reason, and `HTTPTransport.send` states the same
+    /// requirement on the AI side.
+    ///
+    /// In practice: build on `URLSession`, which honours cancellation, and check
+    /// `Task.isCancelled` around any loop of your own. Raised by Copilot in review
+    /// of PR #42.
+    ///
+    /// The alternative — returning without awaiting an uncooperative fetch — was
+    /// rejected for D-146's reason: it means abandoning a live task, trading a late
+    /// answer for a leaked request. So this is a contract, enforced by review and
+    /// by the fact that every connector in this codebase is written against it.
+    ///
     /// - Parameter since: `nil` on the first observation of a ref. Passed
     ///   explicitly even though the snapshot carries `lastFetchedAt`, so refresh
     ///   *policy* stays in the service: a connector reading the snapshot's

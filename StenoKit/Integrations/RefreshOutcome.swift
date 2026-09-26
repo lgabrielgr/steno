@@ -18,10 +18,24 @@ public struct RefreshOutcome: Sendable, Equatable {
         public let displayName: String
         public let error: SourceError
 
-        public init(connectorID: String, displayName: String, error: SourceError) {
+        /// When *this* ref was last observed, or `nil` if it never was.
+        ///
+        /// **Its own field rather than the outcome's `oldestFetch`**, which is the
+        /// minimum across every ref in scope. Attributing that minimum to the
+        /// connector that failed states something false as soon as two
+        /// integrations are in play: an uncached Jira ref failing while an
+        /// unrelated Confluence ref holds a two-day-old cache would tell the user
+        /// Jira is using two-day-old data, when Jira has none at all. Raised by
+        /// Copilot in review of PR #42.
+        public let cachedAt: Date?
+
+        public init(
+            connectorID: String, displayName: String, error: SourceError, cachedAt: Date? = nil
+        ) {
             self.connectorID = connectorID
             self.displayName = displayName
             self.error = error
+            self.cachedAt = cachedAt
         }
     }
 

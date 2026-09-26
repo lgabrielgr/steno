@@ -35,9 +35,7 @@ public enum SourceNotice {
         }
 
         if let failure = outcome.failures.first {
-            let age = staleness(oldestFetch: outcome.oldestFetch, now: now)
-            let reach = "Couldn't reach \(failure.displayName)"
-            return age.map { "\(reach) — using \($0) data." } ?? "\(reach) — no cached data yet."
+            return "\(cause(failure)) — \(fallback(for: failure, now: now))."
         }
 
         if outcome.notConfigured > 0 {
@@ -58,6 +56,39 @@ public enum SourceNotice {
         return "Some integration data is \(age)."
     }
 
+    /// What went wrong with `failure`, in the user's terms.
+    ///
+    /// **Switches on the error rather than saying "couldn't reach" for all of
+    /// them.** D-165 separates `.invalidCredential` and `.notFound` from `.network`
+    /// precisely so a bad credential or a mistyped ticket key does not send the
+    /// user to check their wifi — and then this sentence undid that by labelling
+    /// every failure a reachability problem. `SourceError.errorDescription` already
+    /// carries the actionable wording; only the two genuinely-unreachable cases
+    /// get the connector's name attached, because that is when naming it helps.
+    /// Raised by Copilot in review of PR #42.
+    private static func cause(_ failure: RefreshOutcome.Failure) -> String {
+        switch failure.error {
+        case .network, .timedOut:
+            return "Couldn't reach \(failure.displayName)"
+        case .notConfigured, .invalidCredential, .notFound, .rateLimited, .unavailable,
+            .invalidResponse:
+            // The connector's name still leads, so the user knows which
+            // integration to go and fix, but the sentence is the error's own.
+            let detail = failure.error.errorDescription ?? "Something went wrong"
+            return "\(failure.displayName): \(detail.trimmingSuffix("."))"
+        }
+    }
+
+    /// What the draft falls back on for the ref that failed.
+    ///
+    /// Reads `failure.cachedAt`, not the outcome's `oldestFetch`: the second is the
+    /// minimum across every ref in scope, so attributing it to the connector that
+    /// failed can state something false — see `RefreshOutcome.Failure.cachedAt`.
+    private static func fallback(for failure: RefreshOutcome.Failure, now: Date) -> String {
+        staleness(oldestFetch: failure.cachedAt, now: now)
+            .map { "using \($0) data" } ?? "no cached data yet"
+    }
+
     /// "2 days old", "today's", or `nil` when nothing has ever been fetched.
     private static func staleness(oldestFetch: Date?, now: Date) -> String? {
         guard let oldestFetch else { return nil }
@@ -67,5 +98,13 @@ public enum SourceNotice {
         case 1: return "1 day old"
         default: return "\(days) days old"
         }
+    }
+}
+
+extension String {
+    /// `self` without a trailing period, so one can be added by the sentence that
+    /// composes it without producing "…data..".
+    fileprivate func trimmingSuffix(_ suffix: String) -> String {
+        hasSuffix(suffix) ? String(dropLast(suffix.count)) : self
     }
 }

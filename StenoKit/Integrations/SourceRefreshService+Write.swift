@@ -67,10 +67,13 @@ extension SourceRefreshService {
         for result in results {
             switch result.outcome {
             case .failure(let error):
+                // `cachedAt` is this row's own last observation, which a failed
+                // fetch leaves untouched — so it is exactly "how old is the data
+                // the draft will fall back on for this ref".
                 applied.failures.append(
                     RefreshOutcome.Failure(
                         connectorID: result.connectorID, displayName: result.displayName,
-                        error: error))
+                        error: error, cachedAt: byID[result.refID]?.lastFetchedAt))
             case .success(let update):
                 guard let row = byID[result.refID] else { continue }
                 let isFirst = row.lastFetchedAt == nil

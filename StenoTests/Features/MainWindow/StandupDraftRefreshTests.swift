@@ -196,9 +196,9 @@ func theStalenessLabelIsAppSideOnly() async throws {
                 attempted: 1,
                 failures: [
                     RefreshOutcome.Failure(
-                        connectorID: "jira", displayName: "Jira", error: .network)
-                ],
-                oldestFetch: window.end.addingTimeInterval(-2 * 86400)))
+                        connectorID: "jira", displayName: "Jira", error: .network,
+                        cachedAt: window.end.addingTimeInterval(-2 * 86400))
+                ]))
     }
 
     await scripted.finish()

@@ -169,6 +169,7 @@ public struct SourceRefreshService {
 
         await withTaskGroup(of: GroupEvent.self) { group in
             var pending = ready.makeIterator()
+            var inFlight = 0
 
             func startNext() -> Bool {
                 guard let next = pending.next() else { return false }
@@ -176,30 +177,34 @@ public struct SourceRefreshService {
                     .fetched(
                         await Self.fetch(next.snapshot, from: next.connector, within: deadline))
                 }
+                inFlight += 1
                 return true
             }
 
             let passBudget = budget
-            group.addTask {
-                // Cancelled with the rest once the pass settles, so it never
-                // outlives the group it bounds.
-                try? await Task.sleep(for: passBudget)
-                return .budgetExpired
-            }
+            group.addTask { await Self.sentinel(after: passBudget) }
 
             for _ in 0..<Self.maxInFlight where startNext() {}
+
+            /// Stop starting work and count what never got its turn.
+            ///
+            /// Everything not yet started is `skipped`, not failed: nothing went
+            /// wrong with a ref the clock ran out on. Reached from two places — the
+            /// sleeper firing, and a fetch returning after the budget has already
+            /// passed — so it lives here rather than being written twice.
+            func expire() {
+                expired = true
+                group.cancelAll()
+                while pending.next() != nil { skipped += 1 }
+            }
 
             while let event = await group.next() {
                 switch event {
                 case .budgetExpired:
-                    guard !expired else { continue }
-                    expired = true
-                    group.cancelAll()
-                    // Everything not yet started is skipped, not failed: nothing
-                    // went wrong with a ref the clock ran out on.
-                    while pending.next() != nil { skipped += 1 }
+                    if !expired { expire() }
 
                 case .fetched(let result):
+                    inFlight -= 1
                     // A fetch that beat the cancellation still carries data, and
                     // discarding it would waste a completed request.
                     if expired, case .failure = result.outcome {
@@ -208,22 +213,49 @@ public struct SourceRefreshService {
                         results.append(result)
                     }
 
-                    guard !expired else { continue }
-                    if ContinuousClock.now - started >= budget {
-                        // The sleeper is about to say the same thing; acting on
-                        // whichever arrives first keeps the boundary tight when a
-                        // fetch returns at the same instant.
-                        expired = true
-                        group.cancelAll()
-                        while pending.next() != nil { skipped += 1 }
-                        continue
+                    // The sleeper is about to say the same thing; acting on
+                    // whichever arrives first keeps the boundary tight when a fetch
+                    // returns at the same instant.
+                    if !expired, ContinuousClock.now - started >= budget {
+                        expire()
+                    } else if !expired {
+                        _ = startNext()
                     }
-                    _ = startNext()
+                }
+
+                // **The sentinel is a child of this group, so the loop cannot end
+                // while it is still sleeping** — and once the last fetch has landed
+                // there is no other event left to arrive. Without this break, every
+                // *successful* pass waited out the whole budget before returning,
+                // delaying the polish stage by ten seconds on a refresh that had
+                // already finished. Raised by Copilot in review of PR #42; the
+                // millisecond budgets the tests inject made it look like nothing
+                // worse than a slightly slow suite.
+                //
+                // `cancelAll` settles the sleeper, and `break` is what keeps its
+                // `.budgetExpired` — which `try?` turns into an ordinary return
+                // under cancellation — from being read as a real expiry.
+                if inFlight == 0 && !expired {
+                    group.cancelAll()
+                    break
                 }
             }
         }
 
         return (results, skipped)
+    }
+
+    /// The pass clock, as a member of the fetch group.
+    ///
+    /// **A group member rather than a check between results**, because the elapsed
+    /// time cannot be consulted while every fetch is still in flight: a pass whose
+    /// connectors all hang would then run for the per-fetch deadline instead of the
+    /// budget. Cancelled with the rest once the pass settles, so it never outlives
+    /// the group it bounds — and `try?` is what turns that cancellation into an
+    /// ordinary return rather than a thrown error the group would surface.
+    private nonisolated static func sentinel(after budget: Duration) async -> GroupEvent {
+        try? await Task.sleep(for: budget)
+        return .budgetExpired
     }
 
     /// One ref, behind its own deadline.

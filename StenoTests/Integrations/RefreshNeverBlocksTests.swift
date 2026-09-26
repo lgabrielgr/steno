@@ -179,3 +179,48 @@ func nothingAttemptedIsNotTheSameAsEverythingFailed() async throws {
     #expect(allFailed.attempted == 1)
     #expect(allFailed.failures.count == 1)
 }
+
+@MainActor
+@Test("a pass whose fetches all succeed returns at once, not at the end of its budget")
+func aSuccessfulPassDoesNotWaitOutTheBudget() async throws {
+    let fixture = try RefreshFixture()
+    let task = try fixture.task("ship payments")
+    try fixture.ref("PAY-1", on: task)
+    try fixture.ref("PAY-2", on: task)
+
+    // **A minute of budget against two instant fetches.** The budget sentinel is a
+    // child of the same task group, so before this was fixed the loop could not end
+    // until the sleeper woke — every successful Prepare refresh sat out the whole
+    // budget before the polish could start. The millisecond budgets the other tests
+    // inject hid it as nothing worse than a slightly slow suite (Copilot, PR #42).
+    let started = ContinuousClock.now
+    let outcome = await fixture.service(
+        connectors: [StubSourceConnector()], perFetch: .seconds(30), budget: .seconds(60)
+    ).refresh(taskIDs: [task.id])
+    let elapsed = ContinuousClock.now - started
+
+    #expect(outcome.cached == 2)
+    #expect(outcome.skipped == 0)
+    // A twelve-fold margin, so this is a correctness assertion rather than a
+    // performance gate: the broken version takes the full sixty seconds.
+    #expect(elapsed < .seconds(5))
+}
+
+@MainActor
+@Test("the budget still bounds a pass whose fetches hang")
+func theBudgetStillAppliesWhenWorkIsOutstanding() async throws {
+    let fixture = try RefreshFixture()
+    let task = try fixture.task("ship payments")
+    try fixture.ref("PAY-HANG", on: task)
+
+    // The other half of the fix: settling the sentinel early must not disarm it
+    // while a fetch is still in flight.
+    let outcome = await fixture.service(
+        connectors: [StubSourceConnector(fallback: .hang)],
+        perFetch: .seconds(30), budget: .milliseconds(120)
+    ).refresh(taskIDs: [task.id])
+
+    #expect(outcome.attempted == 1)
+    #expect(outcome.skipped == 1)
+    #expect(outcome.failures.isEmpty)
+}
