@@ -31,4 +31,34 @@ extension EventKind {
             false
         }
     }
+
+    /// Whether this kind's body belongs in a report the user reads aloud.
+    ///
+    /// **`externalUpdate` is reportable but not user-authored, which is why this
+    /// is a second property rather than a wider `isUserAuthored`** (D-180). The
+    /// two predicates answer different questions and are read by different
+    /// layers: FR-2's correction and redaction scope asks "did the user type
+    /// this", and an integration's sentence must never become editable as though
+    /// they had. Widening the first to serve the report would have made a Jira
+    /// comment correctable.
+    ///
+    /// `created` and `statusChanged` stay out, per D-072: their bodies are
+    /// `"Task created"` and `"In Progress → Done"`, machine-authored strings the
+    /// user would otherwise read to their team, and a task's status is already
+    /// expressed by which section it appears in. `standupReported` cannot reach a
+    /// window at all (D-066).
+    ///
+    /// Read by `RawReportSections` for §7.4's fallback and by
+    /// `StandupSummarizer.unreportedWork` for the coverage rule, so the two paths
+    /// cannot disagree about what a report owes the user.
+    ///
+    /// Exhaustive for the reason above.
+    public var isReportable: Bool {
+        switch self {
+        case .note, .blockedReason, .externalUpdate:
+            true
+        case .created, .statusChanged, .standupReported:
+            false
+        }
+    }
 }

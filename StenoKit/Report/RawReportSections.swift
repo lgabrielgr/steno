@@ -48,7 +48,7 @@ public enum RawReportSections {
         [
             ReportSection(
                 title: ReportHeadings.sinceLastStandup,
-                bullets: tasks.filter(progressed).map { bullet($0, details: authored($0)) }),
+                bullets: tasks.filter(progressed).map { bullet($0, details: reportable($0)) }),
             ReportSection(
                 title: ReportHeadings.today,
                 bullets: tasks.filter { $0.status == .inProgress }.map { bullet($0) }),
@@ -84,11 +84,11 @@ public enum RawReportSections {
         for task in tasks {
             switch task.status {
             case .done:
-                completed.append(bullet(task, details: authored(task)))
+                completed.append(bullet(task, details: reportable(task)))
             case .inProgress, .todo:
-                inFlight.append(bullet(task, details: authored(task)))
+                inFlight.append(bullet(task, details: reportable(task)))
             case .blocked:
-                blocked.append(bullet(task, details: reason(task) + authored(task)))
+                blocked.append(bullet(task, details: reason(task) + reportable(task)))
             }
         }
 
@@ -119,10 +119,11 @@ public enum RawReportSections {
     /// every task somewhere. If that proves wrong in use, the fix is a third
     /// clause here, not a change to what counts as an authored event.
     private static func progressed(_ task: GatheredTask) -> Bool {
-        task.status == .done || !authored(task).isEmpty
+        task.status == .done || !reportable(task).isEmpty
     }
 
-    /// The user's own words from this task's window, oldest first.
+    /// What this task's window says, oldest first: the user's own words, and what
+    /// an integration reported about their tickets.
     ///
     /// **`created` and `statusChanged` are excluded** (D-072). Their bodies are
     /// `"Task created"` and `"In Progress → Done"` — machine-authored strings
@@ -132,12 +133,20 @@ public enum RawReportSections {
     /// Verbatim fidelity is a constraint on the user's words; it does not
     /// oblige this type to speak the app's.
     ///
-    /// Filters on `isUserAuthored` rather than re-listing kinds, so M4's
-    /// `externalUpdate` — which cannot occur before the connector that writes
-    /// it exists — gets a deliberate decision from whoever adds it, at the
-    /// point they can judge whether a Jira comment belongs in a spoken
-    /// stand-up.
-    private static func authored(_ task: GatheredTask) -> [String] {
+    /// **`externalUpdate` is included, and that is M4-01's decision** (D-180).
+    /// This function used to filter on `isUserAuthored`, and its comment deferred
+    /// the question to "whoever adds `externalUpdate`" — which is the task that
+    /// made the source layer write them. "PAY-421 moved to In Review" is exactly
+    /// what the user has to say at stand-up and did not type themselves, and
+    /// §5.2's promise that a report can be generated offline from last-known
+    /// state is only true if this path speaks it: these events are the *only*
+    /// route external state takes into a report (D-168). §7.3's prompt already
+    /// sent them, so excluding them here made an AI draft strictly better than
+    /// the fallback — the one asymmetry the coverage rule exists to forbid.
+    ///
+    /// Renamed from `authored` with that change: the old name asserted a property
+    /// the body no longer has.
+    private static func reportable(_ task: GatheredTask) -> [String] {
         task.events.filter { isBullet($0, on: task) }.map(\.body)
     }
 
@@ -163,7 +172,7 @@ public enum RawReportSections {
     /// current reason, and the superseded one is dropped rather than listed as
     /// a note.
     private static func isBullet(_ event: GatheredEvent, on task: GatheredTask) -> Bool {
-        guard event.kind.isUserAuthored else { return false }
+        guard event.kind.isReportable else { return false }
         return !(task.status == .blocked && event.kind == .blockedReason)
     }
 

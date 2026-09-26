@@ -285,3 +285,30 @@ func aQuietFinishedTaskMayBeOmitted() async {
 
     #expect(result.modelUsed == modelID)
 }
+
+@Test("D-180: a draft that omits a task whose only news is an external update falls back")
+func droppedExternalUpdateDegrades() async {
+    // The fallback now says "PAY-421 moved to In Review" (D-180), so a draft
+    // omitting the task says less than the raw report — the regression this count
+    // exists to catch. `.todo` deliberately: an `.inProgress` or `.blocked` task
+    // is already covered by status alone, so it could not tell the two predicates
+    // apart.
+    //
+    // Mutation: restore `isUserAuthored` in `carriesReportableContent`.
+    let updated = DraftFixture.task(
+        "the one it forgot", status: .todo,
+        events: [DraftFixture.event("PAY-421: moved to In Review", kind: .externalUpdate)])
+    let mentioned = DraftFixture.task(
+        "the one it kept", events: [DraftFixture.event("quick fix")])
+    let window = DraftFixture.window(tasks: [updated, mentioned])
+    let partial = StandupDraft.daily(
+        DailyDraft(
+            sinceLastStandup: [DailyBullet(taskID: mentioned.id, text: "shipped the quick fix")],
+            today: [], blockers: []))
+
+    let result = await summarizer(provider: StubAIProvider(draft: .success(partial)))
+        .summarize(window)
+
+    #expect(result.modelUsed == nil)
+    #expect(result.markdown.contains("PAY-421: moved to In Review"))
+}
