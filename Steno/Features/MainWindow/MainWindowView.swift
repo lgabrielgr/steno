@@ -14,10 +14,16 @@ struct MainWindowView: View {
     /// (D-109). Every other injection point defaults to `UnavailableFilePanels`,
     /// so the headless test bundle cannot open a modal panel and hang the suite
     /// (D-010).
-    init(container: ModelContainer) {
+    ///
+    /// `registry` is §5.1's connector list, threaded from `StenoApp` rather than
+    /// built here so there is one registry per process and M4-02 registers its
+    /// connector at the composition root (D-179). Defaulted empty, which is what
+    /// ships this milestone.
+    init(container: ModelContainer, registry: SourceRegistry = SourceRegistry()) {
         _model = State(
             initialValue: MainWindowModel(
-                context: container.mainContext, panels: AppKitFilePanels()))
+                context: container.mainContext, sourceRegistry: registry,
+                panels: AppKitFilePanels()))
     }
 
     @Environment(\.openWindow) private var openWindow
