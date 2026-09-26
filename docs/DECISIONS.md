@@ -4996,7 +4996,17 @@ predicates apart.
 
 ### D-181 — A refresh result is dropped when a concurrent pass has already applied one
 
-**2026-09-26** · M4-01 · **Status:** accepted · found in review of PR #42
+**2026-09-26** · M4-01 · **Status:** accepted, but **demoted to defence-in-depth by D-183** · found
+in review of PR #42
+
+> **This entry's original reasoning was wrong, and the correction is D-183.** It claimed "nothing is
+> lost by dropping the later result: the next pass sends the winner's newer stamp as `since`, so any
+> change the dropped fetch saw and the winner did not is reported then." That is false. The winner's
+> stamp is *later* than the moment the loser observed its change, so asking `since` that stamp can
+> **exclude** the change permanently — in a recall tool, the worst class of bug there is. Raised by
+> Copilot, against this text. The guard stays, because a write that clobbers a newer one is still
+> wrong, but it is no longer the mechanism that makes overlapping passes safe: D-183's serialization
+> is, and this should now never fire in the running app.
 
 `FetchResult` carries `observedAt` — the row's `lastFetchedAt` at dispatch, which is also what was
 sent as `since`. The write phase applies a result only while the row still holds that value;
@@ -5015,8 +5025,8 @@ behind a shared coordinator: more machinery, a new concurrency primitive added a
 would make correctness depend on every future trigger remembering to go through it. This makes the
 *data* correct instead, which is the shape the rest of this codebase uses for invariants.
 
-**Nothing is lost by dropping the later result.** The next pass sends the winner's newer stamp as
-`since`, so any change the dropped fetch saw and the winner did not is reported then.
+**What it does *not* do is make the dropped result recoverable** — see the note above. That is why
+D-183 stops the overlap happening rather than reconciling it afterwards.
 
 `superseded` is its own count rather than folded into `skipped`, per D-163: the clock ran out on one,
 and the other arrived to find its work already done.
@@ -5043,3 +5053,50 @@ it returns, so that call is also wasted — but narrowing it is a change to M3-0
 than a fix to M4-01's, and it belongs with whoever measures what the call costs.
 
 **Falsified by** `a draft copied while the refresh is in flight is never polished`.
+
+---
+
+### D-183 — Refresh passes are serialized, because dropping one can lose a change
+
+**2026-09-26** · M4-01 · **Status:** accepted · found in review of PR #42, against D-181
+
+`SourceRefreshGate` runs refresh passes one at a time. `SourceRefreshService` takes one, defaulting
+to `SourceRefreshGate.shared`, and **both** entry points — `refreshDue` and `refresh(taskIDs:)` — go
+through it. Tests inject their own instance so one test's pass never queues behind another's.
+
+**Why serializing rather than reconciling.** §5.5 gives the app three triggers: the launch pass
+(fire-and-forget), "Prepare Stand-up", and M4-05's scheduled run. Two can overlap trivially — the
+user presses Prepare while the launch pass is still on the network. D-181 handled that optimistically:
+let both run, and drop the second result if the row had moved underneath it. That is unsafe, because
+**`lastFetchedAt` is deliberately the app's clock** (D-171): the winner stamps a time later than the
+instant the loser observed its change, and the next pass, asking `since` that later stamp, may never
+be told about the change again. A ticket movement silently absent from a stand-up is precisely the
+failure this product exists to prevent.
+
+Serializing removes the situation instead of reconciling it: the second pass reads its rows after the
+first has written, sends the newer `since`, and its answer is about work the first genuinely did not
+see. No result is thrown away, so no change can be lost with one.
+
+**The cost is a wait, never a block.** A Prepare arriving during a launch pass waits for it, bounded
+by that pass's own budget (D-178) — and FR-4 step 4 stays non-blocking regardless, because the sheet
+is already open on cached text with Copy live. Cancelling the launch pass instead was rejected: it
+covers every non-done task where Prepare covers only the window's, so cancelling would drop refs
+nothing else in the session revisits.
+
+**A shared default rather than a coordinator each caller must remember.** `.shared` is the default
+parameter value, so a new trigger is serialized by construction. D-181's write-phase guard is kept as
+defence for any future path that supplies its own gate, and has its own test for that case.
+
+**What this does not fix, and M4-02 owns it.** The same app-clock `since` can miss a change even with
+no concurrency at all: if a connector reveals a change only after the pass that should have seen it —
+replication lag, or a changelog window that is not monotonic — the next `since` is already past it.
+The durable fix is a watermark derived from what the connector itself confirms it has reported, plus
+a deliberate overlap and de-duplication on the way in. That is a decision about one vendor's API
+semantics, it needs a real connector to test against, and it may need a field on `SourceRef` (and
+therefore export, import and merge rules). Recorded here and in M4-02's task notes rather than left
+for someone to rediscover.
+
+**Falsified by** `two triggers firing together are serialized, so the second sees the first's write`,
+`the launch pass and a Prepare pass are serialized against each other` — which exists because a
+mutation routing only `refresh(taskIDs:)` through the gate survived without it — and
+`a pass that bypasses the gate still cannot clobber a newer write`, which keeps D-181 under test.

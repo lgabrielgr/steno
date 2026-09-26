@@ -62,17 +62,22 @@ struct RefreshFixture {
     ///
     /// Millisecond budgets by default: an eight-second hang in `make test` is how
     /// a suite stops being run.
+    /// - Parameter gate: a **fresh** gate by default, so one test's pass never
+    ///   queues behind another's — the production default is the shared instance
+    ///   (D-183). A test that wants two services serialized against each other
+    ///   passes one gate to both.
     func service(
         connectors: [any SourceConnector],
         nowOffset: TimeInterval = 0,
         save: @escaping (ModelContext) throws -> Void = { try $0.save() },
         perFetch: Duration = .milliseconds(200),
-        budget: Duration = .milliseconds(400)
+        budget: Duration = .milliseconds(400),
+        gate: SourceRefreshGate = SourceRefreshGate()
     ) -> SourceRefreshService {
         SourceRefreshService(
             context: context, registry: SourceRegistry(connectors: connectors),
             now: { Self.origin.addingTimeInterval(nowOffset) }, save: save,
-            perFetch: perFetch, budget: budget)
+            perFetch: perFetch, budget: budget, gate: gate)
     }
 
     // MARK: - Independent reads

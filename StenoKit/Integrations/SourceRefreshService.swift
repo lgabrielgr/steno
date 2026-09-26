@@ -39,19 +39,25 @@ public struct SourceRefreshService {
     let save: (ModelContext) throws -> Void
     private let perFetch: Duration
     private let budget: Duration
+    private let gate: SourceRefreshGate
 
     /// - Parameters:
     ///   - perFetch: one ref's deadline (D-178). One unresponsive ticket must not
     ///     consume the pass.
     ///   - budget: the pass's wall clock. Tests pass milliseconds — an
     ///     eight-second hang in `make test` is how a suite stops being run.
+    ///   - gate: serializes passes against every other trigger (D-183). Defaults to
+    ///     the shared instance, so a new trigger is serialized by construction
+    ///     rather than by remembering to be; a test passes its own so one test's
+    ///     pass never waits on another's.
     public init(
         context: ModelContext,
         registry: SourceRegistry,
         now: @escaping () -> Date = Date.init,
         save: @escaping (ModelContext) throws -> Void = { try $0.save() },
         perFetch: Duration = .seconds(8),
-        budget: Duration = .seconds(10)
+        budget: Duration = .seconds(10),
+        gate: SourceRefreshGate = .shared
     ) {
         self.context = context
         self.registry = registry
@@ -59,6 +65,7 @@ public struct SourceRefreshService {
         self.save = save
         self.perFetch = perFetch
         self.budget = budget
+        self.gate = gate
     }
 
     /// §5.5's launch pass: refs on non-done, non-archived tasks that have not
@@ -66,6 +73,10 @@ public struct SourceRefreshService {
     public func refreshDue(
         olderThan staleness: Duration = RefreshPolicy.launchStaleness
     ) async -> RefreshOutcome {
+        await gate.serialize { await self.performRefreshDue(olderThan: staleness) }
+    }
+
+    private func performRefreshDue(olderThan staleness: Duration) async -> RefreshOutcome {
         let rows: [SourceRef]
         do {
             rows = try activeRefs()
@@ -86,7 +97,10 @@ public struct SourceRefreshService {
     /// refresh all refs in the window".
     public func refresh(taskIDs: [UUID]) async -> RefreshOutcome {
         guard !taskIDs.isEmpty else { return .idle }
+        return await gate.serialize { await self.performRefresh(taskIDs: taskIDs) }
+    }
 
+    private func performRefresh(taskIDs: [UUID]) async -> RefreshOutcome {
         let rows: [SourceRef]
         do {
             rows = try refs(forTaskIDs: Set(taskIDs))
