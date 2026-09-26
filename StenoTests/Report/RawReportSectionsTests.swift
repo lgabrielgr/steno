@@ -262,3 +262,76 @@ func taskOrderIsInherited() {
         SectionInput.section("Since last stand-up", of: sections)?.map(\.text)
             == ["zebra", "apple", "mango"])
 }
+
+// MARK: - D-180: externalUpdate events are reportable
+
+@Test("D-180: §7.4's fallback speaks an integration's update")
+func theFallbackSpeaksExternalUpdates() {
+    let sections = RawReportSections.build(
+        from: SectionInput.window(
+            .daily,
+            [
+                SectionInput.task(
+                    "Flaky auth test", status: .inProgress, ticketKeys: ["PAY-421"],
+                    events: [
+                        SectionInput.event("PAY-421: moved to In Review", kind: .externalUpdate)
+                    ])
+            ]))
+
+    // §5.2's offline guarantee has no other carrier: these events are the only
+    // route external state takes into a report (D-168), and §7.3's prompt already
+    // sends them — so a fallback that dropped them would be strictly worse than
+    // the AI path, which is the asymmetry the coverage rule forbids.
+    //
+    // Mutation: restore `isUserAuthored` in `RawReportSections.isBullet`.
+    #expect(
+        SectionInput.section("Since last stand-up", of: sections)
+            == [
+                ReportBullet(
+                    text: "Flaky auth test (PAY-421)",
+                    details: ["PAY-421: moved to In Review"])
+            ])
+}
+
+@Test("D-180: a task whose only news is an external update still counts as progressed")
+func anExternalUpdateAloneIsProgress() {
+    // `progressed` reads the same list, so this is the case where a ticket moved
+    // and the user typed nothing — precisely what the integration exists to
+    // surface, and previously a task that appeared under no daily heading at all.
+    let sections = RawReportSections.build(
+        from: SectionInput.window(
+            .daily,
+            [
+                SectionInput.task(
+                    "Waiting on review", status: .todo,
+                    events: [
+                        SectionInput.event("PAY-9: 2 new comments", kind: .externalUpdate)
+                    ])
+            ]))
+
+    #expect(
+        SectionInput.section("Since last stand-up", of: sections)
+            == [ReportBullet(text: "Waiting on review", details: ["PAY-9: 2 new comments"])])
+}
+
+@Test("D-072 still holds: created and statusChanged stay out of the report")
+func machineAuthoredKindsStayOut() {
+    // The widening admits exactly one kind. Without this, a change that swapped
+    // the predicate for `true` would pass every other test in this file.
+    let sections = RawReportSections.build(
+        from: SectionInput.window(
+            .daily,
+            [
+                SectionInput.task(
+                    "Flaky auth test", status: .inProgress,
+                    events: [
+                        SectionInput.event("Task created", kind: .created),
+                        SectionInput.event("TO DO → IN PROGRESS", kind: .statusChanged),
+                        SectionInput.event("PAY-421: reopened", kind: .externalUpdate),
+                    ])
+            ]))
+
+    #expect(
+        SectionInput.section("Since last stand-up", of: sections)
+            == [ReportBullet(text: "Flaky auth test", details: ["PAY-421: reopened"])])
+}

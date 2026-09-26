@@ -131,6 +131,11 @@ public final class MainWindowModel: MainWindowActions {
     /// preferences (§9.4).
     let settings: AppSettings
 
+    /// §5.1's connectors, for FR-4 step 4's refresh. Empty by default, which is
+    /// what ships this milestone (D-179); injected so M4-02 registers at the
+    /// composition root rather than inside a view model.
+    let sourceRegistry: SourceRegistry
+
     /// §10.5's save and open panels. **Defaults to the unavailable
     /// implementation**, so the headless bundle cannot open a modal panel and
     /// hang the suite — only `StenoApp` passes the AppKit one. See `FilePanels`.
@@ -163,6 +168,7 @@ public final class MainWindowModel: MainWindowActions {
         save: @escaping (ModelContext) throws -> Void = { try $0.save() },
         copy: @escaping @MainActor (String) -> Bool = StandupClipboard.write,
         settings: AppSettings = AppSettings(),
+        sourceRegistry: SourceRegistry = SourceRegistry(),
         panels: any FilePanels = UnavailableFilePanels(),
         makeBackupWriter: @escaping @MainActor (ModelContext) throws -> BackupWriter = {
             try BackupWriter(context: $0)
@@ -172,6 +178,7 @@ public final class MainWindowModel: MainWindowActions {
         self.now = now
         self.save = save
         self.settings = settings
+        self.sourceRegistry = sourceRegistry
         self.panels = panels
         self.makeBackupWriter = makeBackupWriter
         self.noteComposer = NoteComposerModel(
@@ -179,7 +186,10 @@ public final class MainWindowModel: MainWindowActions {
         self.standupDraft = StandupDraftModel(
             service: StandupService(context: context, now: now, save: save, copy: copy),
             undoService: StandupUndoService(context: context, save: save),
-            polish: Self.standupPolish(settings: settings))
+            polish: Self.standupPolish(settings: settings),
+            refresh: Self.sourceRefresh(
+                context: context, registry: sourceRegistry, now: now, save: save),
+            now: now)
         // Hazard for whoever adds an onboarding test here: `settings` above
         // defaults to `AppSettings()` over `UserDefaults.standard`, so a
         // `MainWindowModel()` built with defaults points this service at the
@@ -283,7 +293,9 @@ public final class MainWindowModel: MainWindowActions {
     /// write-side guarantee `perform(_:_:)` makes (D-018).
     ///
     /// `what` is an infinitive phrase, matching `perform`'s convention.
-    private func fetch<T: PersistentModel>(
+    /// `internal`, not `private`, because `MainWindowModel+Fetching.swift` calls
+    /// it and `private` is file-scoped — the same reason `fetchOrNil` below is.
+    func fetch<T: PersistentModel>(
         _ descriptor: FetchDescriptor<T>, _ what: String
     ) -> [T] {
         fetchOrNil(descriptor, what) ?? []
@@ -308,64 +320,6 @@ public final class MainWindowModel: MainWindowActions {
             )
             lastError = "Could not \(what)."
             return nil
-        }
-    }
-
-    private func fetchProjects() -> [Project] {
-        let descriptor = FetchDescriptor<Project>(
-            predicate: #Predicate { !$0.isArchived },
-            sortBy: [SortDescriptor(\.sortOrder), SortDescriptor(\.name)]
-        )
-        return fetch(descriptor, "load your projects")
-    }
-
-    /// FR-3's "current report window", for one task.
-    ///
-    /// **This used to be a flat `now() - 24h`**, correct only because
-    /// `lastStandupAt` stayed nil until M2-03 shipped the Copy action that
-    /// advances it. M2-03 shipped it, so the constant became a live FR-3
-    /// violation the first time the user copied a stand-up — the shape of
-    /// documented exception that is really a bug filed against whichever task
-    /// makes it reachable.
-    ///
-    /// Delegates to `ReportWindow.bounds` rather than restating the rule, which
-    /// also keeps the first-run case right for free: a project never reported
-    /// on still gets 24 hours, from the one place that decision lives (D-077).
-    ///
-    /// The `nil` path — a task whose project is not in `projects` — is
-    /// unreachable by construction rather than merely unlikely: `fetchTasks()`
-    /// filters against the same `projects` snapshot this resolves through, and
-    /// `reload()` assigns `projects` first with no suspension point between.
-    /// It resolves to the same 24-hour first-run window a never-reported
-    /// project gets, which is the right answer if a later caller does reach it.
-    /// `instant` is passed in rather than read here — see `reload()`.
-    private func doneCutoff(for task: TaskItem, at instant: Date) -> Date {
-        ReportWindow.bounds(
-            lastStandupAt: project(withID: task.projectID)?.lastStandupAt,
-            now: instant
-        ).start
-    }
-
-    /// Tasks for the current selection.
-    ///
-    /// The project filter is applied in memory rather than in the `#Predicate`
-    /// because it is a set-membership test against the visible projects, and
-    /// D18 caps the whole dataset under 20 live tasks — the fetch is the cost,
-    /// not the filter.
-    private func fetchTasks() -> [TaskItem] {
-        let visible = Set(projects.map(\.id))
-        let descriptor = FetchDescriptor<TaskItem>(predicate: #Predicate { !$0.isArchived })
-        let all = fetch(descriptor, "load your tasks")
-
-        switch selection {
-        case .all:
-            // Archiving a project takes its tasks with it — otherwise
-            // archiving would not actually get a finished project out of the
-            // way, which is the whole point (§3.1).
-            return all.filter { visible.contains($0.projectID) }
-        case .project(let id):
-            guard visible.contains(id) else { return [] }
-            return all.filter { $0.projectID == id }
         }
     }
 

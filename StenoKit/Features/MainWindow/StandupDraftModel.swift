@@ -72,6 +72,23 @@ public final class StandupDraftModel {
     /// user is never left holding nothing while a network call decides.
     public private(set) var isPolishing = false
 
+    /// Whether §5.5's refresh is still in flight (D-175).
+    ///
+    /// Drives the sheet's "Refreshing…" affordance. **Copy is live while this is
+    /// true**, for the reason it is live while polishing: the text on screen is
+    /// M2-02's raw report from cached data, which is a usable stand-up, and §7.4's
+    /// promise is that the user is never left holding nothing while a network call
+    /// decides.
+    public private(set) var isRefreshing = false
+
+    /// §5.2's staleness label, or `nil` when the sources are current (D-176).
+    ///
+    /// **Its own property, not a reading of `lastError` or `notice`.** Those two
+    /// are already separate because one means a write failed and retrying is safe
+    /// while the other means the write landed; this third one means neither — the
+    /// data is simply old. A single field could not say which.
+    public private(set) var sourceNotice: String?
+
     /// The model that produced the text now on screen, or `nil` for the raw
     /// report (D-151).
     ///
@@ -106,6 +123,8 @@ public final class StandupDraftModel {
     private let service: StandupService
     private let undoService: StandupUndoService
     private let polish: @MainActor (GatheredWindow) async -> SummarizedStandup
+    private let refresh: @MainActor (GatheredWindow) async -> RefreshedWindow
+    private let now: () -> Date
 
     /// - Parameter polish: §7.3's call, injected as a closure for the reason
     ///   `service` and `copy` are injected — a seam the headless suite can
@@ -120,16 +139,33 @@ public final class StandupDraftModel {
     ///   caller already rendered. That is not a stub: it is exactly what an
     ///   unconfigured install does, and it is what every launch does until
     ///   M3-04 ships the key field and the model picker.
+    /// - Parameter refresh: §5.5's pass over the window's refs, plus the
+    ///   re-gather that picks up the `externalUpdate` events it appended (D-175).
+    ///   Injected for `polish`'s reason — a seam the headless suite drives without
+    ///   a connector or a network (§9.4).
+    ///
+    ///   **The default performs no refresh**, returning the window it was given
+    ///   with an idle outcome. That is not a stub: it is exactly what an install
+    ///   with no configured integration does, and with the registry empty it is
+    ///   what every launch does until M4-02 (D-179).
+    /// - Parameter now: for `SourceNotice`'s "2 days old" wording, so the sentence
+    ///   is assertable without waiting.
     public init(
         service: StandupService,
         undoService: StandupUndoService,
         polish: @escaping @MainActor (GatheredWindow) async -> SummarizedStandup = {
             SummarizedStandup(markdown: StandupSummarizer.rawMarkdown(for: $0), modelUsed: nil)
-        }
+        },
+        refresh: @escaping @MainActor (GatheredWindow) async -> RefreshedWindow = {
+            RefreshedWindow(window: $0, outcome: .idle)
+        },
+        now: @escaping () -> Date = Date.init
     ) {
         self.service = service
         self.undoService = undoService
         self.polish = polish
+        self.refresh = refresh
+        self.now = now
     }
 
     /// Copy is live only with a window to commit, and only once.
@@ -164,14 +200,71 @@ public final class StandupDraftModel {
         lastError = nil
         notice = nil
         aiModelUsed = nil
+        sourceNotice = nil
+        isRefreshing = true
         isPolishing = true
         polishGeneration &+= 1
         let generation = polishGeneration
+        // **One task for both stages, in FR-4's order: refresh (step 4), then the
+        // AI request (step 5).** Two tasks would need two cancellations and could
+        // interleave, and a polish that ran against the pre-refresh window would
+        // summarize a window whose `externalUpdate` events had not arrived yet.
+        //
+        // `isPolishing` is set here rather than after the refresh, so every
+        // existing assertion about it holds: the sheet shows "Refreshing…" while
+        // `isRefreshing`, and "Polishing…" after.
         polishTask = Task { [weak self] in
-            let result = await self?.polish(window)
-            guard let self, let result else { return }
-            install(result, from: generation)
+            guard let refreshed = await self?.refresh(window) else { return }
+            // `nil` means this call has been superseded — the sheet was dismissed,
+            // or another window prepared — so the polish is not started at all.
+            guard let current = self?.adopt(refreshed, from: generation) else { return }
+            guard let result = await self?.polish(current) else { return }
+            self?.install(result, from: generation)
         }
+    }
+
+    /// The refresh stage's result, and the window the polish should run on
+    /// (D-175). `nil` when this call has been superseded.
+    ///
+    /// **The window is replaced at most once, before the polish, and only while
+    /// the text is pristine.** `window` is frozen *at Copy*, not at Prepare:
+    /// replacing it under an untouched draft is safe, because the text is
+    /// re-rendered from the same window. Replacing it under a typed draft would
+    /// advance `lastStandupAt` to a window end past `externalUpdate` events the
+    /// user's text never mentions — consuming them from the window and losing them
+    /// from recall, which is the harm D-076 exists to prevent. So a typed draft
+    /// keeps its original window, and the refresh's events fall into the next
+    /// report.
+    private func adopt(_ refreshed: RefreshedWindow, from generation: Int) -> GatheredWindow? {
+        // Before anything, including `isRefreshing`, for `install`'s reason: a
+        // superseded call answers for a draft that is no longer on screen.
+        guard generation == polishGeneration else { return nil }
+
+        isRefreshing = false
+        sourceNotice = SourceNotice.text(for: refreshed.outcome, now: now())
+
+        // **A draft that has been copied or dismissed gets no polish at all.**
+        // `commit` cancels this task and moves the phase to `.copied`, but
+        // cancellation is cooperative, so a refresh suspended when the user
+        // pressed Copy still resumes — and returning a window here would send a
+        // paid AI request for a draft that is already on the clipboard and whose
+        // result `install` would refuse. Raised by Copilot in review of PR #42.
+        guard !Task.isCancelled, phase == .editing else { return nil }
+
+        // A typed draft, or a pass that wrote nothing: the polish still runs, on
+        // the window the draft already had. That is M3-03's behaviour unchanged —
+        // `install` refuses to overwrite the user's words when it returns — and
+        // narrowing it further belongs with whoever measures what that call costs.
+        guard text == pristineText, refreshed.outcome.didWrite
+        else { return window ?? refreshed.window }
+
+        window = refreshed.window
+        // The same expression `MainWindowModel.prepareStandup` renders with —
+        // two pure functions over the window, so the re-render cannot drift from
+        // the first render.
+        text = SlackMarkdown.render(RawReportSections.build(from: refreshed.window))
+        pristineText = text
+        return refreshed.window
     }
 
     /// The AI draft, if it is still wanted (D-148).
@@ -212,6 +305,8 @@ public final class StandupDraftModel {
         polishTask = nil
         polishGeneration &+= 1
         isPolishing = false
+        isRefreshing = false
+        sourceNotice = nil
         window = nil
         text = ""
         pristineText = ""

@@ -36,6 +36,15 @@ struct StenoApp: App {
     /// functional in a build whose store will not open (§13).
     private let aiSettingsModel: AISettingsModel
 
+    /// §5.1's connectors, built once for the process.
+    ///
+    /// **Empty this milestone** (D-179): no connector conforms to
+    /// `SourceConnector` until M4-02, so every `SourceRef` dispatches
+    /// `.unhandled` and both refresh paths are no-ops. Registration order is
+    /// priority, and it lives here — one readable array literal — rather than in a
+    /// `register()` call some pane could reorder.
+    private let sourceRegistry = SourceRegistry(connectors: [])
+
     /// §10.5's auto-export. Held for the whole process because it owns a timer
     /// and a termination observation — a controller that went out of scope
     /// would take both with it, and the backup would quietly stop happening.
@@ -137,6 +146,8 @@ struct StenoApp: App {
             let exportController = AutoExportController(service: exporter)
             exportController.start()
             autoExport = exportController
+
+            Self.startLaunchRefresh(container: container, registry: sourceRegistry)
         } else {
             quickCapture = nil
             menuBar = nil
@@ -149,6 +160,33 @@ struct StenoApp: App {
             // themselves and say why (§13 — degradation ships with the
             // feature, not after it).
             settingsModel = SettingsModel()
+        }
+    }
+
+    /// §5.5's launch pass: refs on non-done tasks not fetched in the last 30
+    /// minutes.
+    ///
+    /// Fire-and-forget, silent, logs only (D-176) — it warms the cache so the
+    /// morning view is instant, and a visible indicator would invite the user to
+    /// wait for something designed not to be waited on.
+    ///
+    /// **Here rather than in `MainWindowModel.init`** (D-179). The CLI bundle
+    /// builds a store too, and `steno export` must not open network connections.
+    /// `mainContext`, for the reason the seeding above uses it: the window's own
+    /// model reads that context, so a pass writing into a sibling would depend on
+    /// cross-context visibility.
+    ///
+    /// M4-05 replaces this single call with its scheduled equivalent.
+    ///
+    /// `static`, so `init` can call it before `self` exists — and its own function
+    /// rather than six lines inline, because `init` is at SwiftLint's
+    /// `function_body_length` limit.
+    private static func startLaunchRefresh(
+        container: ModelContainer, registry: SourceRegistry
+    ) {
+        let context = container.mainContext
+        Task { @MainActor in
+            _ = await SourceRefreshService(context: context, registry: registry).refreshDue()
         }
     }
 
@@ -169,7 +207,7 @@ struct StenoApp: App {
                 // directly, so ARCHITECTURE §2 rule 2 holds by construction
                 // rather than by discipline. Do not add it back without a view
                 // that genuinely needs `@Query`.
-                MainWindowView(container: container)
+                MainWindowView(container: container, registry: sourceRegistry)
             case .failure(let error):
                 StoreFailureView(path: storePath, error: error)
             }

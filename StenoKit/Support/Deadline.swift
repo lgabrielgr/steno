@@ -1,7 +1,14 @@
 import Foundation
 
-/// Run `operation` against a wall clock, throwing `AIError.timedOut` if the
-/// clock wins (D-146).
+/// Run `operation` against a wall clock, throwing `timeoutError` if the clock
+/// wins (D-146).
+///
+/// **The error is a parameter, and that is why this lives in `Support/` rather
+/// than in `AI/`** (D-177). It threw `AIError.timedOut` when the AI layer was
+/// its only caller; M4-01's source layer needs the same wall clock and may not
+/// name an AI type (§13). Copying the function instead would leave two
+/// implementations of the cancellation semantics below, and the next fix would
+/// land on one of them.
 ///
 /// **A wall clock, not `URLSession`'s request timeout.** §7.4's fallback waits
 /// on this: "if the API is slow, the user is standing in a meeting". The
@@ -33,14 +40,20 @@ import Foundation
 /// error domain as the genuine connectivity failures — so mapping it by domain,
 /// the obvious mapping, reports `.network` for a request that timed out and
 /// tells the user they are offline while their connection is fine. The deadline
-/// branch throws `.timedOut` itself, and `AnthropicErrors.error(forTransport:)`
-/// maps a stray cancellation the same way, because nothing else here cancels.
-func withDeadline<T: Sendable>(
+/// branch throws `timeoutError` itself, and
+/// `AnthropicErrors.error(forTransport:)` maps a stray cancellation the same
+/// way, because nothing else there cancels.
+///
+/// - Parameter timeoutError: thrown when the clock wins, and thrown for a
+///   `CancellationError` from either racer. Required rather than defaulted: a
+///   default would put one layer's error type in a signature both layers share.
+func withDeadline<T: Sendable, E: Error & Sendable>(
     _ duration: Duration,
+    throwing timeoutError: E,
     operation: @escaping @Sendable () async throws -> T
 ) async throws -> T {
     do {
-        return try await race(duration, operation: operation)
+        return try await race(duration, throwing: timeoutError, operation: operation)
     } catch is CancellationError {
         // **Cancelling the caller cancels both children**, and a cancelled
         // `Task.sleep` throws `CancellationError` — from the deadline task
@@ -51,24 +64,26 @@ func withDeadline<T: Sendable>(
         // to hit the path the transport had already mapped (PR #35 review).
         //
         // Mapping it here covers every caller and makes the contract
-        // deterministic: `withDeadline` throws `AIError` and nothing else.
-        throw AIError.timedOut
+        // deterministic: `withDeadline` throws the error it was given and
+        // nothing else.
+        throw timeoutError
     }
 }
 
-private func race<T: Sendable>(
+private func race<T: Sendable, E: Error & Sendable>(
     _ duration: Duration,
+    throwing timeoutError: E,
     operation: @escaping @Sendable () async throws -> T
 ) async throws -> T {
     try await withThrowingTaskGroup(of: T.self) { group in
         group.addTask { try await operation() }
         group.addTask {
             try await Task.sleep(for: duration)
-            throw AIError.timedOut
+            throw timeoutError
         }
 
         guard let first = try await group.next() else {
-            throw AIError.timedOut
+            throw timeoutError
         }
         // The loser is cancelled and its result discarded: a `URLError`
         // cancelled task and a `CancellationError` from the sleeper are both

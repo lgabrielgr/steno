@@ -92,7 +92,7 @@ something better than paper. **M2 is the true MVP; M6 is the finish line.**
 ### M4 — Atlassian
 > Exit: ticket detail appears in reports.
 
-- [ ] [M4-01](M4-01-source-connector-protocol.md) — `SourceConnector`, refresh policy, cache, never-block guarantee
+- [x] [M4-01](M4-01-source-connector-protocol.md) — `SourceConnector`, refresh policy, cache, never-block guarantee — PR #42
 - [ ] [M4-02](M4-02-jira-connector.md) — Jira REST v3 read-only, with token-expiry handling
 - [ ] [M4-03](M4-03-confluence-connector.md) — Confluence read-only on the same credential
 - [ ] [M4-04](M4-04-integrations-settings-ui.md) — credential entry, expiry warning, connection test

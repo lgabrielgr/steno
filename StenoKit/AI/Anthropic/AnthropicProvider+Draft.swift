@@ -59,7 +59,7 @@ extension AnthropicProvider {
         // deadline task owns.
         let deadline = ContinuousClock.now.advanced(by: request.timeout)
 
-        return try await withDeadline(request.timeout) {
+        return try await withDeadline(request.timeout, throwing: AIError.timedOut) {
             var retried = false
             while true {
                 do {

@@ -43,6 +43,27 @@ scheduled certainty it is.
 
 ## Notes for the spec/plan phase
 
+- **`since` needs a watermark, and this task owns the decision (D-183).** M4-01 sends
+  `SourceRef.lastFetchedAt` as `since`, which is the *app's* clock by design (D-171, because §10.1
+  merges on it). That can skip a change the connector reveals only after the pass that should have
+  seen it — replication lag, or a changelog window that is not monotonic — because the next `since`
+  is already past it. M4-01 serialized its passes so overlapping triggers cannot lose a change that
+  way, but this one remains. The durable fix is a watermark taken from what Jira itself confirms it
+  has reported, a deliberate overlap on each request, and de-duplication on the way in. It may need
+  a field on `SourceRef`, and therefore export, import and merge rules (§10.1, §10.2).
+- **`fetch` must be cancellation-aware** — build on `URLSession`. M4-01's per-fetch deadline and pass
+  budget are cooperative only, so a connector that blocks holds the whole pass past both limits.
+- **Add `SourceError.credentialExpired`** for §5.2's 401 handling. It is a compile error at every
+  exhaustive switch, which is intended — including `SourceNotice`, where the user-facing sentence
+  must say "your Atlassian token expired" with a link rather than anything about reachability
+  (D-165).
+- **Register the connector in `StenoApp`'s `SourceRegistry`**, not inside a view model: registration
+  order is priority (D-166), and M4-01 ships that array empty (D-179).
+- **This is where M4-01's refresh UI gets its first visual check** (D-179): with the registry empty,
+  the draft sheet's "Refreshing…" line and staleness banner are unreachable in the running app, so
+  they are verified at the view-model level only.
+
+
 - **Token expiry is not an edge case.** §5.2: Atlassian Cloud tokens created since December
   2024 expire, maximum lifetime one year, set at creation. It is "a scheduled, guaranteed
   failure." And "a silent 401 during stand-up prep is the worst possible time to debug auth" —

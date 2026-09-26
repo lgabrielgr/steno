@@ -32,6 +32,21 @@ struct StandupDraftSheet: View {
                         .strokeBorder(.separator)
                 }
 
+            // §5.2's staleness label (D-176). Above `notice` deliberately: this
+            // one describes the data the draft was built from, which the user
+            // needs before reading it out, while `notice` and `lastError` describe
+            // what a Copy just did.
+            //
+            // **Not in the copied markdown.** The label exists so the user knows
+            // how much to trust the draft; the audience of the stand-up does not
+            // need fetch timestamps, and a line in the text would travel to Slack
+            // on most reports because the launch pass runs on a 30-minute rule.
+            if let sourceNotice = draft.sourceNotice {
+                Label(sourceNotice, systemImage: "clock.badge.exclamationmark")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
             if let notice = draft.notice {
                 Label(notice, systemImage: "exclamationmark.triangle")
                     .font(.caption)
@@ -120,7 +135,21 @@ struct StandupDraftSheet: View {
             // is that the user is never left holding nothing while a network
             // call decides, and a disabled button during a 20-second call is
             // exactly that.
-            if draft.isPolishing {
+            // FR-4 step 4's "visible but non-blocking" indicator (D-175), in the
+            // same slot as "Polishing…" and for the same reason: the text on
+            // screen is already a usable stand-up built from cached data, so Copy
+            // stays live while the network decides. One slot rather than two,
+            // because the two stages are sequential — `isRefreshing` is false
+            // before the polish begins.
+            if draft.isRefreshing {
+                HStack(spacing: 6) {
+                    ProgressView()
+                        .controlSize(.small)
+                    Text("Refreshing…")
+                }
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            } else if draft.isPolishing {
                 HStack(spacing: 6) {
                     ProgressView()
                         .controlSize(.small)

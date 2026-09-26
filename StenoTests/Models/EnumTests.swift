@@ -53,3 +53,28 @@ func reportCadenceHasTwoCases() {
     #expect(ReportCadence.daily.rawValue == "daily")
     #expect(ReportCadence.periodic.rawValue == "periodic")
 }
+
+@Test("D-180: externalUpdate is reportable but not user-authored")
+func externalUpdateIsReportableButNotAuthored() {
+    // Two predicates, two questions. **`isUserAuthored` must stay false here**:
+    // FR-2's correction and redaction scope reads it, and an integration's
+    // sentence must never become editable as though the user had typed it.
+    #expect(EventKind.externalUpdate.isReportable)
+    #expect(!EventKind.externalUpdate.isUserAuthored)
+}
+
+@Test("D-072: the machine-authored kinds are neither reportable nor user-authored")
+func machineKindsAreNeitherReportableNorAuthored() {
+    for kind in [EventKind.created, .statusChanged, .standupReported] {
+        #expect(!kind.isReportable, "\(kind.rawValue) should not be reportable")
+        #expect(!kind.isUserAuthored, "\(kind.rawValue) should not be user-authored")
+    }
+}
+
+@Test("the kinds the user types are both")
+func typedKindsAreBoth() {
+    for kind in [EventKind.note, .blockedReason] {
+        #expect(kind.isReportable, "\(kind.rawValue) should be reportable")
+        #expect(kind.isUserAuthored, "\(kind.rawValue) should be user-authored")
+    }
+}

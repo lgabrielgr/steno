@@ -8,7 +8,7 @@ import Testing
 
 @Test("work that finishes inside the budget returns its value")
 func fastWorkSurvivesTheDeadline() async throws {
-    let value = try await withDeadline(.seconds(30)) { 42 }
+    let value = try await withDeadline(.seconds(30), throwing: AIError.timedOut) { 42 }
     #expect(value == 42)
 }
 
@@ -18,7 +18,7 @@ func slowWorkLosesTheRace() async {
     // operation's result without racing the sleeper — the test then hangs
     // rather than failing, which is itself the signal.
     await #expect(throws: AIError.timedOut) {
-        try await withDeadline(.milliseconds(10)) {
+        try await withDeadline(.milliseconds(10), throwing: AIError.timedOut) {
             try await Task.sleep(for: .seconds(60))
             return 1
         }
@@ -30,7 +30,7 @@ func realFailuresPropagate() async {
     // A timeout that masked every failure as `.timedOut` would tell the user
     // the provider was slow when their key was rejected.
     await #expect(throws: AIError.invalidCredential) {
-        try await withDeadline(.seconds(30)) {
+        try await withDeadline(.seconds(30), throwing: AIError.timedOut) {
             throw AIError.invalidCredential
         }
     }
@@ -49,7 +49,7 @@ func cancellationStaysInsideTheContract() async {
     // `withDeadline` stops mapping. Mutation: remove its `catch is
     // CancellationError`. Red.
     let task = Task {
-        try await withDeadline(.seconds(60)) {
+        try await withDeadline(.seconds(60), throwing: AIError.timedOut) {
             try await Task.sleep(for: .seconds(60))
             return 1
         }

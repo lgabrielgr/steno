@@ -4504,3 +4504,599 @@ state. A collection answers *what* was returned. It never answers *whether anyon
 `once a list arrives, the remedy becomes choosing rather than refreshing`, and `a key that can use
 no models is told so, not told to refresh`. Each was mutation-checked by restoring the array as the
 evidence; each turns red alone.
+
+---
+
+### D-164 — Connectors take a `SourceRefSnapshot`, which §5.1's printed signature does not
+
+**2026-09-26** · M4-01 · **Status:** accepted
+
+`SourceConnector.canHandle` and `.fetch` take a `SourceRefSnapshot` value — `refID`, `kind`,
+`identifier`, `url`, `lastFetchedAt` — rather than the `SourceRef` row §5.1 prints. `Sendable` is
+also added to the protocol.
+
+**Why:** §5.1's signature does not compile on this project's terms. `SourceRef` is an `@Model`
+class and therefore not `Sendable`; `fetch` is `async`, so the argument crosses an isolation
+boundary; `SWIFT_VERSION` is 6.0, which makes that an error rather than a warning. This is the same
+wall `GatheredWindow` exists for — `TaskItem` and `Event` cannot cross into an `AIProvider` either
+(D-065) — and taking it now keeps the workaround out of M4-02, whose review gate is Atlassian's
+REST API rather than the shape of a protocol.
+
+`since` stays in the signature even though the snapshot carries `lastFetchedAt`, so refresh policy
+stays in the service: a connector reading the snapshot's timestamp would be deciding what "since"
+means, and M4-05's catch-up pass needs to pass something else.
+
+Handled like D-131 rather than as a spec amendment — recorded in the protocol's own doc comment and
+declared in the PR body, per CLAUDE.md. The deviation is forced, local, and visible where a reader
+of the protocol meets it.
+
+---
+
+### D-165 — No case of `SourceError` carries a free-form `String`, and `.notFound` is its own case
+
+**2026-09-26** · M4-01 · **Status:** accepted
+
+Eight cases, none with an associated `String`: `notConfigured`, `invalidCredential`, `notFound`,
+`network`, `timedOut`, `rateLimited(retryAfter:)`, `unavailable(status:)`, `invalidResponse`. A
+`metricsLabel` supplies the log vocabulary and `LocalizedError` the banner wording, both spelled out
+rather than derived from `String(describing:)`.
+
+**Why:** D-132's property, inherited deliberately. The obvious shape for `invalidResponse` is
+`(reason: String)`, and the obvious reason string is built from the API's own response — which on
+*this* layer means ticket titles, comment bodies and assignee names inside a value the logging path
+prints, against §8. Typed cases make "a `SourceError` is always safe to log" true of the type rather
+than of every future connector's discipline.
+
+`.notFound` is separate because it is **permanent**: a mistyped ticket key in a task title will
+never resolve, and reporting it as `.network` sends the user to check their wifi over a typo. It is
+also the one failure whose fix is in the task title rather than in the app.
+
+**No retry suppression.** A permanently-missing ref is re-attempted every pass, forever. The
+alternative needs a persisted per-ref failure record — and therefore export, import and merge rules
+for it — to save one request per thirty minutes on a ref the user will notice and fix.
+
+M4-02 adds a `credentialExpired` sibling for §5.2's 401 handling; that is a compile error at every
+exhaustive switch, which is the intent.
+
+**Falsified by** `every case has its own metrics label`, `§8: no label or message carries an
+associated value`, and `every case explains itself to the user`.
+
+---
+
+### D-166 — The registry routes on `canHandle` *and* configuration; order is priority; `.unhandled` is silent
+
+**2026-09-26** · M4-01 · **Status:** accepted
+
+`SourceRegistry.dispatch` returns `.ready(connector)` for the first connector in registration order
+that claims the ref *and* is configured, `.notConfigured` when one claims it but none is configured,
+and `.unhandled` when nothing claims it. Connectors are fixed at `init`; there is no `register()`.
+
+**Why:** three outcomes rather than an optional, because `SourceRefreshService` accounts for each
+differently — one is fetched, one is reported to the user as an integration awaiting setup, and one
+is dropped without a trace.
+
+**`.unhandled` is the normal case, not an error.** `SourceRefKind.url` has no connector in any
+planned milestone, and FR-1.5's extractor creates one for every link the user pastes. Logging it, or
+counting it as a failure, would put a permanent warning in front of a user who did nothing wrong —
+and FR-5's reasoning applies: a warning that always fires is one they learn to ignore.
+
+**Configuration is part of the routing decision**, not a check the service makes afterwards.
+With two connectors claiming one kind — M5's MCP server and a native connector — an unconfigured
+first one must not shadow a configured second.
+
+**Registration order is priority, and it lives at the composition root** as one readable array
+literal. Ordering decided by which Settings pane the user happened to open first is not a routing
+rule anyone can reason about.
+
+**Falsified by** `registration order is priority among two claimants` (whose expectation order
+deliberately disagrees with registration order, so an implementation ignoring order fails),
+`configuration is part of routing: an unconfigured first claimant does not shadow`, and `a ref no
+connector claims is unhandled, and that is not an error`.
+
+---
+
+### D-167 — `SourceRefreshService`'s refresh methods do not throw — §5.5 as a signature
+
+**2026-09-26** · M4-01 · **Status:** accepted
+
+`refreshDue(olderThan:)` and `refresh(taskIDs:)` are `async` and **not** `throws`. Every failure —
+a connector's, a candidate query's, the save's — is captured in the returned `RefreshOutcome` and
+logged.
+
+**Why:** §5.5 says a failed integration must never block report generation and §7.4 makes arriving
+empty-handed a P0 failure. Expressed as a signature, there is no error a caller could be handed and
+therefore no path on which a caller could forget to degrade. `StandupSummarizer.summarize` has no
+`throws` for precisely this reason (M3-03), and the argument is the same one: a rule a type enforces
+survives the next four connectors, where a rule review enforces does not.
+
+`@MainActor` because `ModelContext` is not `Sendable`; `now` injected so timestamps are assertable;
+`save` injected because a real `ModelContext` cannot be made to fail on demand and the rollback is
+the path that most needs a test — all three for the reasons `NoteService`, `StatusService` and
+`CaptureService` already record.
+
+`RefreshOutcome` carries **counts, not collections**, per D-163: an empty array is never evidence
+that nothing was fetched, so `attempted` is carried explicitly rather than inferred. `readFailed`
+and `saveFailed` are separate fields, because a candidate query that failed means the pass never
+ran where a refused write means it ran and was discarded — the same reason
+`StandupDraftModel.lastError` and `.notice` are separate.
+
+**Falsified by** `a connector that always throws does not block report generation` and `a pass that
+attempted nothing is distinguishable from one that failed`.
+
+---
+
+### D-168 — External state reaches a report only as `externalUpdate` events
+
+**2026-09-26** · M4-01 · **Status:** accepted · **spec amendment:** REQUIREMENTS.md §5.2, v1.22
+
+A fetch that finds a change appends an `externalUpdate` event; `ReportGatherer` already collects
+every non-redacted event in the window and hands it to both the raw renderer and §7.3's prompt.
+`cachedSummary` is not injected into the report text or the prompt. Its two jobs are change
+detection and the app's staleness surface.
+
+**Why:** §5.2's "a report can be generated offline with last-known state" and the task's "nothing
+in this task may reference the AI layer" cannot both be honoured at face value — putting cached
+state into a *report* means editing M2-02's renderer **and** `StenoKit/AI/StandupPrompt.swift`.
+Adding it to the renderer alone is worse than either: the AI-polished draft would silently drop
+ticket state the offline fallback displayed, breaching the coverage rule D-156 settled.
+
+The event log is the integration point, which needs no change to either report path — see D-180 for
+the one thing that did have to change. §5.2 is amended rather than left as a reading someone has to
+reconstruct; the wording is in REQUIREMENTS.md v1.22, which points here.
+
+---
+
+### D-169 — The first observation of a ref is an event
+
+**2026-09-26** · M4-01 · **Status:** accepted
+
+The first successful fetch of a ref (`lastFetchedAt == nil`) appends an `externalUpdate` whose body
+is the connector's `summary`. Every later fetch appends only when `changes` is non-empty. Blank
+strings are dropped on both paths.
+
+**Why:** §3.3 says the event is created when a fetch "finds a change", and read strictly the first
+fetch finds none. But under D-168 these events are the only route external state takes into a
+report, so suppressing the first leaves the first stand-up after enabling an integration with
+nothing from it — which reads as a broken integration rather than as a quiet one.
+
+The cost is one event per ref, once ever: roughly one line per task under D18's 20-task cap, and
+only on the first pass after a connector is configured. The benefit is that the first report carries
+the ticket state the connector exists to supply.
+
+`ExternalUpdateBody.text` is a pure function returning `String?`, so "when is an event due" is one
+testable expression rather than a condition spread through the apply loop. A blank summary or an
+all-blank `changes` array returns `nil`: `"PAY-421: "` in a stand-up is worse than silence, which is
+D-152's rule one layer down.
+
+**Falsified by** `the first observation of a ref reports its summary`, `a later fetch with no changes
+says nothing`, `a later fetch reports its changes, not its summary`, and `blank content is dropped on
+both paths`.
+
+---
+
+### D-170 — No fetch coalescing across rows that share an identifier
+
+**2026-09-26** · M4-01 · **Status:** accepted
+
+The same ticket key on two tasks is two `SourceRef` rows, and a pass fetches it twice — each with
+its own `since`.
+
+**Why:** §3.4 is explicit that two tasks referencing one resource is a row each. Coalescing needs
+one `since` for both rows, and the only safe choice — the earlier — hands the row with the later
+timestamp changes it has already reported, producing a **duplicate `externalUpdate` in the next
+report**. A repeated bullet in a stand-up the user reads aloud is a worse defect than a second HTTP
+request; D18 caps a project at about twenty tasks; and §5.5 asks for best-effort rather than for
+efficiency. Recorded so the next reader does not "fix" it.
+
+**Falsified by** `two rows sharing one identifier are each fetched with their own since`.
+
+---
+
+### D-171 — `lastFetchedAt` is the app's clock; the connector's `fetchedAt` lives only in the payload
+
+**2026-09-26** · M4-01 · **Status:** accepted
+
+`SourceRef.recordFetch` is called with the service's injected `now()`. `SourceUpdate.fetchedAt`,
+which the connector supplies, is written only into the event's `ExternalUpdatePayload`. The `Event`
+timestamp is also `now()`.
+
+**Why:** §10.1 resolves `cachedSummary` and `lastFetchedAt` as a pair, later timestamp winning. A
+value derived from a remote server's clock makes that comparison depend on two machines' skew
+against a third, so a merge could prefer the older observation — and `SourceRef.recordFetch`'s own
+doc comment already exists because a caller able to desynchronize that pair "could produce a record
+the merge cannot order". The connector's timestamp is kept where it is diagnostic rather than
+load-bearing.
+
+**Falsified by** `a successful fetch caches the summary and stamps the app's clock`, whose fixture
+sets the connector's `fetchedAt` to a different instant than the service's clock, so a service
+reading the wrong one lands on the wrong value.
+
+---
+
+### D-172 — One save per pass, with a rollback, and `.stenoDidWrite` posted once
+
+**2026-09-26** · M4-01 · **Status:** accepted
+
+Every write of a pass — each `recordFetch`, each inserted `Event` — is committed by a single
+`save`. On failure: `context.rollback()`, `saveFailed = true`, and a log line. `.stenoDidWrite` is
+posted once, after a successful save, and only when the pass actually wrote something.
+
+**Why the rollback is load-bearing rather than tidy:** inserted events left in a dirty context are
+committed by the *next* unrelated save — a capture, a status change, a note — which turns a refresh
+failure into phantom `externalUpdate` rows appearing in a later report with nothing to trace them
+to. `CaptureService` and `MainWindowModel+Saving` already carry this reasoning; this is the first
+place where the orphaned rows would be invisible rather than merely stale.
+
+One save rather than one per ref because §5.5 is best-effort: a pass that cannot be persisted is
+retried in thirty minutes, and a partially-saved pass is harder to reason about than a discarded
+one.
+
+The notification follows D-031's rule — posted at the write, after it lands — and is withheld from
+a pass that wrote nothing, so a launch with no changes does not make three surfaces refetch.
+
+**Falsified by** `a failed save rolls back, and a later successful pass finds no phantom rows` —
+whose second, *succeeding* pass is what makes "the store is empty" falsifiable at all — and `one
+.stenoDidWrite per writing pass, and none for a pass that wrote nothing`. The second test needed
+strengthening: its original "wrote nothing" case used a pass with no configured connector, which
+returns before the write phase is reached, so a mutation posting unconditionally survived it. It now
+also drives a pass that attempts two fetches and fails both.
+
+---
+
+### D-173 — A refresh never stamps `task.modifiedAt`
+
+**2026-09-26** · M4-01 · **Status:** accepted
+
+The apply loop writes `SourceRef.cachedSummary`, `SourceRef.lastFetchedAt` and new `Event` rows.
+It does not touch `TaskItem.modifiedAt`.
+
+**Why:** `NoteService.addNote` declines to stamp it on the grounds that a note is a fact about the
+log rather than a mutation of the task. A refresh is one step further removed — nothing about the
+task changed, and the app was not even asked. Stamping it would let a task whose ticket was merely
+*looked at* outrank, in §10.1's "later `modifiedAt` wins" merge, a task whose title was genuinely
+edited on another Mac. The launch pass runs on every launch, so that would not be a rare loss: it
+would be the common case, and the user would watch their own edit silently revert after an import.
+
+**Falsified by** `a refresh never stamps task.modifiedAt`, which writes both a cache and an event in
+the same pass.
+
+---
+
+### D-174 — `ExternalUpdatePayload` encodes with `.sortedKeys`
+
+**2026-09-26** · M4-01 · **Status:** accepted
+
+The `externalUpdate` event's payload is a six-field `Codable` struct encoded with
+`outputFormatting = .sortedKeys` and `dateEncodingStrategy = .iso8601`. `encoded()` returns `Data?`
+rather than throwing.
+
+**Why:** `Event.payload` is exported as base64 and `ExportRecords` keeps it byte-exact by design.
+Swift's `Codable` emits keys in an internal dictionary order that **differs between processes**, so
+without `.sortedKeys` two exports of an unchanged store are byte-different files — precisely the
+defect v1.16 and D-090 already fixed once at the envelope level. `StandupReportedPayload` gets away
+with a bare `JSONEncoder` because it has exactly one key; this has six.
+
+`.iso8601` because `Date`'s default strategy is a `Double` of seconds since 2001, which round-trips
+but is unreadable in the one file §10.2 promises is diffable.
+
+`Data?` rather than `throws`, following `StandupReportedPayload.encoded()`: a payload that cannot be
+encoded must not abort a pass whose cache write is fine. The cost of a missing payload is a
+diagnostic, not a report.
+
+**Falsified by** `the payload's keys are sorted, so an unchanged store re-exports byte-identically`,
+which asserts exact bytes against a fixture whose sorted key order is deliberately *not* its
+declaration order — so removing `.sortedKeys` fails in nearly every run rather than one in six, and
+a formatter that merely preserved declaration order fails too.
+
+---
+
+### D-175 — The draft's window may be replaced once, before polish, and only while the text is pristine
+
+**2026-09-26** · M4-01 · **Status:** accepted
+
+`StandupDraftModel.begin` now runs two stages in one task: `refresh` (FR-4 step 4), then `polish`
+(step 5). The sheet opens immediately on the cached raw report with Copy live. When the pass wrote
+something *and* the text is still pristine, the model adopts the re-gathered window and re-renders
+the draft from it. One generation counter covers both stages; a superseded refresh returns `nil`
+from `adopt` and the polish is never started.
+
+**Why the two stages rather than a wait:** FR-4 sequences the refresh between gathering and the AI
+request and calls the indicator "visible but non-blocking". Those pull apart — events appended by
+the refresh are timestamped after the window was gathered — and blocking the sheet on the network is
+the exact failure §7.4 exists to prevent.
+
+**Why the pristine gate is not optional:** `StandupDraftModel.window` is documented as frozen, and
+the honest statement is that it is frozen *at Copy*, not at Prepare. Replacing it under an untouched
+draft is safe, because the text is re-rendered from the same window. Replacing it under a **typed**
+draft would advance `lastStandupAt` to a window end past `externalUpdate` events the user's text
+never mentions — consuming them from the window and losing them from recall, which is the harm D-076
+exists to prevent. So a typed draft keeps its original window and the refresh's events fall into the
+next report.
+
+`sourceNotice` is its own property rather than a reading of `lastError` or `notice`: those two are
+already separate because one means a write failed and retrying is safe while the other means the
+write landed, and this third means neither — the data is simply old.
+
+The closure is assembled in `MainWindowModel+Standup`, beside `standupPolish`, because the pass
+writes and then re-reads and `StandupDraftModel` deliberately holds services rather than a
+`ModelContext`. A failed re-gather returns the original window rather than failing: the events are
+already saved, and having them appear in the next report is strictly better than refusing a draft
+the user is standing up to read.
+
+**Falsified by** `a pass that wrote something replaces the window and re-renders the draft`, `a
+typed draft keeps its own text and its original window`, `dismissing during a refresh touches no
+state, and skips the polish entirely`, and `preparing a second window supersedes the first refresh`
+— each waiting for the stage's real suspension first, because a `Task` has not started when `begin`
+returns.
+
+---
+
+### D-176 — The staleness label is app-side only; the clipboard text is untouched
+
+**2026-09-26** · M4-01 · **Status:** accepted
+
+§5.2's "clearly labeled as stale" is a banner in the draft sheet, built by `SourceNotice.text(for:
+now:)` from the outcome's `oldestFetch` and its failures' `displayName`. `SlackMarkdown`'s output,
+the clipboard, and `StandupReport.markdownBody` are unchanged. §5.5's launch pass shows nothing at
+all and logs counts only.
+
+**Why:** the label exists so the user knows how much to trust the draft before reading it out; the
+audience of the stand-up does not need fetch timestamps. FR-4 step 6 makes the draft editable, so a
+user who *wants* to say "Jira may be behind" can type it. A line injected into the markdown would
+travel to Slack on most reports, because the launch pass runs on a thirty-minute rule.
+
+**One sentence, not three.** The priority order is a refused save, then the first fetch failure,
+then an unconfigured integration, then a failed candidate read, then merely-old data — and the last
+only once it is a day behind, because "twenty minutes old" is noise about a report whose window is a
+day wide. A banner listing every complaint about a report the user is about to read aloud is one they
+stop reading, and the failure is the most actionable of them.
+
+`RefreshOutcome.Failure` carries the connector's `displayName` for this: "a source couldn't be
+reached" is unactionable where "Jira couldn't be reached" points at the right Settings pane. It
+carries no response content, which is what keeps D-165's logging property intact.
+
+The launch pass is silent because §5.5 makes it a warm-the-cache job — a visible indicator invites
+the user to wait for something designed not to be waited on.
+
+**Falsified by** the eleven `SourceNoticeTests` and by `the staleness label reaches the sheet and
+never the clipboard`, which commits the draft and compares `markdownBody` against the on-screen
+text.
+
+---
+
+### D-177 — `withDeadline` moves to `Support/` with its timeout error injected
+
+**2026-09-26** · M4-01 · **Status:** accepted
+
+`StenoKit/AI/Deadline.swift` becomes `StenoKit/Support/Deadline.swift`, and `withDeadline` takes
+`throwing timeoutError: E` where `E: Error & Sendable`. The AI call sites pass `AIError.timedOut`;
+the refresh service passes `SourceError.timedOut`. The parameter is required, not defaulted.
+
+**Why:** the source layer needs a per-fetch deadline for the same reason the AI layer does, and
+cannot use the function where it stood — it threw `AIError`, and §13 forbids the source layer naming
+an AI type. The alternatives were duplicating forty lines of cooperative-cancellation semantics
+whose doc comment records a review round and a CI flake (two copies, and the next fix lands on one),
+or a second deadline reinventing the same race.
+
+Required rather than defaulted, because a default would put one layer's error type in a signature
+both layers share — which is the coupling the move exists to remove.
+
+A pure refactor: no behaviour change, the doc comment moves intact, and `DeadlineTests`,
+`AnthropicProviderBudgetTests` and `AnthropicProviderTests` are the gate.
+
+---
+
+### D-178 — Four fetches in flight, an 8-second per-fetch deadline, a 10-second pass budget
+
+**2026-09-26** · M4-01 · **Status:** accepted
+
+`SourceRefreshService` runs at most four fetches concurrently, each inside `perFetch` (default 8s),
+with the pass bounded by `budget` (default 10s). All three are injected; tests pass milliseconds.
+
+**Why these numbers:** a `periodic` window under D18's 20-task cap can carry around twenty refs.
+Serial at a second each is twenty seconds of a stand-up the user is already late for; twenty-wide is
+how a connector gets rate limited on its first pass. Four puts the common case near five seconds.
+Eight seconds per fetch keeps one unresponsive ticket from consuming the pass. Ten seconds for the
+pass is the most worth spending before polishing what we have, given a usable raw report is already
+on screen and D-145's twenty-second AI budget follows it.
+
+**The budget is a member of the task group, not a check between results — and that correction is
+the whole reason this entry is long.** The first implementation tested elapsed time each time
+`group.next()` returned, which cannot fire while every fetch is still in flight: a pass whose
+connectors all hang therefore ran for the *per-fetch* deadline instead of the budget, and the first
+hang to time out was recorded as a failure rather than skipped. A sentinel task that sleeps for the
+budget and yields `.budgetExpired` fixes it.
+
+**The budget is not a deadline wrapped around the group**, which would discard every completed fetch
+because the slowest one overran — the opposite of best-effort. On expiry, nothing further is started,
+in-flight fetches are cancelled, unstarted refs are counted `skipped`, and everything already
+fetched is applied. A fetch that beats its cancellation still carries data and is kept: discarding it
+would waste a completed request. `skipped` is not `failures` — nothing went wrong with a ref the
+clock ran out on.
+
+**Falsified by** `one hanging fetch times out without taking the pass with it` and `the pass budget
+keeps completed fetches and counts the rest as skipped`, the second of which is what caught the
+defect above, on `failures.isEmpty`.
+
+---
+
+### D-179 — The production registry is empty, and the refresh UI is visually unverified until M4-02
+
+**2026-09-26** · M4-01 · **Status:** accepted
+
+`StenoApp` builds `SourceRegistry(connectors: [])`. No type in the shipping target conforms to
+`SourceConnector` this milestone, so every ref dispatches `.unhandled`, both refresh paths are
+no-ops, and the sheet's "Refreshing…" line and staleness banner are unreachable in the running app.
+Their state is covered by `StandupDraftRefreshTests`; the pixels are checked in M4-02.
+
+**Why:** the protocol, the cache and the never-block guarantee are worth reviewing without a
+vendor's REST quirks in the same diff — the shape M3-01 shipped before M3-02 supplied a provider.
+Degradation still ships with the feature (§13), because the degradation *is* the feature here.
+
+Three alternatives were declined: an env-gated stub connector inside `StenoKit` (precedent exists in
+`KeychainSelftest` and `ModelsSelftest`, but it puts a fake connector in the shipping bundle to
+verify a view M4-02 will exercise anyway); a `refresh-selftest` CLI subcommand (it would write to
+the real store and still show nothing about the sheet); and shipping the UI later, which breaks §13.
+
+The PR body says the affordances are verified at the view-model level and not visually. Claiming
+otherwise would be the kind of unmeasured assertion D-025 already cost this project once.
+
+**The launch pass fires from `StenoApp`, not from `MainWindowModel.init`.** The CLI bundle builds a
+store too, and `steno export` must not open network connections — §9.4 denies them in tests, and a
+subcommand reaching Atlassian would be a surprise in a tool the user runs from a script. M4-05
+replaces the single call with its scheduled equivalent.
+
+---
+
+### D-180 — `EventKind.isReportable`, so both report paths speak an integration's update
+
+**2026-09-26** · M4-01 · **Status:** accepted · found by building, not by design
+
+`EventKind` gains `isReportable` — true for `note`, `blockedReason` and `externalUpdate`.
+`RawReportSections.isBullet` and `StandupSummarizer`'s coverage rule both read it.
+`isUserAuthored` is unchanged, and `externalUpdate` stays `false` there.
+
+**Why this had to be decided here.** `RawReportSections` filtered its detail lines on
+`isUserAuthored`, and its doc comment said so deliberately: the kind-based filter was chosen "so
+M4's `externalUpdate` … gets a deliberate decision from whoever adds it, at the point they can judge
+whether a Jira comment belongs in a spoken stand-up". M4-01 is the task that made the source layer
+write them, so it is that point.
+
+**The defect the deferral was hiding.** §7.3's prompt has always sent every kind the gatherer
+returns, `externalUpdate` included — `StandupPrompt.label` has a case for it. So the AI draft could
+say "PAY-421 moved to In Review" while §7.4's fallback could not: the polished path was strictly
+*better* than the path it degrades to, which is the one asymmetry the coverage rule exists to forbid.
+And under D-168 these events are the only route external state takes into a report, so a renderer
+that drops them leaves §5.2's offline guarantee unmet outright.
+
+**Why a second predicate rather than a wider `isUserAuthored`.** The two answer different questions
+for different layers. FR-2's correction and redaction scope reads `isUserAuthored` — widening it
+would have made an integration's sentence editable and redactable as though the user had typed it,
+which is a worse bug than the one being fixed. `created` and `statusChanged` stay out of both, per
+D-072: their bodies are machine-authored strings the user would otherwise read to their team.
+
+**Two renames came with it, and they are not cosmetic:** `RawReportSections.authored` →
+`reportable`, and `StandupSummarizer.carriesUserWords` → `carriesReportableContent`. Both names
+asserted "the user typed this", which the bodies no longer check, and a name asserting a false
+property is this project's most frequently repeated defect.
+
+**This is the one place M4-01 edits the AI layer**, against the task file's "nothing in this task may
+reference the AI layer". It is one predicate and one rename in `StandupSummarizer`, it introduces no
+reference to the source layer, and it is declared in the PR body. The alternative was shipping a
+draft that can say less than its own fallback.
+
+**Falsified by** `§7.4's fallback speaks an integration's update`, `a task whose only news is an
+external update still counts as progressed`, `D-072 still holds: created and statusChanged stay out
+of the report`, `a draft that omits a task whose only news is an external update falls back`, and
+`externalUpdate is reportable but not user-authored`. The `.todo` status in the coverage test is
+deliberate: an `.inProgress` or `.blocked` task is covered by status alone and could not tell the two
+predicates apart.
+
+---
+
+### D-181 — A refresh result is dropped when a concurrent pass has already applied one
+
+**2026-09-26** · M4-01 · **Status:** accepted, but **demoted to defence-in-depth by D-183** · found
+in review of PR #42
+
+> **This entry's original reasoning was wrong, and the correction is D-183.** It claimed "nothing is
+> lost by dropping the later result: the next pass sends the winner's newer stamp as `since`, so any
+> change the dropped fetch saw and the winner did not is reported then." That is false. The winner's
+> stamp is *later* than the moment the loser observed its change, so asking `since` that stamp can
+> **exclude** the change permanently — in a recall tool, the worst class of bug there is. Raised by
+> Copilot, against this text. The guard stays, because a write that clobbers a newer one is still
+> wrong, but it is no longer the mechanism that makes overlapping passes safe: D-183's serialization
+> is, and this should now never fire in the running app.
+
+`FetchResult` carries `observedAt` — the row's `lastFetchedAt` at dispatch, which is also what was
+sent as `since`. The write phase applies a result only while the row still holds that value;
+otherwise it counts `superseded` and drops it. `RefreshOutcome.superseded` reports the count.
+
+**Why:** §5.5's launch pass is fire-and-forget, and nothing stops the user pressing Prepare while it
+is in flight — which builds a second `SourceRefreshService` over the same `mainContext`. Both passes
+snapshot the same ref with the same `since`, both fetch, and without this guard both apply: **two
+first-observation events for one ref**, and a cache moved backwards to whichever read landed last.
+That is the duplicate-bullet-in-a-spoken-stand-up harm D-170 declined to risk for coalescing, so it
+cannot be acceptable here either. M4-05 adds a third trigger, which makes the overlap routine rather
+than incidental.
+
+**An optimistic check rather than a queue.** The rejected alternative was serializing the passes
+behind a shared coordinator: more machinery, a new concurrency primitive added at review time, and it
+would make correctness depend on every future trigger remembering to go through it. This makes the
+*data* correct instead, which is the shape the rest of this codebase uses for invariants.
+
+**What it does *not* do is make the dropped result recoverable** — see the note above. That is why
+D-183 stops the overlap happening rather than reconciling it afterwards.
+
+`superseded` is its own count rather than folded into `skipped`, per D-163: the clock ran out on one,
+and the other arrived to find its work already done.
+
+**Falsified by** `two overlapping passes do not both apply: the second's result is superseded`.
+
+---
+
+### D-182 — A draft that has been copied or dismissed gets no polish
+
+**2026-09-26** · M4-01 · **Status:** accepted · found in review of PR #42
+
+`StandupDraftModel.adopt` returns `nil` — which skips the polish stage entirely — when the task has
+been cancelled or the phase has moved past `.editing`. A draft the user has merely *typed* into
+still gets its polish attempt, as M3-03 shipped it.
+
+**Why:** `commit` cancels the polish task and moves the phase to `.copied`, but Swift cancellation
+is cooperative, so a refresh suspended on the network when the user pressed Copy still resumes. It
+then called `polish`, sending a paid AI request for a draft already on the clipboard whose answer
+`install` was guaranteed to refuse.
+
+**The typed case is deliberately left alone.** `install` refuses to overwrite the user's words when
+it returns, so that call is also wasted — but narrowing it is a change to M3-03's behaviour rather
+than a fix to M4-01's, and it belongs with whoever measures what the call costs.
+
+**Falsified by** `a draft copied while the refresh is in flight is never polished`.
+
+---
+
+### D-183 — Refresh passes are serialized, because dropping one can lose a change
+
+**2026-09-26** · M4-01 · **Status:** accepted · found in review of PR #42, against D-181
+
+`SourceRefreshGate` runs refresh passes one at a time. `SourceRefreshService` takes one, defaulting
+to `SourceRefreshGate.shared`, and **both** entry points — `refreshDue` and `refresh(taskIDs:)` — go
+through it. Tests inject their own instance so one test's pass never queues behind another's.
+
+**Why serializing rather than reconciling.** §5.5 gives the app three triggers: the launch pass
+(fire-and-forget), "Prepare Stand-up", and M4-05's scheduled run. Two can overlap trivially — the
+user presses Prepare while the launch pass is still on the network. D-181 handled that optimistically:
+let both run, and drop the second result if the row had moved underneath it. That is unsafe, because
+**`lastFetchedAt` is deliberately the app's clock** (D-171): the winner stamps a time later than the
+instant the loser observed its change, and the next pass, asking `since` that later stamp, may never
+be told about the change again. A ticket movement silently absent from a stand-up is precisely the
+failure this product exists to prevent.
+
+Serializing removes the situation instead of reconciling it: the second pass reads its rows after the
+first has written, sends the newer `since`, and its answer is about work the first genuinely did not
+see. No result is thrown away, so no change can be lost with one.
+
+**The cost is a wait, never a block.** A Prepare arriving during a launch pass waits for it, bounded
+by that pass's own budget (D-178) — and FR-4 step 4 stays non-blocking regardless, because the sheet
+is already open on cached text with Copy live. Cancelling the launch pass instead was rejected: it
+covers every non-done task where Prepare covers only the window's, so cancelling would drop refs
+nothing else in the session revisits.
+
+**A shared default rather than a coordinator each caller must remember.** `.shared` is the default
+parameter value, so a new trigger is serialized by construction. D-181's write-phase guard is kept as
+defence for any future path that supplies its own gate, and has its own test for that case.
+
+**What this does not fix, and M4-02 owns it.** The same app-clock `since` can miss a change even with
+no concurrency at all: if a connector reveals a change only after the pass that should have seen it —
+replication lag, or a changelog window that is not monotonic — the next `since` is already past it.
+The durable fix is a watermark derived from what the connector itself confirms it has reported, plus
+a deliberate overlap and de-duplication on the way in. That is a decision about one vendor's API
+semantics, it needs a real connector to test against, and it may need a field on `SourceRef` (and
+therefore export, import and merge rules). Recorded here and in M4-02's task notes rather than left
+for someone to rediscover.
+
+**Falsified by** `two triggers firing together are serialized, so the second sees the first's write`,
+`the launch pass and a Prepare pass are serialized against each other` — which exists because a
+mutation routing only `refresh(taskIDs:)` through the gate survived without it — and
+`a pass that bypasses the gate still cannot clobber a newer write`, which keeps D-181 under test.

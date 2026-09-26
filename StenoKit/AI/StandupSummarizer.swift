@@ -142,7 +142,8 @@ public struct StandupSummarizer: Sendable {
         // counts a task named by a bullet with no words in it, which D-152 then
         // drops at render time (PR #37 review).
         let reported = DraftSections.reportedTaskIDs(in: draft)
-        return window.tasks.filter { !reported.contains($0.id) && carriesUserWords($0) }.count
+        return window.tasks
+            .filter { !reported.contains($0.id) && carriesReportableContent($0) }.count
     }
 
     /// Whether the fallback would say something about this task that a draft
@@ -154,6 +155,12 @@ public struct StandupSummarizer: Sendable {
     /// window than the deterministic path it replaces.
     ///
     /// - **Authored events.** The obvious half: words the user typed.
+    /// - **An `externalUpdate` event.** What an integration reported about the
+    ///   user's ticket. Added by M4-01 (D-180), which made `RawReportSections`
+    ///   speak these events: the fallback now says "PAY-421 moved to In Review",
+    ///   so a draft omitting that task would say less than the fallback — the
+    ///   regression this count exists to catch. `EventKind.isReportable` is the
+    ///   shared predicate, so the two paths cannot drift apart.
     /// - **A blocked reason.** `GatheredTask` sources it *independently of the
     ///   window* (D-069), precisely so "blocked last week, still blocked,
     ///   nothing new said" reports its reason — the case where `events` is
@@ -175,9 +182,12 @@ public struct StandupSummarizer: Sendable {
     ///
     /// A blocker nobody mentions is the worst thing this product can do to a
     /// stand-up; a live task nobody mentions is the second worst.
-    private static func carriesUserWords(_ task: GatheredTask) -> Bool {
+    /// Renamed from `carriesUserWords` when `externalUpdate` joined the rule: an
+    /// integration's sentence is reportable content the user never typed, so the
+    /// old name asserted a property the body no longer has.
+    private static func carriesReportableContent(_ task: GatheredTask) -> Bool {
         if task.status == .inProgress || task.status == .blocked { return true }
-        return task.blockedReason != nil || task.events.contains { $0.kind.isUserAuthored }
+        return task.blockedReason != nil || task.events.contains { $0.kind.isReportable }
     }
 
     /// §7.4's raw report for this window: M2-02's two pure functions, unchanged.
