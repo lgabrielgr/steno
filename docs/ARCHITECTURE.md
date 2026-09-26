@@ -61,7 +61,12 @@ inexplicable revert after an import (§10.1).
 
 **The rules, in priority order:**
 
-1. **`AIProvider` and `SourceConnector` never reference each other.** Swapping AI providers
+1. **`AIProvider` and `SourceConnector` never reference each other.** As of M4-01 both layers
+   exist, and the seam held with two declared exceptions: `withDeadline` moved to `Support/` with
+   its timeout error injected rather than being copied (D-177), and `StandupSummarizer`'s coverage
+   rule reads the same `EventKind.isReportable` the renderer does, so the AI path can never say
+   less than its own fallback (D-180). Neither introduces a type from one layer into the other.
+   Swapping AI providers
    must not affect integrations, and vice versa (§5.1, §7.1). A task touching both is probably
    two tasks (§13). The single sanctioned point of contact is §5.4's exposure of MCP tools to
    the AI layer during enrichment — narrow and specified.
@@ -92,7 +97,9 @@ a broad refactor.
 | CloudKit-compatible schema | Defaults or optionals everywhere; no `@Attribute(.unique)` | Domain models (M0-03), asserted in tests | §6 |
 | Secrets never persisted | Keychain only; never SwiftData, `UserDefaults`, plists, logs | Credential layer (M3-01), asserted in export tests (M2.5-01) | §8, §10.3 |
 | Reads only, permanently | No mutating request to Jira or Confluence | Connectors (M4-02, M4-03) | D5 |
-| Integrations never block | A failed fetch degrades to cache, never stops a report | Connector registry (M4-01) | §5.5, §7.4 |
+| Integrations never block | A failed fetch degrades to cache, never stops a report | `SourceRefreshService`'s two refresh methods do not `throw` — there is no error a caller could forget to handle (M4-01, D-167) | §5.5, §7.4 |
+| Both report paths say the same things | The deterministic fallback and the AI draft read one predicate, `EventKind.isReportable`, so a kind either reaches both or neither | `RawReportSections.isBullet` and `StandupSummarizer.carriesReportableContent` (M4-01, D-180) | §5.2, §7.4 |
+| A connector never writes | Only `SourceRefreshService` writes cache rows or `externalUpdate` events, so §3.3 and §5.5 are enforced once rather than per connector | `SourceConnector` has no store access; the service is the sole writer (M4-01, D-172) | §3.3, §5.5 |
 | Views never *query* the store | No `@Query`, no `@Environment(\.modelContext)`; `.modelContainer` not attached to the scene | View models (M0-05) | §14, ARCH §2 rule 2 |
 | Views never *mutate* the store | Domain mutators unreachable from `Steno/` | Domain mutators are `internal` (M1-05), except `Project.lastStandupAt`, a plain property whose own merge rule requires it | §3.2, §10.1, D-033 |
 | Surfaces see each other's writes | Writes through a writing service post `.stenoDidWrite` | `CaptureService` and `StatusService` post; `MainWindowModel`'s own project writes do not (M1-03, M1-05) | D-019, D-035 |
@@ -157,7 +164,9 @@ StenoKit/         framework — everything testable
   Portability/    ExportDocument, ExportRecords, ExportEncoder, ExportFilename
                   (exists, M2.5-01); import and merge      (M2.5-02)
   AI/             AIProvider, AnthropicProvider          (M3)
-  Sources/        SourceConnector, Jira, Confluence, MCP (M4, M5)
+  Integrations/   SourceConnector, SourceRegistry, RefreshPolicy,
+                  SourceRefreshService (+Write), SourceNotice, ExternalUpdate
+                  (exists, M4-01); Jira, Confluence (M4-02/03); MCP (M5)
   Features/       view models, by feature — MainWindow (M0-05), Capture (M1-02),
                   MenuBar (M1-04), Settings (M1-08)
 Steno/            application — views, windows, and @main, nothing else
