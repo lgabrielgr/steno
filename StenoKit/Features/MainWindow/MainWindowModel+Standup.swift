@@ -1,4 +1,5 @@
 import Foundation
+import SwiftData
 
 /// FR-4's stand-up actions: the thin layer between the draft sheet and the
 /// store.
@@ -42,6 +43,53 @@ extension MainWindowModel {
                 modelID: settings.aiSelectedModelID,
                 timeout: AnthropicProvider.recommendedDraftTimeout
             ).summarize(window)
+        }
+    }
+
+    /// §5.5's Prepare-time pass, as `StandupDraftModel` takes it (D-175).
+    ///
+    /// **Assembled here because this is where the store lives.** The pass writes
+    /// (`SourceRefreshService`) and then re-reads (`ReportGatherer`), and
+    /// `StandupDraftModel` deliberately holds services rather than a
+    /// `ModelContext` — so the two-step belongs at the composition root, the way
+    /// `standupPolish` does for the provider.
+    ///
+    /// **The registry is empty until M4-02** (D-179), which makes this a no-op
+    /// returning the window it was given: every ref dispatches `.unhandled`, so
+    /// `didWrite` is false and no re-gather happens.
+    ///
+    /// **A failed re-gather returns the original window rather than failing.**
+    /// §5.5 is best-effort in both directions: the events are already saved, and
+    /// the worst case is that they appear in the next report instead of this one —
+    /// which is strictly better than refusing a draft the user is standing up to
+    /// read.
+    ///
+    /// `static`, so `init` can call it before `self` exists.
+    static func sourceRefresh(
+        context: ModelContext,
+        registry: SourceRegistry,
+        now: @escaping () -> Date,
+        save: @escaping (ModelContext) throws -> Void
+    ) -> @MainActor (GatheredWindow) async -> RefreshedWindow {
+        { window in
+            let outcome = await SourceRefreshService(
+                context: context, registry: registry, now: now, save: save
+            ).refresh(taskIDs: window.tasks.map(\.id))
+
+            guard outcome.didWrite else { return RefreshedWindow(window: window, outcome: outcome) }
+
+            let projectID = window.projectID
+            guard
+                let project = try? context.fetch(
+                    FetchDescriptor<Project>(predicate: #Predicate { $0.id == projectID })
+                ).first,
+                let regathered = try? ReportGatherer(context: context, now: now).gather(
+                    for: project)
+            else {
+                Log.sources.error("refresh could not re-gather the window; keeping the original")
+                return RefreshedWindow(window: window, outcome: outcome)
+            }
+            return RefreshedWindow(window: regathered, outcome: outcome)
         }
     }
 
