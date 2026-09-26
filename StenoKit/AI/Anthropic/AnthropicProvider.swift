@@ -125,7 +125,7 @@ public struct AnthropicProvider: AIProvider {
         key: String,
         timeout: Duration
     ) async throws -> [AIModel] {
-        try await withDeadline(timeout) {
+        try await withDeadline(timeout, throwing: AIError.timedOut) {
             var collected: [AnthropicModel] = []
             var cursor: String?
 
