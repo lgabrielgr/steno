@@ -4991,3 +4991,55 @@ of the report`, `a draft that omits a task whose only news is an external update
 `externalUpdate is reportable but not user-authored`. The `.todo` status in the coverage test is
 deliberate: an `.inProgress` or `.blocked` task is covered by status alone and could not tell the two
 predicates apart.
+
+---
+
+### D-181 — A refresh result is dropped when a concurrent pass has already applied one
+
+**2026-09-26** · M4-01 · **Status:** accepted · found in review of PR #42
+
+`FetchResult` carries `observedAt` — the row's `lastFetchedAt` at dispatch, which is also what was
+sent as `since`. The write phase applies a result only while the row still holds that value;
+otherwise it counts `superseded` and drops it. `RefreshOutcome.superseded` reports the count.
+
+**Why:** §5.5's launch pass is fire-and-forget, and nothing stops the user pressing Prepare while it
+is in flight — which builds a second `SourceRefreshService` over the same `mainContext`. Both passes
+snapshot the same ref with the same `since`, both fetch, and without this guard both apply: **two
+first-observation events for one ref**, and a cache moved backwards to whichever read landed last.
+That is the duplicate-bullet-in-a-spoken-stand-up harm D-170 declined to risk for coalescing, so it
+cannot be acceptable here either. M4-05 adds a third trigger, which makes the overlap routine rather
+than incidental.
+
+**An optimistic check rather than a queue.** The rejected alternative was serializing the passes
+behind a shared coordinator: more machinery, a new concurrency primitive added at review time, and it
+would make correctness depend on every future trigger remembering to go through it. This makes the
+*data* correct instead, which is the shape the rest of this codebase uses for invariants.
+
+**Nothing is lost by dropping the later result.** The next pass sends the winner's newer stamp as
+`since`, so any change the dropped fetch saw and the winner did not is reported then.
+
+`superseded` is its own count rather than folded into `skipped`, per D-163: the clock ran out on one,
+and the other arrived to find its work already done.
+
+**Falsified by** `two overlapping passes do not both apply: the second's result is superseded`.
+
+---
+
+### D-182 — A draft that has been copied or dismissed gets no polish
+
+**2026-09-26** · M4-01 · **Status:** accepted · found in review of PR #42
+
+`StandupDraftModel.adopt` returns `nil` — which skips the polish stage entirely — when the task has
+been cancelled or the phase has moved past `.editing`. A draft the user has merely *typed* into
+still gets its polish attempt, as M3-03 shipped it.
+
+**Why:** `commit` cancels the polish task and moves the phase to `.copied`, but Swift cancellation
+is cooperative, so a refresh suspended on the network when the user pressed Copy still resumes. It
+then called `polish`, sending a paid AI request for a draft already on the clipboard whose answer
+`install` was guaranteed to refuse.
+
+**The typed case is deliberately left alone.** `install` refuses to overwrite the user's words when
+it returns, so that call is also wasted — but narrowing it is a change to M3-03's behaviour rather
+than a fix to M4-01's, and it belongs with whoever measures what the call costs.
+
+**Falsified by** `a draft copied while the refresh is in flight is never polished`.

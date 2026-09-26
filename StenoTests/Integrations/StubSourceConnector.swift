@@ -25,6 +25,9 @@ final class StubSourceConnector: SourceConnector, @unchecked Sendable {
         /// `Deadline.swift` records as the difference between a late answer and a
         /// leaked request.
         case hang
+        /// Answers after `delay`, so a test can hold two passes inside each
+        /// other's window deliberately rather than hoping the scheduler obliges.
+        case slow(SourceUpdate, Duration)
     }
 
     let id: String
@@ -87,6 +90,9 @@ final class StubSourceConnector: SourceConnector, @unchecked Sendable {
         case .hang:
             try await Task.sleep(for: .seconds(60))
             throw SourceError.timedOut
+        case .slow(let update, let delay):
+            try await Task.sleep(for: delay)
+            return update
         }
     }
 

@@ -258,3 +258,26 @@ func asecondPrepareSupersedesTheFirst() async throws {
     #expect(model.text == "second draft")
     #expect(model.window == window)
 }
+
+@MainActor
+@Test("a draft copied while the refresh is in flight is never polished")
+func copyDuringRefreshSkipsThePolish() async throws {
+    let fixture = try ReportFixture()
+    let scripted = ScriptedRefresh()
+    let (model, _) = try draft(fixture, scripted)
+
+    await scripted.waitUntilRefreshing()
+    // Copy is deliberately live during a refresh, so this is a reachable state and
+    // not a contrived one.
+    #expect(model.canCopy)
+    #expect(model.commit(to: fixture.alpha))
+    await scripted.finish()
+
+    // `commit` cancels the task, but cancellation is cooperative: the suspended
+    // refresh still resumes. Before the guard it went on to call `polish`, sending
+    // a paid AI request for a draft already on the clipboard whose answer `install`
+    // would then refuse (Copilot, PR #42).
+    #expect(scripted.polishedWindows.isEmpty)
+    #expect(model.phase == .copied)
+    #expect(model.text == "generated text")
+}

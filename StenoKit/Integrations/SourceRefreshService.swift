@@ -133,6 +133,19 @@ public struct SourceRefreshService {
         let refID: UUID
         let connectorID: String
         let displayName: String
+
+        /// The row's `lastFetchedAt` when this fetch was dispatched — the value
+        /// that was also sent as `since`.
+        ///
+        /// **Carried so the write phase can tell whether the row moved underneath
+        /// it.** Two passes can overlap: §5.5's launch pass is fire-and-forget, and
+        /// the user can press Prepare while it is still in flight, which builds a
+        /// second service over the same `mainContext`. Both would snapshot the same
+        /// ref with the same `since`, and both would then apply — producing two
+        /// first-observation events for one ref and a last-writer cache. Raised by
+        /// Copilot in review of PR #42.
+        let observedAt: Date?
+
         let outcome: Result<SourceUpdate, SourceError>
     }
 
@@ -269,7 +282,8 @@ public struct SourceRefreshService {
         func result(_ outcome: Result<SourceUpdate, SourceError>) -> FetchResult {
             FetchResult(
                 refID: ref.refID, connectorID: connector.id,
-                displayName: connector.displayName, outcome: outcome)
+                displayName: connector.displayName, observedAt: ref.lastFetchedAt,
+                outcome: outcome)
         }
 
         do {

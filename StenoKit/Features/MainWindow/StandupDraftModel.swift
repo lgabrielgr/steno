@@ -243,12 +243,19 @@ public final class StandupDraftModel {
         isRefreshing = false
         sourceNotice = SourceNotice.text(for: refreshed.outcome, now: now())
 
-        // The same four conditions `install` applies, minus the model: a
-        // cancelled task, a sheet past `.editing`, a user who has typed, or a
-        // pass that wrote nothing. In each case the polish still runs, on the
-        // window the draft already had.
-        guard !Task.isCancelled, phase == .editing, text == pristineText,
-            refreshed.outcome.didWrite
+        // **A draft that has been copied or dismissed gets no polish at all.**
+        // `commit` cancels this task and moves the phase to `.copied`, but
+        // cancellation is cooperative, so a refresh suspended when the user
+        // pressed Copy still resumes — and returning a window here would send a
+        // paid AI request for a draft that is already on the clipboard and whose
+        // result `install` would refuse. Raised by Copilot in review of PR #42.
+        guard !Task.isCancelled, phase == .editing else { return nil }
+
+        // A typed draft, or a pass that wrote nothing: the polish still runs, on
+        // the window the draft already had. That is M3-03's behaviour unchanged —
+        // `install` refuses to overwrite the user's words when it returns — and
+        // narrowing it further belongs with whoever measures what that call costs.
+        guard text == pristineText, refreshed.outcome.didWrite
         else { return window ?? refreshed.window }
 
         window = refreshed.window

@@ -14,6 +14,7 @@ extension SourceRefreshService {
     struct Applied {
         var cached = 0
         var changed = 0
+        var superseded = 0
         var failures: [RefreshOutcome.Failure] = []
     }
 
@@ -25,6 +26,11 @@ extension SourceRefreshService {
         notConfigured: Int
     ) -> RefreshOutcome {
         let applied = apply(fetched.results, rows: rows)
+        if applied.superseded > 0 {
+            Log.sources.info(
+                "refresh dropped \(applied.superseded, privacy: .public) result(s) a concurrent pass had already applied"
+            )
+        }
         let saveFailed = applied.cached > 0 || applied.changed > 0 ? !persist() : false
 
         let outcome = RefreshOutcome(
@@ -34,6 +40,7 @@ extension SourceRefreshService {
             failures: applied.failures,
             notConfigured: notConfigured,
             skipped: fetched.skipped,
+            superseded: applied.superseded,
             oldestFetch: Self.oldestFetch(of: rows),
             saveFailed: saveFailed)
 
@@ -76,6 +83,19 @@ extension SourceRefreshService {
                         error: error, cachedAt: byID[result.refID]?.lastFetchedAt))
             case .success(let update):
                 guard let row = byID[result.refID] else { continue }
+
+                // **Another pass got here first.** The row's timestamp is no longer
+                // the one this fetch was dispatched against, so a concurrent pass
+                // has already applied a fetch for it — and applying this one too
+                // would append a second event for one change and move the cache
+                // backwards to an older read. Dropping it loses nothing: `since`
+                // for the next pass is the newer stamp, so anything this fetch saw
+                // and the other did not is reported then.
+                guard row.lastFetchedAt == result.observedAt else {
+                    applied.superseded += 1
+                    continue
+                }
+
                 let isFirst = row.lastFetchedAt == nil
 
                 if let body = ExternalUpdateBody.text(

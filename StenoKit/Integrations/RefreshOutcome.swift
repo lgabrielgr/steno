@@ -58,6 +58,14 @@ public struct RefreshOutcome: Sendable, Equatable {
     /// cancelled by it (D-178). Not failures: nothing went wrong with them.
     public let skipped: Int
 
+    /// Results dropped because a concurrent pass had already applied a fetch for
+    /// the same row.
+    ///
+    /// Its own count rather than folded into `skipped`, per D-163's rule: these
+    /// two are different facts — the clock ran out on one, and the other arrived
+    /// to find its work already done — and a single number could not say which.
+    public let superseded: Int
+
     /// The oldest `lastFetchedAt` among the refs in scope after the pass, or
     /// `nil` when every ref in scope is freshly fetched or never was.
     ///
@@ -83,6 +91,7 @@ public struct RefreshOutcome: Sendable, Equatable {
         failures: [Failure] = [],
         notConfigured: Int = 0,
         skipped: Int = 0,
+        superseded: Int = 0,
         oldestFetch: Date? = nil,
         readFailed: Bool = false,
         saveFailed: Bool = false
@@ -93,6 +102,7 @@ public struct RefreshOutcome: Sendable, Equatable {
         self.failures = failures
         self.notConfigured = notConfigured
         self.skipped = skipped
+        self.superseded = superseded
         self.oldestFetch = oldestFetch
         self.readFailed = readFailed
         self.saveFailed = saveFailed

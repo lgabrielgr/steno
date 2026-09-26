@@ -598,8 +598,7 @@ FR-6's Integrations pane; `Sources/` would collide with SwiftPM's meaning):
 | `RefreshPolicy.swift` | `due`, `launchStaleness` |
 | `RefreshOutcome.swift` | `RefreshOutcome`, `RefreshedWindow` |
 | `SourceRefreshService.swift` | the pass: dispatch, group, apply, save, notify |
-| `ExternalUpdateBody.swift` | the pure body formatter |
-| `ExternalUpdatePayload.swift` | the `Codable` payload, `.sortedKeys` |
+| `ExternalUpdate.swift` | the pure body formatter **and** the `Codable` payload — one file, because "what a found change says" is one decision with two halves (D-169, D-174) |
 
 **Moved:** `StenoKit/AI/Deadline.swift` → `StenoKit/Support/Deadline.swift` (D-177).
 
