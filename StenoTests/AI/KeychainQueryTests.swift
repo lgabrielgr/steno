@@ -13,7 +13,7 @@ import Testing
 
 @Test("the lookup identifies one provider's item")
 func theLookupIdentifiesOneItem() {
-    let query = KeychainQuery.lookup(providerID: "anthropic")
+    let query = KeychainQuery.lookup(service: KeychainCredentialStore.service, account: "anthropic")
 
     #expect(query[kSecClass as String] as? String == kSecClassGenericPassword as String)
     #expect(query[kSecAttrService as String] as? String == "com.lgabrielgr.steno.ai")
@@ -26,7 +26,8 @@ func theItemIsNeverSynchronizable() {
     // user's other machines, and sync is cancelled (D1, §14). Leaving it to the
     // platform default would make that a platform decision rather than ours.
     #expect(
-        KeychainQuery.lookup(providerID: "anthropic")[kSecAttrSynchronizable as String]
+        KeychainQuery.lookup(service: KeychainCredentialStore.service, account: "anthropic")[
+            kSecAttrSynchronizable as String]
             as? Bool == false)
 }
 
@@ -38,8 +39,9 @@ func accessibilityIsNotPassed() {
     // like it enforced a rule it does not. This test is what stops someone
     // "fixing" that by adding it back.
     let queries = [
-        KeychainQuery.lookup(providerID: "anthropic"),
-        KeychainQuery.insert(Data("x".utf8), providerID: "anthropic"),
+        KeychainQuery.lookup(service: KeychainCredentialStore.service, account: "anthropic"),
+        KeychainQuery.insert(
+            Data("x".utf8), service: KeychainCredentialStore.service, account: "anthropic"),
         KeychainQuery.update(Data("x".utf8)),
     ]
 
@@ -50,13 +52,16 @@ func accessibilityIsNotPassed() {
 func insertIsTheLookupPlusTheValue() {
     let data = Data("payload".utf8)
 
-    let insert = KeychainQuery.insert(data, providerID: "anthropic")
+    let insert = KeychainQuery.insert(
+        data, service: KeychainCredentialStore.service, account: "anthropic")
 
     #expect(insert[kSecValueData as String] as? Data == data)
     // Every identity attribute of the lookup is present and equal: if these
     // diverged, `SecItemAdd` would create an item `SecItemUpdate` then failed
     // to find, and the duplicate fallback would loop on a key that never saved.
-    for (key, value) in KeychainQuery.lookup(providerID: "anthropic") {
+    for (key, value) in KeychainQuery.lookup(
+        service: KeychainCredentialStore.service, account: "anthropic")
+    {
         // `insert[key]` is `Any?` where `value` is `Any`, so the optional is
         // unwrapped before describing — comparing the two descriptions directly
         // compares "Optional(x)" against "x" and fails for every key, which is
