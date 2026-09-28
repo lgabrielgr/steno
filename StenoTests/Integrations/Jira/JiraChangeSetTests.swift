@@ -163,7 +163,11 @@ func anUnparseableTimestampIsReported() throws {
 func aNewCommentIsReported() throws {
     let set = try make(comments: [JiraFixture.Comment(id: "9001", created: recent)])
     #expect(set.changes.map(\.text) == ["comment from Ana Ruiz: Could you add the migration plan?"])
-    #expect(set.changes.map(\.id) == ["9001"])
+    // **The id carries the comment's revision**, because the service de-duplicates on it
+    // and Jira keeps one comment id across edits (Copilot, PR #43). The comment id stays
+    // the prefix so the source identity is still legible.
+    let stamp = try #require(JiraDate.parse(recent))
+    #expect(set.changes.map(\.id) == ["9001@\(Int(stamp.timeIntervalSince1970))"])
 }
 
 @Test("a comment with no readable body still says who commented")
@@ -188,7 +192,38 @@ func anEditedCommentIsNews() throws {
     let set = try make(comments: [
         JiraFixture.Comment(id: "9004", created: older, updated: recent)
     ])
-    #expect(set.changes.map(\.id) == ["9004"])
+    let stamp = try #require(JiraDate.parse(recent))
+    #expect(set.changes.map(\.id) == ["9004@\(Int(stamp.timeIntervalSince1970))"])
+    // And it says so, rather than reading as a comment that has just arrived.
+    #expect(
+        set.changes.map(\.text) == [
+            "edited comment from Ana Ruiz: Could you add the migration plan?"
+        ])
+}
+
+@Test("the revision changes with the edit, so a second edit is its own change")
+func eachEditIsItsOwnChange() throws {
+    // This is the property the service's dedup needs: one comment id, two revisions, two
+    // change ids — otherwise the first edit is reported and every later one is dropped.
+    // Both timestamps inside the window: the point here is the revision, not the window —
+    // the first version of this test used `older` and silently compared two empty arrays.
+    let later = "2026-09-26T10:00:00.000+0000"
+    let first = try make(comments: [
+        JiraFixture.Comment(id: "9004", created: recent, updated: recent)
+    ])
+    let second = try make(comments: [
+        JiraFixture.Comment(id: "9004", created: recent, updated: later)
+    ])
+
+    #expect(first.changes.map(\.id) != second.changes.map(\.id))
+    #expect(first.changes.first?.id.hasPrefix("9004@") == true)
+    #expect(second.changes.first?.id.hasPrefix("9004@") == true)
+}
+
+@Test("a comment with no usable timestamp falls back to its bare id")
+func acommentWithoutATimestampUsesItsBareId() throws {
+    let set = try make(comments: [JiraFixture.Comment(id: "9005", created: "not a date")])
+    #expect(set.changes.map(\.id) == ["9005"])
 }
 
 @Test("a comment older than the window on both timestamps is not reported")

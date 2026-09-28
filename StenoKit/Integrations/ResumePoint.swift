@@ -43,14 +43,32 @@ struct ResumePoint: Sendable, Equatable {
     /// Nothing has ever been reported for this ref.
     static let none = ResumePoint(watermark: nil, reportedIDs: [], presentIDs: [])
 
+    /// How far back a window may reach, however old the watermark is.
+    ///
+    /// **The watermark only advances when an event is written**, because that is where
+    /// it is recorded (D-184) — so a ref whose every fetch finds nothing new keeps the
+    /// same window, and on a long-lived ticket that means re-walking the same pages on
+    /// every pass. Raised by Copilot in review of PR #43.
+    ///
+    /// Thirty days bounds that walk. What it gives up is an item the source reveals
+    /// more than a month after it happened, which is not a shape this API produces;
+    /// what it buys is a cost that cannot grow without limit on a ticket nobody is
+    /// touching.
+    static let maxLookback: TimeInterval = 30 * 24 * 60 * 60
+
     /// What to send as `since`.
     ///
-    /// `nil` when there is no watermark, which asks the connector for an anchor
-    /// rather than for history: a connector handed `nil` reports the newest
-    /// timestamp it can see and no changes, so a first look can never arrive as a
-    /// hundred-line stand-up (D-188).
-    var since: Date? {
-        watermark.map { $0.addingTimeInterval(-Self.overlap) }
+    /// `nil` when there is no watermark, which asks the connector for an anchor rather
+    /// than for history: a connector handed `nil` reports what one page holds and the
+    /// service keeps it out of the event body (D-188), so a first look can never arrive
+    /// as a hundred-line stand-up.
+    ///
+    /// Clamped to `maxLookback` before `now`, for the reason above.
+    func since(now: Date) -> Date? {
+        guard let watermark else { return nil }
+        return max(
+            watermark.addingTimeInterval(-Self.overlap),
+            now.addingTimeInterval(-Self.maxLookback))
     }
 
     /// Recover the resume point from one ref's `externalUpdate` payloads,

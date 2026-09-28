@@ -270,3 +270,36 @@ func theConnectionTestDistinguishesItsFailures() async throws {
         try await JiraClient(transport: offline).verify(credential: JiraFixture.credential())
     }
 }
+
+@Test("an edit to a comment created before the paged window is not detected")
+func anEditOutsideThePagedWindowIsNotDetected() async throws {
+    // **A limitation pinned as a test, not a bug hidden by one.** The endpoint orders by
+    // `created` and offers no filter on `updated`, so an edit to an old comment sits on a
+    // later page — and the early stop, which is what keeps a chatty ticket from costing ten
+    // requests a pass, gets there first. §5.2 asks for "new comments", so this is inside the
+    // requirement; catching it would mean reading every comment on every pass.
+    //
+    // Raised by Copilot in review of PR #43. If a future task decides the trade is wrong,
+    // this test is where the decision is recorded, and it should fail when that changes.
+    var routes = quietRoutes()
+    routes["comment@0"] = [
+        .ok(
+            JiraFixture.comments(
+                [JiraFixture.Comment(id: "9100", created: outOfWindow)], total: 2))
+    ]
+    // Page two holds an old comment edited *inside* the window. The walk never asks for it.
+    routes["comment@1"] = [
+        .ok(
+            JiraFixture.comments(
+                [JiraFixture.Comment(id: "9101", created: outOfWindow, updated: inWindow)],
+                total: 2, startAt: 1))
+    ]
+    let transport = StubJiraTransport(routes: routes)
+
+    let set = try await JiraClient(transport: transport).changeSet(
+        key: JiraFixture.key, since: since, credential: JiraFixture.credential())
+
+    let asked = await transport.received.map(StubJiraTransport.endpointKey)
+    #expect(asked.filter { $0.hasPrefix("comment") } == ["comment@0"])
+    #expect(set.changes.isEmpty)
+}

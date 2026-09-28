@@ -139,6 +139,15 @@ struct JiraChangeSet: Equatable {
     // MARK: - Comments
 
     /// New and edited comments inside the window (§5.2).
+    ///
+    /// **Known limitation, and it is the API's.** The endpoint orders by `created` and
+    /// takes no filter on `updated`, so an edit to a comment created before the paged
+    /// window is not detected — `JiraClient` stops paging once a page predates the
+    /// window, and that edit sits on a later page. Detecting it would mean reading every
+    /// comment on every pass. §5.2 asks for "new comments", so this is within the
+    /// requirement; the boundary is stated here rather than implied, and
+    /// `anEditOutsideThePagedWindowIsNotDetected` pins it. Raised by Copilot in review of
+    /// PR #43.
     private static func commentChanges(in comments: [JiraComment], since: Date) -> [SourceChange] {
         comments.compactMap { comment in
             // **The later of the two timestamps** (D-195). An edited comment moves
@@ -149,8 +158,18 @@ struct JiraChangeSet: Equatable {
             guard let id = comment.id else { return nil }
             let author = comment.author?.displayName ?? "someone"
             let gist = AtlassianDocument.plainText(comment.body)
-            let text = gist.isEmpty ? "comment from \(author)" : "comment from \(author): \(gist)"
-            return SourceChange(id: id, text: text)
+            let isEdit = comment.updated != nil && comment.updated != comment.created
+            let opening = isEdit ? "edited comment from \(author)" : "comment from \(author)"
+            let text = gist.isEmpty ? opening : "\(opening): \(gist)"
+
+            // **The id carries the revision, not just the comment** (Copilot, PR #43).
+            // Jira keeps one id across edits, and `SourceRefreshService` de-duplicates on
+            // it — so a bare comment id made every edit after the first observation
+            // undroppable news into silently dropped news, which is the opposite of what
+            // `stamp` was written to do. The comment id stays the prefix, so the source
+            // identity is still legible in a payload.
+            let revision = comment.stamp.map { "@\(Int($0.timeIntervalSince1970))" } ?? ""
+            return SourceChange(id: "\(id)\(revision)", text: text)
         }
     }
 

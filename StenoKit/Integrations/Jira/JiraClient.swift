@@ -22,9 +22,17 @@ struct JiraClient: Sendable {
     static let commentPageSize = 50
 
     /// **A hard cap, because `total` can shift under a backwards walk** (D-196).
-    /// Hitting it is logged rather than thrown: a partial window whose watermark is
-    /// the newest item actually read leaves the remainder inside the next pass's
-    /// window, which is degradation rather than loss.
+    ///
+    /// **What hitting it costs, stated honestly.** The earlier comment here claimed the
+    /// remainder "falls into the next pass's window", and that is false: the watermark
+    /// advances to the newest entry read, so the next window starts in the same place and
+    /// the entries beyond the cap are never reported. Raised by Copilot in review of
+    /// PR #43.
+    ///
+    /// It is a bound on a shape that does not occur rather than a silent loss: reaching it
+    /// needs more than a thousand changelog entries inside `ResumePoint.maxLookback`'s
+    /// thirty days, on one ticket. Hitting it is logged with the ref named, so a real
+    /// occurrence is visible rather than inferred.
     static let maxPages = 10
 
     private let transport: any HTTPTransport
@@ -133,8 +141,10 @@ struct JiraClient: Sendable {
         }
 
         if pages >= Self.maxPages {
-            Log.sources.info(
-                "jira changelog paging stopped at the cap for one ref; the rest falls into the next pass"
+            // `error`, not `info`: entries beyond the cap are not reported at all, so this
+            // is a gap in what the user was told rather than a slow pass.
+            Log.sources.error(
+                "jira changelog paging hit the \(Self.maxPages, privacy: .public)-page cap for one ref; older entries in the window were not read"
             )
         }
         return Array(collected.values)
@@ -146,6 +156,14 @@ struct JiraClient: Sendable {
     /// comment predates the window. **Paged on `startAt + total`, because
     /// `PageOfComments` has no `isLast`** — verified against the API's own schema,
     /// where `PageBeanChangelog` does have one.
+    ///
+    /// **The early stop has a known blind spot, and it is the API's.** The ordering key is
+    /// `created` and there is no filter on `updated`, so an edit to a comment created
+    /// before the window sits on a page this walk never reaches. Reading every comment on
+    /// every pass is the only way to catch it, which is a poor trade for a ticket with
+    /// hundreds of them; §5.2 asks for "new comments", so the boundary is within the
+    /// requirement. `JiraChangeSet.commentChanges` states it too, and a test pins it.
+    /// Raised by Copilot in review of PR #43.
     private func comments(
         key: String, since: Date?, base: URL, authorization: String
     ) async throws -> [JiraComment] {

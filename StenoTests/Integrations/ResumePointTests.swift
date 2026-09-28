@@ -19,13 +19,13 @@ private func payload(
 @Test("no payloads means no anchor, and a nil since")
 func noPayloadsMeansNoAnchor() {
     #expect(ResumePoint.from(payloads: []) == .none)
-    #expect(ResumePoint.none.since == nil)
+    #expect(ResumePoint.none.since(now: origin) == nil)
 }
 
 @Test("D-185: since is the watermark less the overlap")
 func sinceIsTheWatermarkLessTheOverlap() {
     let point = ResumePoint.from(payloads: [payload(watermark: origin)])
-    #expect(point.since == origin.addingTimeInterval(-15 * 60))
+    #expect(point.since(now: origin) == origin.addingTimeInterval(-15 * 60))
     // The constant is the fifteen minutes §5.2's replication lag needs, named once.
     #expect(ResumePoint.overlap == 900)
 }
@@ -92,8 +92,29 @@ func anUnrecordedSetIsSkipped() {
 func payloadsWithoutWatermarksLeaveTheWindowOpen() {
     let point = ResumePoint.from(payloads: [payload(watermark: nil, changeIDs: ["c1"])])
     #expect(point.watermark == nil)
-    #expect(point.since == nil)
+    #expect(point.since(now: origin) == nil)
     // The ids are still remembered, so the pass that follows drops the repeat even
     // though it asks for everything.
     #expect(point.reportedIDs == ["c1"])
+}
+
+@Test("the window is clamped, so a stalled watermark cannot widen it forever")
+func theWindowIsClamped() {
+    // The watermark only advances when an event is written (D-184), so a ref whose fetches
+    // find nothing new keeps its window — and on a long-lived ticket that means re-walking
+    // the same pages every pass. Raised by Copilot in review of PR #43.
+    let ancient = origin.addingTimeInterval(-400 * 24 * 60 * 60)
+    let point = ResumePoint.from(payloads: [payload(watermark: ancient)])
+
+    #expect(point.since(now: origin) == origin.addingTimeInterval(-ResumePoint.maxLookback))
+    #expect(ResumePoint.maxLookback == 30 * 24 * 60 * 60)
+}
+
+@Test("a recent watermark is not clamped")
+func arecentWatermarkIsNotClamped() {
+    // The other direction, because a clamp that always fired would pass the test above and
+    // throw away the overlap the window depends on.
+    let recent = origin.addingTimeInterval(-3600)
+    let point = ResumePoint.from(payloads: [payload(watermark: recent)])
+    #expect(point.since(now: origin) == recent.addingTimeInterval(-ResumePoint.overlap))
 }
