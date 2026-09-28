@@ -113,6 +113,9 @@ struct RefreshFixture {
         connectors: [any SourceConnector],
         nowOffset: TimeInterval = 0,
         save: @escaping (ModelContext) throws -> Void = { try $0.save() },
+        readEvents: @escaping (ModelContext, UUID) throws -> [Event] = {
+            try $0.fetch(EventQueries.allEvents(forTaskID: $1))
+        },
         perFetch: Duration = .milliseconds(200),
         budget: Duration = .milliseconds(400),
         gate: SourceRefreshGate = SourceRefreshGate()
@@ -120,7 +123,7 @@ struct RefreshFixture {
         SourceRefreshService(
             context: context, registry: SourceRegistry(connectors: connectors),
             now: { Self.origin.addingTimeInterval(nowOffset) }, save: save,
-            perFetch: perFetch, budget: budget, gate: gate)
+            readEvents: readEvents, perFetch: perFetch, budget: budget, gate: gate)
     }
 
     // MARK: - Independent reads

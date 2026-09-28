@@ -24,25 +24,36 @@ extension SourceRefreshService {
     /// task carrying three Jira refs is one query and an in-memory split rather
     /// than three queries; D18 caps the dataset, so the fetch is the cost.
     ///
-    /// A read that throws leaves those refs at `.none`, which means a `nil` since —
-    /// the connector is asked for an anchor and reports no changes. That is the safe
-    /// direction: a pass that cannot read the log says nothing false rather than
-    /// re-reporting a ticket's history.
+    /// **A read that throws takes its refs out of the pass**, and the comment that used
+    /// to stand here claimed the opposite — that `.none` was "the safe direction". It is
+    /// not. `.none` means a `nil` since, a connector then reports everything in the page
+    /// it read (D-188), and `apply` decides first-observation from `row.lastFetchedAt`
+    /// rather than from the resume point — so a transient log-read failure appended
+    /// recent Jira history to the stand-up as news. Raised by Copilot in review of
+    /// PR #43.
+    ///
+    /// So the failure is returned rather than swallowed: those refs are counted as
+    /// skipped and never fetched. Nothing went wrong with the *ref*, and a pass that
+    /// cannot tell what it has already said must not guess.
     func resumePoints(
         for refs: [SourceRefSnapshot], rows: [SourceRef]
-    ) -> [UUID: ResumePoint] {
+    ) -> (points: [UUID: ResumePoint], unreadable: Set<UUID>) {
         let wanted = Set(refs.map(\.refID))
         let taskIDs = Set(rows.filter { wanted.contains($0.id) }.map(\.taskID))
 
         var payloads: [UUID: [ExternalUpdatePayload]] = [:]
+        var unreadable: Set<UUID> = []
         for taskID in taskIDs {
             let events: [Event]
             do {
-                events = try context.fetch(EventQueries.allEvents(forTaskID: taskID))
+                events = try readEvents(context, taskID)
             } catch {
                 Log.sources.error(
                     "could not read a task's events for a resume point: \(String(describing: error), privacy: .public)"
                 )
+                // Every ref on this task, not just the ones with payloads: the read
+                // failed, so which of them had been reported is exactly what is unknown.
+                unreadable.formUnion(rows.filter { $0.taskID == taskID }.map(\.id))
                 continue
             }
             // Newest first, because the descriptor sorts that way and
@@ -54,7 +65,7 @@ extension SourceRefreshService {
                 payloads[payload.refID, default: []].append(payload)
             }
         }
-        return payloads.mapValues(ResumePoint.from(payloads:))
+        return (payloads.mapValues(ResumePoint.from(payloads:)), unreadable)
     }
 
     /// What every configured connector wants the user to know about its credential

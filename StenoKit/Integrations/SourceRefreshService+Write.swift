@@ -43,6 +43,10 @@ extension SourceRefreshService {
 
         /// Credential warnings collected once for the whole pass (D-194).
         let warnings: [SourceCredentialWarning]
+
+        /// Refs dropped before dispatch because their event log could not be read.
+        /// Added to `skipped`, never to `failures`.
+        let unreadable: Int
     }
 
     func applyAndSave(
@@ -64,7 +68,7 @@ extension SourceRefreshService {
             changed: saveFailed ? 0 : applied.changed,
             failures: applied.failures,
             notConfigured: pass.notConfigured,
-            skipped: fetched.skipped,
+            skipped: fetched.skipped + pass.unreadable,
             superseded: applied.superseded,
             duplicates: applied.duplicates,
             credentialWarnings: pass.warnings,
@@ -127,8 +131,16 @@ extension SourceRefreshService {
                     continue
                 }
 
-                let isFirst = row.lastFetchedAt == nil
                 let resumePoint = resume[row.id] ?? .none
+
+                // **First observation means the log has never reported this ref**, not
+                // that the cache column is empty. §10.2 omits `lastFetchedAt` from an
+                // export by default while the `externalUpdate` payloads travel, so an
+                // imported ref has a resume point and a nil row timestamp — and reading
+                // only the column made the first post-import pass suppress real changes
+                // *and* record their ids, so they were never reported at all. Raised by
+                // Copilot in review of PR #43.
+                let isFirst = row.lastFetchedAt == nil && resume[row.id] == nil
 
                 // **De-duplication, because the window overlaps on purpose**
                 // (D-185, D-186). Every pass re-reads items it has already

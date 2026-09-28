@@ -37,6 +37,12 @@ public struct SourceRefreshService {
     let registry: SourceRegistry
     let now: () -> Date
     let save: (ModelContext) throws -> Void
+
+    /// How a task's events are read, injected for `save`'s reason: a real `ModelContext`
+    /// cannot be made to fail its fetch, and the failure path is the one that most needs a
+    /// test — a pass that cannot read the log must not fetch, or it re-reports history
+    /// (Copilot, PR #43).
+    let readEvents: (ModelContext, UUID) throws -> [Event]
     private let perFetch: Duration
     private let budget: Duration
     private let gate: SourceRefreshGate
@@ -55,6 +61,9 @@ public struct SourceRefreshService {
         registry: SourceRegistry,
         now: @escaping () -> Date = Date.init,
         save: @escaping (ModelContext) throws -> Void = { try $0.save() },
+        readEvents: @escaping (ModelContext, UUID) throws -> [Event] = {
+            try $0.fetch(EventQueries.allEvents(forTaskID: $1))
+        },
         perFetch: Duration = .seconds(8),
         budget: Duration = .seconds(10),
         gate: SourceRefreshGate = .shared
@@ -63,6 +72,7 @@ public struct SourceRefreshService {
         self.registry = registry
         self.now = now
         self.save = save
+        self.readEvents = readEvents
         self.perFetch = perFetch
         self.budget = budget
         self.gate = gate
@@ -147,11 +157,32 @@ public struct SourceRefreshService {
         // again after the fetches would be a second query per ref and — worse — a
         // second chance for the two halves to disagree about what had already been
         // reported.
-        let resume = resumePoints(for: claimed.map(\.snapshot), rows: rows)
-        let ready = claimed.map {
-            ReadyFetch(
-                snapshot: $0.snapshot, connector: $0.connector,
-                since: resume[$0.snapshot.refID]?.since)
+        let (resume, unreadable) = resumePoints(for: claimed.map(\.snapshot), rows: rows)
+        let stamp = now()
+
+        // **A ref whose log could not be read is not fetched at all**, because a pass
+        // that cannot tell what it has already reported would report it again (Copilot,
+        // PR #43). Counted as skipped rather than failed: nothing went wrong with the
+        // ref, the same reading `skipped` already carries for the pass budget.
+        let ready =
+            claimed
+            .filter { !unreadable.contains($0.snapshot.refID) }
+            .map {
+                ReadyFetch(
+                    snapshot: $0.snapshot, connector: $0.connector,
+                    since: resume[$0.snapshot.refID]?.since(now: stamp))
+            }
+        let unread = claimed.count - ready.count
+        if unread > 0 {
+            Log.sources.error(
+                "refresh skipped \(unread, privacy: .public) ref(s) whose event log could not be read"
+            )
+        }
+
+        guard !ready.isEmpty else {
+            return RefreshOutcome(
+                notConfigured: notConfigured, skipped: unread, credentialWarnings: warnings,
+                oldestFetch: Self.oldestFetch(of: rows))
         }
 
         let fetched = await fetchAll(ready)
@@ -159,7 +190,7 @@ public struct SourceRefreshService {
             fetched, rows: rows,
             context: PassContext(
                 attempted: ready.count, notConfigured: notConfigured, resume: resume,
-                warnings: warnings))
+                warnings: warnings, unreadable: unread))
     }
 
     /// One ref about to be fetched, carrying the `since` its resume point produced.
