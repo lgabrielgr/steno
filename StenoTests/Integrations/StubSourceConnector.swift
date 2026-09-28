@@ -66,7 +66,9 @@ final class StubSourceConnector: SourceConnector, @unchecked Sendable {
         kinds: Set<SourceRefKind>? = nil,
         scripts: [String: Script] = [:],
         fallback: Script = .success(
-            SourceUpdate(summary: "stub state", changes: [], url: nil, fetchedAt: .distantPast))
+            SourceUpdate(
+                summary: "stub state", changes: [], url: nil, fetchedAt: .distantPast,
+                isWindowCapped: false))
     ) {
         self.id = id
         self.displayName = displayName
@@ -174,6 +176,9 @@ extension SourceUpdate {
     ) -> SourceUpdate {
         SourceUpdate(
             summary: summary, changes: changes.map { SourceChange(id: $0, text: $0) }, url: url,
-            fetchedAt: fetchedAt, present: present, watermark: watermark)
+            fetchedAt: fetchedAt, present: present, watermark: watermark,
+            // This double stands in for a connector that read its whole window; the capped path
+            // has `WindowedConnector(cappedFloor:)` and the real client's own tests.
+            isWindowCapped: false)
     }
 }

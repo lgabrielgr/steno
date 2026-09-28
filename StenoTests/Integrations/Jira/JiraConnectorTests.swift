@@ -253,3 +253,44 @@ func aselfHostedURLIsRefusedWhenUnconfigured() {
                 refID: UUID(), kind: .jiraIssue, identifier: "PAY-421",
                 url: "https://jira.corp.net/browse/PAY-421")) == false)
 }
+
+// MARK: - The capped flag reaches the service (review round 7)
+
+@Test("a capped walk reaches SourceUpdate, not just JiraChangeSet")
+func acappedWalkReachesTheSourceUpdate() async throws {
+    // **The finding: this mapping dropped the flag.** `SourceUpdate.isWindowCapped` defaulted to
+    // `false`, so adding it compiled and the connector silently reported a complete window for
+    // every capped walk — which made round six's continuation fix dead code in the shipping app,
+    // exercised only by a test double. Raised by Copilot in review round 7 of PR #43.
+    //
+    // The `JiraChangeSet` and `ResumePoint` tests could not have caught it: one stops before this
+    // adapter and the other starts after it. This test is the seam.
+    let inWindow = "2026-09-25T18:04:11.000+0000"
+    var routes = fullRoutes()
+    // A changelog whose probe claims far more than the cap can read, so the walk caps.
+    routes["changelog@0"] = [.ok(JiraFixture.changelog([], total: 10_000, isLast: false))]
+    let transport = StubJiraTransport(
+        routes: routes,
+        fallback: .ok(
+            JiraFixture.changelog(
+                [.status(id: "x", created: inWindow, from: "a", to: "b")], total: 10_000,
+                isLast: false)))
+    let jira = JiraConnector(
+        credentials: InMemoryAtlassianStore(JiraFixture.credential()), transport: transport,
+        now: { now })
+
+    let update = try await jira.fetch(ref(), since: JiraDate.parse("2026-09-22T00:00:00.000+0000"))
+
+    #expect(update.isWindowCapped)
+}
+
+@Test("an ordinary fetch reports a complete window")
+func anOrdinaryFetchIsNotCapped() async throws {
+    // The other direction, because `isWindowCapped: true` hard-coded here would pass the test
+    // above and hold every ref's window still forever.
+    let (jira, _) = connector(routes: fullRoutes())
+
+    let update = try await jira.fetch(ref(), since: JiraDate.parse("2026-09-22T00:00:00.000+0000"))
+
+    #expect(update.isWindowCapped == false)
+}

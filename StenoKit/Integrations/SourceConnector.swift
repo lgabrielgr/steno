@@ -98,6 +98,12 @@ public struct SourceUpdate: Sendable, Equatable {
     /// Whether the connector stopped short of the whole window — a page cap, a budget, anything
     /// that leaves part of `since…now` unread.
     ///
+    /// **Has no default, deliberately.** It had one — `false`, which reads as the obvious answer
+    /// for a connector with no paging — and the Jira adapter then forgot to forward it, so every
+    /// capped walk reported a complete window and the continuation fix was dead code in the
+    /// shipping app for a review round. A required argument makes that a compile error instead of
+    /// a silent lie.
+    ///
     /// **It changes what the watermark means, so the log has to record it.** A connector that
     /// stopped short reports a watermark that is a *floor* ("coverage is complete above here")
     /// rather than a high-water mark, and `SourceRefreshService` resolves several payloads'
@@ -119,7 +125,7 @@ public struct SourceUpdate: Sendable, Equatable {
         fetchedAt: Date,
         present: [SourceChange] = [],
         watermark: Date? = nil,
-        isWindowCapped: Bool = false
+        isWindowCapped: Bool
     ) {
         self.summary = summary
         self.changes = changes

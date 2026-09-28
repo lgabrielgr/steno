@@ -202,7 +202,7 @@ private final class ScriptedChangeConnector: SourceConnector, @unchecked Sendabl
     func fetch(_ ref: SourceRefSnapshot, since: Date?) async throws -> SourceUpdate {
         SourceUpdate(
             summary: "In Review", changes: changes, url: nil, fetchedAt: RefreshFixture.origin,
-            watermark: watermark)
+            watermark: watermark, isWindowCapped: false)
     }
 
     func testConnection() async throws {}

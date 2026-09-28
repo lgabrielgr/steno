@@ -5551,6 +5551,14 @@ were not true** (Copilot, PR #43):
   `created`, which is the endpoint's traversal order, not by `stamp`. An old comment edited
   recently has a newer `stamp`, and flooring on it would sit above comments the walk never
   reached.
+
+  Round seven found the round-six fix **not wired up**: `JiraConnector` built its `SourceUpdate`
+  without forwarding `isWindowCapped`, which defaulted to `false` — so every capped walk in the
+  shipping app reported a complete window and the continuation fix was reachable only through a
+  test double. Neither side's tests could see it: `JiraChangeSet`'s stop before that adapter and
+  `ResumePoint`'s start after it. The flag is forwarded, the seam has a test in both directions,
+  and **the default is gone** so a connector that forgets it is a compile error rather than a
+  silent lie.
 - **An edit to a comment created before the paged window is not detected.** The endpoint orders by
   `created` with no filter on `updated`, so that edit sits on a page the early stop never reaches.
   Catching it means reading every comment on every pass; §5.2 asks for "new comments", so the

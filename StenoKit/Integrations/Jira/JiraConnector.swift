@@ -128,7 +128,15 @@ public struct JiraConnector: SourceConnector {
             // stamped by the service from the app's (D-171).
             fetchedAt: now(),
             present: changeSet.present,
-            watermark: changeSet.watermark)
+            watermark: changeSet.watermark,
+            // **Forwarded, and it was dropped here for a whole review round.**
+            // `SourceUpdate.isWindowCapped` used to default to `false`, so adding the field
+            // compiled everywhere and this mapping silently answered "I read the whole window"
+            // for every capped walk — which made round six's continuation fix dead code in the
+            // shipping app, reachable only through a test double. The default is gone now, so a
+            // connector that forgets this is a compile error. Raised by Copilot in review round 7
+            // of PR #43.
+            isWindowCapped: changeSet.isWindowCapped)
     }
 
     public func testConnection() async throws {

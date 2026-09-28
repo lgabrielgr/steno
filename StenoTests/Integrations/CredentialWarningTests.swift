@@ -148,7 +148,8 @@ private final class CountingWarningConnector: SourceConnector, @unchecked Sendab
 
     func fetch(_ ref: SourceRefSnapshot, since: Date?) async throws -> SourceUpdate {
         SourceUpdate(
-            summary: "In Review", changes: [], url: nil, fetchedAt: RefreshFixture.origin)
+            summary: "In Review", changes: [], url: nil, fetchedAt: RefreshFixture.origin,
+            isWindowCapped: false)
     }
 
     func testConnection() async throws {}
