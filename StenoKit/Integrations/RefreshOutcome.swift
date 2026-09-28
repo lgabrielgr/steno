@@ -29,13 +29,21 @@ public struct RefreshOutcome: Sendable, Equatable {
         /// Copilot in review of PR #42.
         public let cachedAt: Date?
 
+        /// Where the user renews this connector's credential, when it has such a
+        /// page (D-193). §5.2 requires a 401 to carry a direct link, and this is
+        /// how it reaches `SourceNotice` without the notice knowing what Atlassian
+        /// is.
+        public let renewalURL: URL?
+
         public init(
-            connectorID: String, displayName: String, error: SourceError, cachedAt: Date? = nil
+            connectorID: String, displayName: String, error: SourceError,
+            cachedAt: Date? = nil, renewalURL: URL? = nil
         ) {
             self.connectorID = connectorID
             self.displayName = displayName
             self.error = error
             self.cachedAt = cachedAt
+            self.renewalURL = renewalURL
         }
     }
 
@@ -57,6 +65,24 @@ public struct RefreshOutcome: Sendable, Equatable {
     /// Refs the pass budget ran out before reaching, plus in-flight fetches
     /// cancelled by it (D-178). Not failures: nothing went wrong with them.
     public let skipped: Int
+
+    /// Changes dropped because the log says they were already reported (D-186).
+    ///
+    /// **Its own count, not folded into `superseded`.** D-163's rule: these are
+    /// different facts — one is the deliberate overlap working as designed, the
+    /// other is two passes racing — and a single number could not say which. This
+    /// one is expected to be non-zero on a healthy pass, which is exactly why it
+    /// must not share a counter with something that indicates contention.
+    public let duplicates: Int
+
+    /// What the user should know about a connector's credential before it breaks
+    /// (§5.2's 14-day warning, D-194).
+    ///
+    /// **Collected once per pass from the registry, not per ref**, and stamped on
+    /// every outcome this service returns — including the early exits, because a
+    /// pass with no refs in scope must still be able to say the token expires on
+    /// Friday.
+    public let credentialWarnings: [SourceCredentialWarning]
 
     /// Results dropped because a concurrent pass had already applied a fetch for
     /// the same row.
@@ -92,6 +118,8 @@ public struct RefreshOutcome: Sendable, Equatable {
         notConfigured: Int = 0,
         skipped: Int = 0,
         superseded: Int = 0,
+        duplicates: Int = 0,
+        credentialWarnings: [SourceCredentialWarning] = [],
         oldestFetch: Date? = nil,
         readFailed: Bool = false,
         saveFailed: Bool = false
@@ -103,9 +131,26 @@ public struct RefreshOutcome: Sendable, Equatable {
         self.notConfigured = notConfigured
         self.skipped = skipped
         self.superseded = superseded
+        self.duplicates = duplicates
+        self.credentialWarnings = credentialWarnings
         self.oldestFetch = oldestFetch
         self.readFailed = readFailed
         self.saveFailed = saveFailed
+    }
+
+    /// This outcome with `credentialWarnings` attached.
+    ///
+    /// **Exists because `.idle` is a constant and the warnings are not.** A pass
+    /// that returns early — an empty task list, a store read that threw — still has
+    /// to carry them, and the alternative is every early return spelling out a full
+    /// initializer.
+    func warning(about warnings: [SourceCredentialWarning]) -> RefreshOutcome {
+        guard !warnings.isEmpty else { return self }
+        return RefreshOutcome(
+            attempted: attempted, cached: cached, changed: changed, failures: failures,
+            notConfigured: notConfigured, skipped: skipped, superseded: superseded,
+            duplicates: duplicates, credentialWarnings: warnings, oldestFetch: oldestFetch,
+            readFailed: readFailed, saveFailed: saveFailed)
     }
 
     /// A pass that had nothing to do.

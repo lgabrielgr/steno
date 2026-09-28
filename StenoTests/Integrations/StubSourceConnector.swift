@@ -158,12 +158,22 @@ struct ContractBreakingConnector: SourceConnector {
 
 extension SourceUpdate {
     /// A fetch result with `changes`, for the common case.
+    ///
+    /// **`changes` stays `[String]` here on purpose.** M4-02 gave a change a stable id
+    /// (D-186), and most tests in this bundle are about the refresh *pass* rather than
+    /// about de-duplication — so they keep saying what a change says, and the id is
+    /// derived from the text. A test about dedup builds its `SourceChange`s directly,
+    /// because there the id is the subject.
     static func stub(
         summary: String = "In Review",
         changes: [String] = [],
         url: URL? = nil,
-        fetchedAt: Date = Date(timeIntervalSince1970: 1_700_000_000)
+        fetchedAt: Date = Date(timeIntervalSince1970: 1_700_000_000),
+        present: [SourceChange] = [],
+        watermark: Date? = nil
     ) -> SourceUpdate {
-        SourceUpdate(summary: summary, changes: changes, url: url, fetchedAt: fetchedAt)
+        SourceUpdate(
+            summary: summary, changes: changes.map { SourceChange(id: $0, text: $0) }, url: url,
+            fetchedAt: fetchedAt, present: present, watermark: watermark)
     }
 }

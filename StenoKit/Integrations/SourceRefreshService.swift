@@ -83,7 +83,7 @@ public struct SourceRefreshService {
         } catch {
             Log.sources.error(
                 "could not read refs to refresh: \(String(describing: error), privacy: .public)")
-            return RefreshOutcome(readFailed: true)
+            return RefreshOutcome(readFailed: true).warning(about: credentialWarnings())
         }
 
         let due = RefreshPolicy.due(rows.map(\.snapshot), now: now(), olderThan: staleness)
@@ -96,7 +96,7 @@ public struct SourceRefreshService {
     /// 30-minute rule is not the question — §5.5 says "on Prepare Stand-up,
     /// refresh all refs in the window".
     public func refresh(taskIDs: [UUID]) async -> RefreshOutcome {
-        guard !taskIDs.isEmpty else { return .idle }
+        guard !taskIDs.isEmpty else { return .idle.warning(about: credentialWarnings()) }
         return await gate.serialize { await self.performRefresh(taskIDs: taskIDs) }
     }
 
@@ -107,7 +107,7 @@ public struct SourceRefreshService {
         } catch {
             Log.sources.error(
                 "could not read refs to refresh: \(String(describing: error), privacy: .public)")
-            return RefreshOutcome(readFailed: true)
+            return RefreshOutcome(readFailed: true).warning(about: credentialWarnings())
         }
 
         return await run(rows.map(\.snapshot), rows: rows)
@@ -117,12 +117,16 @@ public struct SourceRefreshService {
 
     /// Dispatch, fetch, apply, save, notify.
     private func run(_ refs: [SourceRefSnapshot], rows: [SourceRef]) async -> RefreshOutcome {
-        var ready: [(snapshot: SourceRefSnapshot, connector: any SourceConnector)] = []
+        // Once per pass, before anything is dispatched (D-194). One Keychain read
+        // per configured connector, not one per ref.
+        let warnings = credentialWarnings()
+
+        var claimed: [(snapshot: SourceRefSnapshot, connector: any SourceConnector)] = []
         var notConfigured = 0
         for ref in refs {
             switch registry.dispatch(ref) {
             case .ready(let connector):
-                ready.append((ref, connector))
+                claimed.append((ref, connector))
             case .notConfigured:
                 notConfigured += 1
             case .unhandled:
@@ -132,14 +136,44 @@ public struct SourceRefreshService {
             }
         }
 
-        guard !ready.isEmpty else {
+        guard !claimed.isEmpty else {
             return RefreshOutcome(
-                notConfigured: notConfigured, oldestFetch: Self.oldestFetch(of: rows))
+                notConfigured: notConfigured, credentialWarnings: warnings,
+                oldestFetch: Self.oldestFetch(of: rows))
+        }
+
+        // **One map, computed once, read twice** (D-186). The dispatch half turns
+        // it into `since`; the write half de-duplicates against it. Reading the log
+        // again after the fetches would be a second query per ref and — worse — a
+        // second chance for the two halves to disagree about what had already been
+        // reported.
+        let resume = resumePoints(for: claimed.map(\.snapshot), rows: rows)
+        let ready = claimed.map {
+            ReadyFetch(
+                snapshot: $0.snapshot, connector: $0.connector,
+                since: resume[$0.snapshot.refID]?.since)
         }
 
         let fetched = await fetchAll(ready)
         return applyAndSave(
-            fetched, rows: rows, attempted: ready.count, notConfigured: notConfigured)
+            fetched, rows: rows,
+            context: PassContext(
+                attempted: ready.count, notConfigured: notConfigured, resume: resume,
+                warnings: warnings))
+    }
+
+    /// One ref about to be fetched, carrying the `since` its resume point produced.
+    ///
+    /// A struct rather than a third tuple element: `since` is computed from the log
+    /// and is the part of this pass most worth being able to name in a signature.
+    struct ReadyFetch: Sendable {
+        let snapshot: SourceRefSnapshot
+        let connector: any SourceConnector
+
+        /// D-185's window start — the watermark less the overlap — or `nil` when
+        /// nothing has been reported for this ref yet, which asks the connector for
+        /// an anchor rather than for history (D-188).
+        let since: Date?
     }
 
     /// One fetch's result, as it crosses back to this actor.
@@ -147,6 +181,10 @@ public struct SourceRefreshService {
         let refID: UUID
         let connectorID: String
         let displayName: String
+
+        /// The connector's credential-renewal page, carried so the write phase can
+        /// put it on a `Failure` without holding the connector (D-193).
+        let renewalURL: URL?
 
         /// The row's `lastFetchedAt` when this fetch was dispatched — the value
         /// that was also sent as `since`.
@@ -186,7 +224,7 @@ public struct SourceRefreshService {
     /// past the budget nothing further is started, the in-flight fetches are
     /// cancelled, and everything already fetched is kept.
     private func fetchAll(
-        _ ready: [(snapshot: SourceRefSnapshot, connector: any SourceConnector)]
+        _ ready: [ReadyFetch]
     ) async -> (results: [FetchResult], skipped: Int) {
         let started = ContinuousClock.now
         let deadline = perFetch
@@ -201,8 +239,7 @@ public struct SourceRefreshService {
             func startNext() -> Bool {
                 guard let next = pending.next() else { return false }
                 group.addTask {
-                    .fetched(
-                        await Self.fetch(next.snapshot, from: next.connector, within: deadline))
+                    .fetched(await Self.fetch(next, within: deadline))
                 }
                 inFlight += 1
                 return true
@@ -291,18 +328,27 @@ public struct SourceRefreshService {
     /// snapshotting is that a fetch does not need this actor, and a method on a
     /// `@MainActor` type would hop back for every await.
     private nonisolated static func fetch(
-        _ ref: SourceRefSnapshot, from connector: any SourceConnector, within deadline: Duration
+        _ ready: ReadyFetch, within deadline: Duration
     ) async -> FetchResult {
+        let ref = ready.snapshot
+        let connector = ready.connector
+
         func result(_ outcome: Result<SourceUpdate, SourceError>) -> FetchResult {
             FetchResult(
                 refID: ref.refID, connectorID: connector.id,
-                displayName: connector.displayName, observedAt: ref.lastFetchedAt,
+                displayName: connector.displayName,
+                renewalURL: connector.credentialRenewalURL, observedAt: ref.lastFetchedAt,
                 outcome: outcome)
         }
 
         do {
             let update = try await withDeadline(deadline, throwing: SourceError.timedOut) {
-                try await connector.fetch(ref, since: ref.lastFetchedAt)
+                // **`ready.since`, not `ref.lastFetchedAt`** (D-184). The row's
+                // timestamp is our own clock, so a change the source reveals after
+                // the pass that should have seen it would be behind the next window
+                // forever. This value is the watermark the log recorded, less
+                // D-185's overlap.
+                try await connector.fetch(ref, since: ready.since)
             }
             return result(.success(update))
         } catch let error as SourceError {
@@ -317,57 +363,5 @@ public struct SourceRefreshService {
                 "\(connector.id, privacy: .public) threw a non-SourceError; contract broken")
             return result(.failure(.invalidResponse))
         }
-    }
-
-    // MARK: - Candidates
-
-    /// Refs on tasks that are neither archived nor done (§5.5).
-    ///
-    /// **Two fetches and an in-memory filter**, because `Status` is an enum and an
-    /// enum inside a SwiftData `#Predicate` does not compile in either spelling —
-    /// `EventQueries` records the same constraint and filters kinds after its
-    /// fetch for the same reason. D18 caps the dataset, so the fetch is the cost
-    /// and the filter is free.
-    private func activeRefs() throws -> [SourceRef] {
-        let tasks = try context.fetch(
-            FetchDescriptor<TaskItem>(predicate: #Predicate { !$0.isArchived }))
-        let active = Set(tasks.filter { $0.status != .done }.map(\.id))
-        return try refs(forTaskIDs: active)
-    }
-
-    /// The refs belonging to `taskIDs`.
-    ///
-    /// **Keyed on `SourceRef.taskID`, never on `TaskItem.sourceRefs`.** D-016
-    /// keeps both the foreign key and the relationship, and `SourceRef` names the
-    /// key as authoritative — "what export, import, and merge read". Both refresh
-    /// paths therefore agree about what "this task's refs" means; reading the
-    /// relationship in one and the key in the other would make a fixture that set
-    /// only one of them pass one path and silently skip the other.
-    ///
-    /// Filtered in memory: a `taskIDs.contains(...)` clause inside a
-    /// `#Predicate` is the construct `EventQueries` records as compiling and then
-    /// throwing at fetch time.
-    private func refs(forTaskIDs taskIDs: Set<UUID>) throws -> [SourceRef] {
-        guard !taskIDs.isEmpty else { return [] }
-        return try context.fetch(FetchDescriptor<SourceRef>())
-            .filter { taskIDs.contains($0.taskID) }
-    }
-
-    /// The oldest observation among `rows`, or `nil` when none has been fetched.
-    ///
-    /// Read *after* the pass, so a successful fetch has already moved its row's
-    /// timestamp forward and only genuinely stale refs remain — which is what
-    /// makes it the right input to §5.2's staleness label.
-    static func oldestFetch(of rows: [SourceRef]) -> Date? {
-        rows.compactMap(\.lastFetchedAt).min()
-    }
-}
-
-extension SourceRef {
-    /// This row as a connector sees it (D-164).
-    var snapshot: SourceRefSnapshot {
-        SourceRefSnapshot(
-            refID: id, kind: kind, identifier: identifier, url: url,
-            lastFetchedAt: lastFetchedAt)
     }
 }
