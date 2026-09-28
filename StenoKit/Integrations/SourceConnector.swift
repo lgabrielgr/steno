@@ -44,10 +44,36 @@ public struct SourceUpdate: Sendable, Equatable {
     /// §7.4 reads when the network is gone.
     public let summary: String
 
-    /// Discrete changes since `since`. **Empty is a valid answer** — the
-    /// resource has not moved — and is what makes `externalUpdate` appear only
-    /// when there is news (§3.3, D-169).
-    public let changes: [String]
+    /// Discrete changes since `since`, each carrying a stable id (D-186).
+    /// **Empty is a valid answer** — the resource has not moved — and is what
+    /// makes `externalUpdate` appear only when there is news (§3.3, D-169).
+    ///
+    /// A connector reports everything in its window, including items it has
+    /// already reported and including on a first observation: the window overlaps
+    /// deliberately (D-185) and `SourceRefreshService` is what drops the repeats and
+    /// what keeps a first observation's items out of the event body (D-188). A
+    /// connector that filtered here too would leave those ids unrecorded, and the
+    /// next pass would find them again and call them news.
+    public let changes: [SourceChange]
+
+    /// The **complete** set of state items observed now, not a delta (D-187).
+    ///
+    /// A member absent from the previous fetch's set is news; the rest are the
+    /// status quo. For Jira this is remote links — PR references — which carry no
+    /// timestamp of any kind, so no `since` can window them and set difference is
+    /// the only thing that can decide what is new. A connector with nothing of
+    /// this shape leaves it empty.
+    ///
+    /// **Known gap: a removal is silent, so remove-then-re-add can be missed.** The set is
+    /// recorded only when an event is written (D-184), and D-187 deliberately reports no
+    /// event for a link that disappears — so if a link is removed and re-added with no other
+    /// reportable change in between, the recorded set still contains it and the re-addition
+    /// reads as the status quo. Closing it needs either an event D-187 declined ("unlinked
+    /// acme/api#421" is Jira's bookkeeping, not the user's work) or state on the row that
+    /// D-184 declined. Raised by Copilot in review round 3 of PR #43;
+    /// `aremovedAndReaddedLinkIsMissed` pins today's behaviour so the trade is revisitable
+    /// rather than rediscovered.
+    public let present: [SourceChange]
 
     public let url: URL?
 
@@ -55,11 +81,59 @@ public struct SourceUpdate: Sendable, Equatable {
     /// stamped from the app's clock (D-171).
     public let fetchedAt: Date
 
-    public init(summary: String, changes: [String], url: URL?, fetchedAt: Date) {
+    /// The newest item timestamp this update is reporting — **the watermark the
+    /// next `since` is computed from** (D-184).
+    ///
+    /// The connector's own clock is not involved: this is a timestamp the *source*
+    /// assigned to something it served, which is the whole point. `nil` when the
+    /// connector has no notion of one, or found nothing timestamped, which leaves
+    /// the next window open rather than closing it around a guess.
+    ///
+    /// **It must be set even when `changes` is empty after filtering**, and even on
+    /// a first observation that reports nothing (D-188): a watermark that only
+    /// moves when something is said would send the next pass back to the beginning
+    /// of the ticket's history.
+    public let watermark: Date?
+
+    /// Whether the connector stopped short of the whole window — a page cap, a budget, anything
+    /// that leaves part of `since…now` unread.
+    ///
+    /// **Has no default, deliberately.** It had one — `false`, which reads as the obvious answer
+    /// for a connector with no paging — and the Jira adapter then forgot to forward it, so every
+    /// capped walk reported a complete window and the continuation fix was dead code in the
+    /// shipping app for a review round. A required argument makes that a compile error instead of
+    /// a silent lie.
+    ///
+    /// **It changes what the watermark means, so the log has to record it.** A connector that
+    /// stopped short reports a watermark that is a *floor* ("coverage is complete above here")
+    /// rather than a high-water mark, and `SourceRefreshService` resolves several payloads'
+    /// watermarks with `max` — which would throw that floor away in favour of an earlier,
+    /// higher one and leave the unread band unreachable. Defaulted to `false` for connectors
+    /// that always read their whole window.
+    public let isWindowCapped: Bool
+
+    /// - Parameters:
+    ///   - present: defaulted for connectors with no state stream, and for the
+    ///     test doubles that predate one.
+    ///   - watermark: defaulted to `nil`, which means "I have no anchor" and keeps
+    ///     the window open. A connector reading a timestamped source should always
+    ///     pass one.
+    public init(
+        summary: String,
+        changes: [SourceChange],
+        url: URL?,
+        fetchedAt: Date,
+        present: [SourceChange] = [],
+        watermark: Date? = nil,
+        isWindowCapped: Bool
+    ) {
         self.summary = summary
         self.changes = changes
         self.url = url
         self.fetchedAt = fetchedAt
+        self.present = present
+        self.watermark = watermark
+        self.isWindowCapped = isWindowCapped
     }
 }
 
@@ -98,6 +172,29 @@ public protocol SourceConnector: Sendable {
 
     func canHandle(_ ref: SourceRefSnapshot) -> Bool
 
+    /// Something about this connector's credential the user should know before it
+    /// breaks — §5.2's "warn in-app 14 days before expiry" (D-194).
+    ///
+    /// **Synchronous and cheap by contract, like `isConfigured`**, and read *once
+    /// per pass* rather than once per ref: `SourceRefreshService` collects these
+    /// from the registry before it dispatches anything. An implementation may read
+    /// its credential here — one Keychain read per pass is the measured cost — but
+    /// must not cross the network. `testConnection()` is the call that does that.
+    ///
+    /// Defaulted to `nil` in an extension, so no existing connector and no test
+    /// double has to answer it.
+    var credentialWarning: SourceCredentialWarning? { get }
+
+    /// Where the user renews this connector's credential — §5.2's "with a direct
+    /// link" (D-193).
+    ///
+    /// **Separate from `credentialWarning`, and not derived from it.** The warning
+    /// exists only when an expiry date was recorded, and a 401 arrives precisely
+    /// when that date is wrong or was never entered — so a link that came from the
+    /// warning would be missing at the one moment §5.2 requires it. Defaulted to
+    /// `nil` for connectors whose credential cannot be renewed on a web page.
+    var credentialRenewalURL: URL? { get }
+
     /// Fetch the current state, and the changes since `since`.
     ///
     /// **Must be cancellation-aware, and that is a requirement rather than a
@@ -132,4 +229,14 @@ public protocol SourceConnector: Sendable {
     /// unreachable network (`.network`): a test that says only "failed" tells
     /// the user nothing actionable.
     func testConnection() async throws
+}
+
+extension SourceConnector {
+    /// No page to send the user to.
+    public var credentialRenewalURL: URL? { nil }
+
+    /// Nothing to warn about. **Defaulted rather than required** so a connector
+    /// whose credential cannot expire — M5's MCP connectors, every test double —
+    /// says nothing by construction instead of returning `nil` in a stub.
+    public var credentialWarning: SourceCredentialWarning? { nil }
 }

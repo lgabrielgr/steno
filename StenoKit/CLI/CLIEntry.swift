@@ -91,6 +91,19 @@ public enum CLIEntry {
                 provider: AnthropicProvider(credentials: KeychainCredentialStore()))
         }
 
+        // Before the store, with the same shape and for the same reason: a
+        // credential has nothing to do with the event log. See `AtlassianLogin`.
+        if case .atlassianLogin = command {
+            return AtlassianLogin.run(store: AtlassianKeychainStore())
+        }
+
+        // Before the store, and the network twin of the two above: it reads the
+        // stored credential and makes four GETs against one ticket (D-197).
+        if case .jiraSelftest(let issueKey) = command {
+            return JiraSelftest.runSynchronously(
+                issueKey: issueKey, credentials: AtlassianKeychainStore())
+        }
+
         // **Before the store is opened, not after.** `StenoStore.live` creates
         // the store directory and, on a fresh path, the store itself — so a
         // refusal raised further in had already written to disk, and could fail

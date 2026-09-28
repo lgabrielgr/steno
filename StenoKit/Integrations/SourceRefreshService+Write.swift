@@ -15,17 +15,46 @@ extension SourceRefreshService {
         var cached = 0
         var changed = 0
         var superseded = 0
+
+        /// Changes the log says were already reported (D-186). Non-zero on a
+        /// healthy pass: it is the deliberate overlap working.
+        var duplicates = 0
+
         var failures: [RefreshOutcome.Failure] = []
     }
 
     /// Apply every result to its row, save once, post once.
+    /// What the dispatch half of a pass learned, handed to the write half.
+    ///
+    /// **One value rather than four parameters.** The two halves of a pass exchange
+    /// exactly this, and a signature that lists them separately grows every time the
+    /// pass learns something new — which is how it reached six parameters and a lint
+    /// failure. Naming it also documents the handoff.
+    struct PassContext {
+        /// Refs handed to a configured connector.
+        let attempted: Int
+
+        /// Refs a connector claimed but could not fetch for want of a credential.
+        let notConfigured: Int
+
+        /// Each ref's resume point, computed before dispatch and read again here
+        /// (D-186).
+        let resume: [UUID: ResumePoint]
+
+        /// Credential warnings collected once for the whole pass (D-194).
+        let warnings: [SourceCredentialWarning]
+
+        /// Refs dropped before dispatch because their event log could not be read.
+        /// Added to `skipped`, never to `failures`.
+        let unreadable: Int
+    }
+
     func applyAndSave(
         _ fetched: (results: [FetchResult], skipped: Int),
         rows: [SourceRef],
-        attempted: Int,
-        notConfigured: Int
+        context pass: PassContext
     ) -> RefreshOutcome {
-        let applied = apply(fetched.results, rows: rows)
+        let applied = apply(fetched.results, rows: rows, resume: pass.resume)
         if applied.superseded > 0 {
             Log.sources.info(
                 "refresh dropped \(applied.superseded, privacy: .public) result(s) a concurrent pass had already applied"
@@ -34,13 +63,15 @@ extension SourceRefreshService {
         let saveFailed = applied.cached > 0 || applied.changed > 0 ? !persist() : false
 
         let outcome = RefreshOutcome(
-            attempted: attempted,
+            attempted: pass.attempted,
             cached: saveFailed ? 0 : applied.cached,
             changed: saveFailed ? 0 : applied.changed,
             failures: applied.failures,
-            notConfigured: notConfigured,
-            skipped: fetched.skipped,
+            notConfigured: pass.notConfigured,
+            skipped: fetched.skipped + pass.unreadable,
             superseded: applied.superseded,
+            duplicates: applied.duplicates,
+            credentialWarnings: pass.warnings,
             oldestFetch: Self.oldestFetch(of: rows),
             saveFailed: saveFailed)
 
@@ -50,7 +81,8 @@ extension SourceRefreshService {
             cached \(outcome.cached, privacy: .public) \
             changed \(outcome.changed, privacy: .public) \
             failed \(outcome.failures.count, privacy: .public) \
-            skipped \(outcome.skipped, privacy: .public)
+            skipped \(outcome.skipped, privacy: .public) \
+            duplicates \(outcome.duplicates, privacy: .public)
             """)
 
         // After the save, never before, and only when something landed: an
@@ -64,7 +96,9 @@ extension SourceRefreshService {
     }
 
     /// Write every successful fetch to its row, and count what happened.
-    private func apply(_ results: [FetchResult], rows: [SourceRef]) -> Applied {
+    private func apply(
+        _ results: [FetchResult], rows: [SourceRef], resume: [UUID: ResumePoint]
+    ) -> Applied {
         var byID: [UUID: SourceRef] = [:]
         for row in rows { byID[row.id] = row }
 
@@ -80,7 +114,8 @@ extension SourceRefreshService {
                 applied.failures.append(
                     RefreshOutcome.Failure(
                         connectorID: result.connectorID, displayName: result.displayName,
-                        error: error, cachedAt: byID[result.refID]?.lastFetchedAt))
+                        error: error, cachedAt: byID[result.refID]?.lastFetchedAt,
+                        renewalURL: result.renewalURL))
             case .success(let update):
                 guard let row = byID[result.refID] else { continue }
 
@@ -96,11 +131,37 @@ extension SourceRefreshService {
                     continue
                 }
 
-                let isFirst = row.lastFetchedAt == nil
+                let resumePoint = resume[row.id] ?? .none
+
+                // **First observation means the log has never reported this ref**, not
+                // that the cache column is empty. §10.2 omits `lastFetchedAt` from an
+                // export by default while the `externalUpdate` payloads travel, so an
+                // imported ref has a resume point and a nil row timestamp — and reading
+                // only the column made the first post-import pass suppress real changes
+                // *and* record their ids, so they were never reported at all. Raised by
+                // Copilot in review of PR #43.
+                let isFirst = row.lastFetchedAt == nil && resume[row.id] == nil
+
+                // **De-duplication, because the window overlaps on purpose**
+                // (D-185, D-186). Every pass re-reads items it has already
+                // reported; the log says which, and an id the log has seen is
+                // dropped here rather than appended a second time.
+                let fresh = update.changes.filter { !resumePoint.reportedIDs.contains($0.id) }
+
+                // State items — Jira's PR links — carry no timestamp, so "new"
+                // is set difference against the last recorded set (D-187).
+                let newcomers = update.present.filter { !resumePoint.presentIDs.contains($0.id) }
+
+                applied.duplicates +=
+                    (update.changes.count - fresh.count) + (update.present.count - newcomers.count)
+
+                // **A first observation reports the summary and nothing else**
+                // (D-169), even though everything it saw is recorded below (D-188).
+                let reported = isFirst ? [] : fresh + newcomers
 
                 if let body = ExternalUpdateBody.text(
                     identifier: row.identifier, summary: update.summary,
-                    changes: update.changes, isFirstObservation: isFirst)
+                    changes: reported, isFirstObservation: isFirst)
                 {
                     context.insert(
                         Event(
@@ -108,8 +169,20 @@ extension SourceRefreshService {
                             body: body,
                             payload: ExternalUpdatePayload(
                                 refID: row.id, kind: row.kind, identifier: row.identifier,
-                                changes: update.changes, url: update.url?.absoluteString,
-                                fetchedAt: update.fetchedAt
+                                changes: reported.map(\.text), url: update.url?.absoluteString,
+                                fetchedAt: update.fetchedAt,
+                                // The watermark the next window starts from (D-184).
+                                watermark: update.watermark,
+                                // **Every id seen, not only the ids reported**
+                                // (D-188). The next window overlaps this one, so an
+                                // id missing from the log comes back as news — which
+                                // on a first observation would be the ticket's whole
+                                // recent history, one pass later.
+                                changeIDs: update.changes.map(\.id),
+                                presentIDs: update.present.map(\.id),
+                                // `nil` rather than `false`, so an ordinary fetch's payload keeps
+                                // the bytes it had before this field existed (§10.2).
+                                windowCapped: update.isWindowCapped ? true : nil
                             ).encoded()))
                     applied.changed += 1
                 }

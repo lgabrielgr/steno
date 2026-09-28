@@ -19,7 +19,7 @@ XCCONFIG := Local.xcconfig
 TOOLS    := xcodegen xcbeautify swiftlint
 
 .DEFAULT_GOAL := help
-.PHONY: help bootstrap preflight clean generate build run release test lint format export import
+.PHONY: help bootstrap preflight clean generate build run release test lint format export import atlassian-login verify-jira
 
 help: ## Show this help
 	@echo "Steno — make targets:"
@@ -258,6 +258,32 @@ verify-keychain: build ## Round-trip the real Keychain (signed build; §8, D-138
 # any change to AnthropicWire, ModelRanking, HTTPTransport or URLSessionTransport.
 verify-models: build ## Fetch the live model list with the stored key (signed build; §7.1, D-161)
 	@"$(BIN)" models-selftest
+
+# §5.2's credential, stored before M4-04 builds the Settings pane.
+#
+# `make test` never touches the Keychain (D-134) and FR-6's pane is two tasks
+# away, so without this the Jira connector would ship with no way to give it a
+# credential. It prompts for the site, email, token and expiry date; the token is
+# read from stdin with echo disabled, never from an argument, because a flag value
+# lands in `ps` output and in shell history (§8).
+#
+# One credential serves both Atlassian APIs (§5.3), so M4-03 needs nothing further.
+atlassian-login: build ## Store the Atlassian credential (signed build; §5.2, §8, D-197)
+	@"$(BIN)" atlassian-login
+
+# §5.2's Jira path, run against the live API with the credential you actually use.
+#
+# `make test` denies outbound networking (§9.4, D-012), so every Jira fixture in
+# this repo was written from Atlassian's OpenAPI document rather than from a
+# response — which makes the fixtures the wire contract until something real
+# disagrees with them. This is the check that can disagree.
+#
+# It spends four GETs against one ticket, prints what the connector would report,
+# and fails if any request was not a GET (D5, D-191). Run it after any change to
+# JiraClient, JiraEndpoint, JiraWire, JiraChangeSet or AtlassianDocument.
+verify-jira: build ## Fetch one real ticket with the stored credential (signed build; §5.2, D-197)
+	@test -n "$$ISSUE" || { echo "usage: make verify-jira ISSUE=PAY-421"; exit 2; }
+	@"$(BIN)" jira-selftest --issue "$$ISSUE"
 
 # The swiftlint check lives here rather than in `preflight`, which gates
 # build/run/release — none of which should start requiring a linter.

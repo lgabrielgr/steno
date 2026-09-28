@@ -108,6 +108,10 @@ public struct CLIRunner {
             misroutedSelftest("keychain-selftest")
         case .modelsSelftest:
             misroutedSelftest("models-selftest")
+        case .atlassianLogin:
+            misroutedSelftest("atlassian-login")
+        case .jiraSelftest:
+            misroutedSelftest("jira-selftest")
         }
     }
 

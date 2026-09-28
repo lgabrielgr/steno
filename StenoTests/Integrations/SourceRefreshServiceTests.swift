@@ -98,12 +98,14 @@ func aChangeAppendsTheChange() async throws {
 }
 
 @MainActor
-@Test("the connector is asked for changes since the row's previous observation")
-func sinceIsThePreviousObservation() async throws {
+@Test("D-184: the connector is asked for changes since the watermark, less the overlap")
+func sinceIsTheWatermarkLessTheOverlap() async throws {
     let fixture = try RefreshFixture()
     let task = try fixture.task("ship payments")
     let previously = RefreshFixture.origin.addingTimeInterval(-3600)
-    try fixture.ref("PAY-421", on: task, fetched: previously, summary: "In Progress")
+    let reported = try fixture.ref(
+        "PAY-421", on: task, fetched: previously, summary: "In Progress")
+    try fixture.observed(reported, watermark: previously)
     try fixture.ref("PAY-9", on: task)
     let connector = StubSourceConnector()
 
@@ -116,8 +118,12 @@ func sinceIsThePreviousObservation() async throws {
     // subscript yields `Date??`, so `asked["PAY-9"] == nil` is true both when the
     // ref was fetched with no `since` *and* when it was never fetched at all —
     // the one-directional blindness that makes a test unable to fail.
+    // **The watermark the log recorded, less D-185's overlap** — not the row's
+    // `lastFetchedAt`, which is the app's clock and is exactly what D-183 left open:
+    // a change the source reveals after the pass that should have seen it would be
+    // behind the next window forever.
     let seen = try #require(connector.asked.first { $0.identifier == "PAY-421" })
-    #expect(seen.since == previously)
+    #expect(seen.since == RefreshFixture.since(after: previously))
     let unseen = try #require(connector.asked.first { $0.identifier == "PAY-9" })
     #expect(unseen.since == nil)
 }
@@ -282,7 +288,9 @@ func rowsSharingAnIdentifierAreNotCoalesced() async throws {
     let first = try fixture.task("ship payments")
     let second = try fixture.task("write the runbook")
     let earlier = RefreshFixture.origin.addingTimeInterval(-7200)
-    try fixture.ref("PAY-421", on: first, fetched: earlier, summary: "In Progress")
+    let reported = try fixture.ref(
+        "PAY-421", on: first, fetched: earlier, summary: "In Progress")
+    try fixture.observed(reported, watermark: earlier)
     try fixture.ref("PAY-421", on: second)
     let connector = StubSourceConnector()
 
@@ -293,7 +301,10 @@ func rowsSharingAnIdentifierAreNotCoalesced() async throws {
     // — the earlier — hands the other row changes it has already reported,
     // producing a duplicate bullet in a stand-up read aloud.
     #expect(connector.asked.count == 2)
-    #expect(Set(connector.asked.map(\.since)) == Set([earlier, nil]))
+    // Two rows, two resume points: the one the log has heard from resumes at its own
+    // watermark, and the one it has not is asked for an anchor.
+    #expect(
+        Set(connector.asked.map(\.since)) == Set([RefreshFixture.since(after: earlier), nil]))
 }
 
 @MainActor

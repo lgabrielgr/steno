@@ -19,31 +19,35 @@ public enum CLIParser {
             throw CLIUsageError("steno: no subcommand given.\n\n\(CLIUsage.text)")
         }
 
+        // **The no-flag subcommands are a table, not four switch arms.** Each one
+        // needs exactly the same check — reject a flag rather than ignore it, so
+        // `keychain-selftest --replace` cannot look like it did something — and
+        // spelling that out per subcommand is what pushed this function past its
+        // complexity budget once there were three of them.
+        if let command = Self.noFlagSubcommands[subcommand] {
+            guard rest.count == 1 else { throw unexpected(rest[1], of: subcommand) }
+            return command
+        }
+
         switch subcommand {
         case "export":
             return try parseExport(Array(rest.dropFirst()))
         case "import":
             return try parseImport(Array(rest.dropFirst()))
-        case "keychain-selftest":
-            // Takes no flags. Accepting and ignoring them would let
-            // `keychain-selftest --replace` look like it did something.
-            guard rest.count == 1 else {
-                throw unexpected(rest[1], of: "keychain-selftest")
-            }
-            return .keychainSelftest
-        case "models-selftest":
-            // Takes no flags, for `keychain-selftest`'s reason: accepting and
-            // ignoring them would let `models-selftest --replace` look like it
-            // did something.
-            guard rest.count == 1 else {
-                throw unexpected(rest[1], of: "models-selftest")
-            }
-            return .modelsSelftest
+        case "jira-selftest":
+            return try parseJiraSelftest(Array(rest.dropFirst()))
         default:
             throw CLIUsageError(
                 "steno: unknown subcommand \"\(subcommand)\".\n\n\(CLIUsage.text)")
         }
     }
+
+    /// Subcommands that take no flags at all. Every one is a hidden harness.
+    private static let noFlagSubcommands: [String: CLICommand] = [
+        "keychain-selftest": .keychainSelftest,
+        "models-selftest": .modelsSelftest,
+        "atlassian-login": .atlassianLogin,
+    ]
 
     private static func parseExport(_ flags: [String]) throws -> CLICommand {
         var output: URL?
@@ -88,6 +92,31 @@ public enum CLIParser {
             throw CLIUsageError("steno import: --file is required.\n\n\(CLIUsage.text)")
         }
         return .importFile(file, mode: mode)
+    }
+
+    /// `steno jira-selftest --issue PAY-421`.
+    ///
+    /// The key is required and has no default: a harness that picked an issue would
+    /// spend a request on a ticket nobody asked about.
+    private static func parseJiraSelftest(_ flags: [String]) throws -> CLICommand {
+        var issueKey: String?
+        var index = 0
+
+        while index < flags.count {
+            let flag = flags[index]
+            switch flag {
+            case "--issue":
+                issueKey = try value(after: flag, in: flags, at: &index)
+            default:
+                throw unexpected(flag, of: "jira-selftest")
+            }
+            index += 1
+        }
+
+        guard let issueKey else {
+            throw CLIUsageError("steno jira-selftest: --issue is required.")
+        }
+        return .jiraSelftest(issueKey: issueKey)
     }
 
     /// The argument after `flag`, advancing past it.

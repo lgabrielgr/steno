@@ -44,9 +44,11 @@ public struct URLSessionTransport: HTTPTransport {
             for: urlRequest, delegate: RedirectBlocker.shared)
 
         guard let http = response as? HTTPURLResponse else {
-            // Not reachable over HTTPS, and `.network` rather than a crash
-            // because §7.4 must be able to degrade on *any* failure.
-            throw AIError.network
+            // Not reachable over HTTPS, and an error rather than a crash because
+            // §7.4 and §5.5 must both be able to degrade on *any* failure. A
+            // transport-level error rather than the AI layer's, because this
+            // adapter is shared ground now (D-189); each consumer maps it.
+            throw TransportError.notHTTP
         }
 
         return HTTPResponse(

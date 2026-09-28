@@ -93,7 +93,7 @@ func anOfflineReportIsLabeledStale() async throws {
     // `oldestFetch` plumbing and the notice goes nil.
     #expect(outcome.oldestFetch == twoDaysAgo)
     #expect(
-        SourceNotice.text(for: outcome, now: RefreshFixture.origin)
+        SourceNotice.message(for: outcome, now: RefreshFixture.origin)?.text
             == "Couldn't reach Always Failing — using 2 days old data.")
 }
 

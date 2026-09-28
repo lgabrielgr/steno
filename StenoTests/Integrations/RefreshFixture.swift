@@ -23,7 +23,10 @@ struct RefreshFixture {
 
     /// 2023-11-14 22:13:20 UTC. A fixed instant, so every staleness window is
     /// arithmetic the reader can check by hand.
-    static let origin = Date(timeIntervalSince1970: 1_700_000_000)
+    ///
+    /// `nonisolated` because the doubles read it at file scope: this type is
+    /// `@MainActor` for its store, and an immutable `Date` needs none of that.
+    nonisolated static let origin = Date(timeIntervalSince1970: 1_700_000_000)
 
     init() throws {
         container = try StenoStore.inMemory()
@@ -58,6 +61,46 @@ struct RefreshFixture {
         return ref
     }
 
+    /// Record that a ref has already been reported, the way a pass does (D-184).
+    ///
+    /// **An `externalUpdate` event with a payload, not just a `lastFetchedAt`.** Since
+    /// M4-02 the next `since` comes from the log rather than from the row, so a
+    /// fixture that set only the row's timestamp would set up a ref the service
+    /// correctly treats as never reported — which is how a test about `since` starts
+    /// passing for the wrong reason.
+    ///
+    /// - Parameters:
+    ///   - watermark: the newest item timestamp that observation reported. The next
+    ///     `since` is this less `ResumePoint.overlap`.
+    ///   - changeIDs: ids the log will say were already reported, for dedup tests.
+    ///   - presentIDs: the recorded state set, for the link set-difference tests.
+    ///     `nil` records no set at all, which is what a pre-M4-02 payload looks like.
+    @discardableResult
+    func observed(
+        _ ref: SourceRef, watermark: Date, at stamp: Date? = nil,
+        changes: [String] = [], changeIDs: [String] = [], presentIDs: [String]? = nil
+    ) throws -> Event {
+        let event = Event(
+            taskID: ref.taskID, timestamp: stamp ?? watermark, kind: .externalUpdate,
+            body: "\(ref.identifier): recorded by the fixture",
+            payload: ExternalUpdatePayload(
+                refID: ref.id, kind: ref.kind, identifier: ref.identifier, changes: changes,
+                url: nil, fetchedAt: watermark, watermark: watermark, changeIDs: changeIDs,
+                presentIDs: presentIDs
+            ).encoded())
+        context.insert(event)
+        try context.save()
+        return event
+    }
+
+    /// What `since` a ref with this watermark produces (D-185).
+    ///
+    /// Spelled here once so the tests read as "the watermark, less the overlap" rather
+    /// than repeating an arithmetic expression that could drift from the constant.
+    nonisolated static func since(after watermark: Date) -> Date {
+        watermark.addingTimeInterval(-ResumePoint.overlap)
+    }
+
     /// The service under test.
     ///
     /// Millisecond budgets by default: an eight-second hang in `make test` is how
@@ -70,6 +113,9 @@ struct RefreshFixture {
         connectors: [any SourceConnector],
         nowOffset: TimeInterval = 0,
         save: @escaping (ModelContext) throws -> Void = { try $0.save() },
+        readEvents: @escaping (ModelContext, UUID) throws -> [Event] = {
+            try $0.fetch(EventQueries.allEvents(forTaskID: $1))
+        },
         perFetch: Duration = .milliseconds(200),
         budget: Duration = .milliseconds(400),
         gate: SourceRefreshGate = SourceRefreshGate()
@@ -77,7 +123,7 @@ struct RefreshFixture {
         SourceRefreshService(
             context: context, registry: SourceRegistry(connectors: connectors),
             now: { Self.origin.addingTimeInterval(nowOffset) }, save: save,
-            perFetch: perFetch, budget: budget, gate: gate)
+            readEvents: readEvents, perFetch: perFetch, budget: budget, gate: gate)
     }
 
     // MARK: - Independent reads
@@ -123,5 +169,18 @@ final class FailingSave {
         attempts += 1
         if shouldFail { throw Refused() }
         try context.save()
+    }
+}
+
+extension [SourceChange] {
+    /// Text-only changes, with ids derived from the text.
+    ///
+    /// **Test sugar, and only for assertions that are about wording.** `SourceChange`
+    /// carries an id because de-duplication depends on it (D-186); a test about the
+    /// event *body* does not care what the id is, and spelling one out at every call
+    /// site would bury the sentence being asserted. Tests about dedup name their ids
+    /// explicitly.
+    static func texts(_ values: String...) -> [SourceChange] {
+        values.map { SourceChange(id: $0, text: $0) }
     }
 }

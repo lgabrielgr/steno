@@ -5100,3 +5100,586 @@ for someone to rediscover.
 `the launch pass and a Prepare pass are serialized against each other` — which exists because a
 mutation routing only `refresh(taskIDs:)` through the gate survived without it — and
 `a pass that bypasses the gate still cannot clobber a newer write`, which keeps D-181 under test.
+
+---
+
+### D-184 — The `since` watermark is derived from the event log, not stored on `SourceRef`
+
+**2026-09-28** · M4-02 · **Status:** accepted
+
+`ExternalUpdatePayload` gains `watermark`, `changeIDs` and `presentIDs`, all optional.
+`SourceRefreshService` recovers a `ResumePoint` per ref from the newest ten payloads and computes
+`since` from it. `SourceRef` gains no field, §3.4 is unamended, and §10.1's merge table is untouched.
+
+**Why not a row field**, which is the obvious shape and was the first design: it costs a §3.4
+amendment, a §10.1 merge rule ("later watermark wins, `nil` loses"), and a §10.2 decision that is a
+trap. Cached external data — `cachedSummary`, `lastFetchedAt` — is excluded from an export by
+default because it is bulky and re-fetchable. A watermark in that class resets on the machine you
+import onto, and the first pass there reports the ticket's whole recent history as news. Events
+always export, so the log carries it for free, and §10.1 already says a field recomputable from the
+log should be recomputed from it.
+
+**Ten payloads, not one.** A pass writes at most one event per ref, so a dedup set one payload deep
+forgets everything the previous pass reported the moment a new event lands — and the deliberate
+overlap (D-185) then re-reports it.
+
+**The watermark is the `max` across the scanned payloads, not the newest payload's value.** Payloads
+are ordered by event timestamp, which is our clock, while the watermarks are the source's; the two
+orders can disagree across a clock change, and a watermark that moved backwards would re-report
+everything between the two values.
+
+**Falsified by** `D-184: the connector is asked for changes since the watermark, less the overlap`,
+`the watermark is the newest across the scanned payloads, not the first one`, and
+`D-184: the resume point survives what an export leaves behind`.
+
+---
+
+### D-185 — A fifteen-minute overlap on every request, because eventual consistency is not a bug
+
+**2026-09-28** · M4-02 · **Status:** accepted
+
+`since` is the watermark less `ResumePoint.overlap`, fifteen minutes.
+
+**A watermark alone does not close D-183.** It assumes the items seen at or below that instant are
+the complete set, and Atlassian Cloud is eventually consistent: an item created at 09:58 can become
+visible after one created at 10:01. Re-asking the last fifteen minutes means the straggler is inside
+the window when it appears.
+
+**It is free on an idle ref**, which is what makes a fixed overlap safe rather than expensive. The
+window start moves only when something is reported, so a request costs what changed, not what the
+ticket has ever contained.
+
+Fifteen minutes because the asymmetry points one way: a larger overlap costs duplicate reads nobody
+sees, and a smaller one costs a change nobody ever hears about.
+
+**Revised 2026-09-28, after review.** The window is now clamped to `ResumePoint.maxLookback` —
+thirty days — before `now`. The watermark is recorded *in an event*, so it only advances when one
+is written; a ref whose every fetch finds nothing new therefore keeps the same window, and on a
+long-lived ticket that meant re-walking the same pages on every pass, forever. Thirty days bounds
+that. What it gives up is an item the source reveals more than a month late, which is not a shape
+this API produces. Raised by Copilot in review of PR #43.
+
+**Falsified by** `D-184: the connector is asked for changes since the watermark, less the
+overlap`, `the window is clamped, so a stalled watermark cannot widen it forever`, and
+`a recent watermark is not clamped` — the last of which exists because a clamp that always fired
+would pass the other two and throw away the overlap.
+
+---
+
+### D-186 — De-duplication lives in the service, keyed on stable source ids
+
+**2026-09-28** · M4-02 · **Status:** accepted
+
+`SourceUpdate.changes` becomes `[SourceChange]` — an id and its text. A connector reports everything
+in its window; `SourceRefreshService` drops changes whose ids the log has already recorded.
+
+**Why the service and not the connector.** D-172 makes this the only writer, so it is the only thing
+that should have to read the log. A connector that de-duplicated would make every future connector a
+second reader of `Event`, and a second place §3.3's redaction rule has to be honoured.
+
+**One map, computed once, read twice.** The dispatch half turns the resume point into `since`; the
+write half de-duplicates against it. Re-reading the log after the fetches would be a second query
+per ref and — worse — a second chance for the two halves to disagree about what had been reported.
+
+**The id is not a hash of the text.** An edited comment would arrive as a new change, and a status
+flipped from In Review back to In Progress and forward again would collide with its own earlier
+entry. For a batched changelog entry the key is the entry id *and* the field, because Jira puts a
+status change and an assignee change made together into one entry with two items — keying on the
+entry alone silently drops the second.
+
+`RefreshOutcome.duplicates` counts them, separately from `superseded`: one is the overlap working as
+designed and is expected to be non-zero, the other means two passes raced (D-163's rule).
+
+**Revised 2026-09-28, after review: a comment's id carries its revision**, `"9001@<updated
+epoch>"`. Jira keeps one comment id across edits and this dedup is keyed on it — so a bare comment
+id dropped every edit after the first observation, exactly cancelling the `stamp` rule D-195 wrote
+to treat an edit as news. The change-set test for edits passed because it never crossed the dedup;
+the test that was missing lives at that seam.
+
+**Also revised: a ref whose event log cannot be read is not fetched at all**, and is counted as
+`skipped`. The comment that stood in `+Reads.swift` called a failed read "the safe direction"
+because it produced a `nil` since. It was the opposite: a `nil` since makes a connector report
+what one page holds, and first-observation was decided from the cache column — so a transient read
+failure appended recent Jira history to the stand-up as news. Both raised by Copilot in review of
+PR #43.
+
+**Falsified by** `D-186: a change the log has already reported is dropped, not repeated`,
+`D-186: one entry carrying two changes yields two ids, not one`,
+`an edit to a comment already reported is reported, not swallowed by dedup`, and
+`a ref whose event log cannot be read is skipped, not fetched`.
+
+---
+
+### D-187 — Remote links are a state set, because the API gives them no timestamp
+
+**2026-09-28** · M4-02 · **Status:** accepted
+
+`SourceUpdate` carries `present: [SourceChange]` beside `changes`: the complete set observed now,
+not a delta. A member absent from the newest recorded `presentIDs` is news; the rest are the status
+quo.
+
+**Forced by the wire, not chosen.** `RemoteIssueLink` carries `id`, `globalId`, `relationship` and
+`object` — and no `created` or `updated` of any kind (verified against Atlassian's OpenAPI document,
+2026-09-28). No `since` can window them. The id-union dedup of D-186 cannot carry them either: the
+union spans ten payloads, so a link still attached but last mentioned eleven events ago would be
+re-announced.
+
+**The whole set is recorded every time**, which is what makes the difference exact and one payload
+deep. A payload that recorded no set at all — anything written before M4-02 — is skipped rather than
+read as "nothing present", because treating absence as emptiness reports every existing PR reference
+as new on the first pass after an upgrade.
+
+**A link that disappears is silent.** An event saying a PR reference was removed is a report about
+Jira's bookkeeping, not about work the user did, and §3.3's log is not a changelog of the changelog.
+
+**Falsified by** `D-187: only a link absent from the recorded set is news` and
+`a payload that recorded no link set is not read as an empty one`.
+
+---
+
+### D-188 — A first observation records everything it saw and reports only the summary
+
+**2026-09-28** · M4-02 · **Status:** accepted · **found by building, not by design**
+
+D-169 already says the first observation of a ref is an event carrying the summary. M4-02 adds the
+half that keeps the *second* pass short: the first event records its watermark and the ids of every
+item the fetch saw, while reporting none of them.
+
+**This was a real defect, caught by a test rather than by review.** The design said the connector
+should report nothing when `since` is `nil` — cheap, and apparently equivalent, since the service
+suppresses the body on a first observation anyway. It is not equivalent: with nothing returned there
+are no ids to record, so the next pass — whose window reaches fifteen minutes behind the watermark by
+design (D-185) — found those same items again and announced them as news. The first stand-up after
+enabling an integration would have repeated the ticket's last few events.
+
+So the division is: **a connector says what it saw; the service says what is new.** `JiraChangeSet`
+returns everything inside its window including on a first observation, and `since == nil` is a
+*paging* instruction (read the newest page only) rather than a reporting rule.
+
+Without the watermark being stamped on that first event, the second pass asks from `nil` and a ticket
+with three years of history arrives as a hundred-line stand-up.
+
+**Revised 2026-09-28, after review: a first observation is one the *log* has never reported** —
+`row.lastFetchedAt == nil && resume[row.id] == nil` — not one whose cache column is empty. §10.2
+omits `lastFetchedAt` from an export by default while the `externalUpdate` payloads travel, so an
+imported ref has a resume point and a nil row timestamp; reading only the column made the first
+post-import pass suppress real changes *and* record their ids, so they were never reported at all.
+Raised by Copilot in review of PR #43.
+
+**Falsified by** `D-188: a first observation records the watermark and reports only the summary`,
+`a second pass with nothing new writes no event at all` — the test that found the original defect —
+plus `after an import, a ref with events but no cached timestamp still reports its changes` and
+`a ref the log has never mentioned is still a first observation`, which pin the revision in both
+directions.
+
+---
+
+### D-189 — The transport and Keychain plumbing move to `Support/`; `Credential` stays in `AI/`
+
+**2026-09-28** · M4-02 · **Status:** accepted
+
+`HTTPTransport`, `HTTPRequest`/`HTTPResponse`, `HTTPHeaders`, `URLSessionTransport`,
+`RedirectBlocker`, `KeychainQuery` and `KeychainError` move out of `AI/` into `Support/Net/` and
+`Support/Keychain/`. `Credential`, `CredentialStore` and `KeychainCredentialStore` stay.
+
+**Why:** §13 forbids the source layer depending on the AI layer, and the Jira connector needs a
+transport and the `SecItem` mechanics. `withDeadline` made the same move for the same reason in
+M4-01 (D-177), so the destination is established rather than invented.
+
+**Why not duplicate them:** the two behaviours that would have been copied are the redirect refusal
+that stops a credential following a 302 and the header lowercasing that keeps `retry-after` readable,
+both earned in review of PR #35. A second copy is where those drift apart.
+
+**Why `Credential` does not move:** it is the AI provider's credential — keyed by provider id, with
+an `.oauth` case §7.2 exists to explain. Generalizing it to also describe a site, an email and an
+expiry date would make one type serve two unrelated schemas.
+
+Two consequences. `URLSessionTransport` threw `AIError.network` for a non-HTTP response, which is
+what made the shared adapter a member of the AI layer; it now throws `TransportError.notHTTP`, and
+`AnthropicErrors.error(forTransport:)` already maps an unrecognised error to `.network`, so the AI
+path is unchanged. And `KeychainQuery` took the service name as a constant; it now takes it as a
+parameter, because an Atlassian token is not an AI credential.
+
+**Falsified by** the suite's own count across the move — 943 before, 943 after, no test edited except
+for the new signature — and by
+`D-190: the Atlassian item is not stored under the AI layer's service name`.
+
+---
+
+### D-190 — One Atlassian credential in one Keychain item, with its site validated
+
+**2026-09-28** · M4-02 · **Status:** accepted
+
+`AtlassianCredential` carries `site`, `email`, `apiToken` and `expiresAt`, stored as one item under
+`com.lgabrielgr.steno.integrations` / `atlassian`. §5.3 shares it with Confluence, so M4-03 needs no
+credential work.
+
+**The expiry date is not a secret and is stored with the token anyway.** They are one fact: a token
+in the Keychain with its expiry in `AppSettings` is two writes that can half-fail, leaving an expiry
+date describing a token that is no longer there. It also means deleting the credential leaves nothing
+behind.
+
+**`baseURL` is validated, and that is a security property.** This credential travels as HTTP Basic,
+so a mistyped or hostile `site` would send the user's work token to whatever host it named. D19 locks
+the app to Atlassian Cloud, so requiring `*.atlassian.net` costs nothing a supported deployment
+needs. The scheme is always built `https`, so a stored `http://` cannot downgrade the connection.
+The rejections that matter are the ones that look right: `evil.com/acme.atlassian.net` parses to the
+host `evil.com`, and `acme.atlassian.net.evil.com` does not end where it claims to.
+
+A credential that fails validation reads as absent, so the ref is reported as awaiting setup — the
+wording that sends the user to Settings — rather than failing mid-pass with a sentence about the
+network.
+
+**Falsified by** `anything that is not an Atlassian Cloud host is refused` (ten cases),
+`the scheme is always https, never the stored value's`, and
+`a credential whose site is not Atlassian Cloud never reaches the network`.
+
+---
+
+### D-191 — Read-only is enforced three ways, and `updateHistory` is never sent
+
+**2026-09-28** · M4-02 · **Status:** accepted
+
+D5 is permanent and the task file asks for it to be asserted rather than intended. Three mechanisms,
+because each catches what the others cannot:
+
+1. `JiraEndpoint` is the only thing that builds a request, and `request(base:authorization:)`
+   hard-codes `.get`. Nothing under `Jira/` calls `HTTPRequest(method:…)`.
+2. `ReadOnlyTransport` wraps whatever transport the client is handed and **traps** on anything but a
+   GET. A trap rather than a `SourceError`: a mutating request is code that must not ship, and
+   turning it into a caught error would make D5 a silent fallback that the caching path papers over.
+   Its rule is a separate `isAllowed` predicate, because a test cannot survive the trap itself.
+3. Tests walk every endpoint case, spy on every request across a full `fetch` and `testConnection`,
+   and assert that no query string ever contains `updateHistory`.
+
+**`updateHistory` is the one that would have been easy to miss.** `GET /issue/{key}` accepts it, and
+it *writes* — it reorders the user's recent projects. It defaults to false, so the requirement is
+simply never to name it.
+
+**A key that is not a key is refused locally**, and that branch exists because the first version of
+it was unreachable: `URLComponents` percent-encodes a key with a space in it happily, so the `nil`
+path was dead code with a comment claiming otherwise. The rejection is `.notFound` — what a mistyped
+reference in a task title deserves — and it saves a round trip Jira would answer 400 to.
+
+**Revised 2026-09-28, review round 4: the check is an allow-list, not a whitespace test.** Rejecting
+only whitespace let `PAY/421` through, and `URLComponents` does not encode a path separator — so the
+key became an extra path segment and the request went to a *different Jira route* instead of taking
+the local `.notFound` path. Capture's own regex could never produce such a key, but an imported ref
+and `jira-selftest --issue` both bypass it. A key is now ASCII letters, digits, `-` and `_`, and the
+regression covers `/`, `?`, `#`, `%2F`, `..` and three other delimiters. Raised by Copilot in review
+round 4 of PR #43.
+
+**Falsified by** `D5: every endpoint builds a GET`, `D5: POST is not allowed`,
+`D5: every request in a full fetch is a GET`, `D5: a whole fetch through the connector issues only
+GETs`, and `D-191: `updateHistory` is never sent, because it writes`.
+
+---
+
+### D-192 — 401 is `credentialExpired`; 403 is `invalidCredential`
+
+**2026-09-28** · M4-02 · **Status:** accepted
+
+`SourceError` gains `credentialExpired`. Every 401 maps to it, without consulting the stored expiry
+date. 403 maps to `invalidCredential`, 400 and 404 to `notFound`, 429 to `rateLimited`, and
+everything else to `unavailable(status:)`.
+
+**Why 401 does not consult `expiresAt`.** The precise-looking alternative —
+`credentialExpired` only when the stored date is in the past — is worse: that date is typed in by
+hand, so it is exactly what is wrong or missing when a token silently expires, and §5.2's requirement
+is about what a 401 must never produce. A user who mistyped the date would get the generic sentence
+at the one moment §5.2 names as the worst.
+
+**Why 400 is `notFound`.** Jira answers 400 for a malformed issue key, which is a mistyped reference
+in a task title. "The integration is unavailable" would send the user to a status page over a typo.
+
+**Why 403 is not expiry.** It means an authentication policy, a blocked account or a captcha
+challenge: the credential is being refused rather than being stale, and §5.2's org-policy caveat says
+an admin may have blocked token creation entirely — nothing in the app can work around that.
+
+**Falsified by** `the status table` (ten cases),
+`§5.2: a 401 on any of the four reads becomes credentialExpired`, and
+`D-192: an expired credential is not the same error as a rejected one`.
+
+---
+
+### D-193 — The notice carries a link, and the 401 sentence hedges once
+
+**2026-09-28** · M4-02 · **Status:** accepted · amends no requirement, but deviates from §5.2's wording
+
+`SourceNotice.text` becomes `SourceNotice.message`, returning a `Message` — a sentence plus an
+optional `SourceNoticeAction`. `StandupDraftModel.sourceNotice` carries it and `StandupDraftSheet`
+renders a `Link` beside the label.
+
+**Why the type changed:** §5.2 requires a 401 to show "a direct link". A URL rendered as text inside
+a `Label` is not a link — the user would have to retype it, during stand-up prep, which is the
+situation §5.2 is written about. Only the two sentences about an expiring credential carry an action;
+a banner where every complaint is also a button is one the user stops reading (FR-5).
+
+**The wording deviation, declared rather than absorbed.** §5.2's words are "your Atlassian token
+expired — create a new one". The sentence shipped is **"your token expired or was revoked"**, because
+a 401 is also what a revoked or mistyped token returns and the unhedged sentence would state
+something false in those cases. Expiry still leads and the link is the actionable half either way.
+Three words, and they are in the PR body too.
+
+**The link cannot come from the expiry warning**, which is why `SourceConnector` exposes
+`credentialRenewalURL` separately: the warning exists only when an expiry date was recorded, and a
+401 arrives precisely when that date is wrong or was never entered.
+
+**Falsified by** `§5.2: a 401 says the token expired and never mentions the network`,
+`§5.2: the 401 sentence carries a direct link`, and
+`a connector with no renewal page gets the sentence without a link`.
+
+---
+
+### D-194 — The 14-day warning rides the connector into the draft sheet, once per pass
+
+**2026-09-28** · M4-02 · **Status:** accepted
+
+`SourceConnector` gains `credentialWarning`, defaulted to `nil`. `SourceRefreshService` collects
+warnings from `registry.all` **once per pass** and stamps them on every outcome it returns, including
+`.idle` and the `readFailed` early exit. `SourceNotice` ranks the sentence third.
+
+**Why the draft sheet and not only Settings:** M4-04 owns the Settings surface, and §5.2 names
+stand-up prep as the moment when discovering an auth problem hurts. The sheet is the surface the user
+sees then.
+
+**Why once per pass:** an implementation may read its Keychain here — `JiraConnector` does — and one
+read per pass is the measured cost, where one per ref would put twenty synchronous reads in a path
+M4-01 spent a milestone keeping non-blocking. The contract is in the protocol's doc comment, and a
+counting double holds it under test.
+
+**Why every outcome, including the early exits:** a pass whose refs are all on done tasks fetches
+nothing, and a user whose token expires on Friday must still hear about it. `.idle` is a shared
+constant, so `RefreshOutcome.warning(about:)` exists to carry them onto it.
+
+**Why third in the ranking:** a save failure and a fetch failure are already breaking, where this is
+a calendar. An expired-token 401 therefore wins with D-193's wording, which is what §5.2 wanted.
+It outranks not-configured and staleness, which are quieter facts.
+
+**Falsified by** `a pass with no refs in scope still carries the warning`,
+`the warning is read once per pass, not once per ref`,
+`D-194: a fetch that is already failing outranks a token that expires on Friday`, and
+`the boundary is the interval, not the rounded day count`.
+
+---
+
+### D-195 — Comment bodies are flattened from ADF and truncated to a gist
+
+**2026-09-28** · M4-02 · **Status:** accepted
+
+REST v3 returns comment bodies as Atlassian Document Format JSON. `AtlassianDocument.plainText`
+walks the node tree and returns at most 200 characters, cut on a word boundary.
+
+Three options, and the two rejected ones: reporting only "a new comment" sends the user to a browser
+mid-stand-up, which is the opposite of what a recall tool is for; and `expand=renderedBody` returns
+HTML, which is strictly more parsing to recover text the document already holds structurally.
+
+**Unknown node types contribute their children rather than failing.** ADF grows; a node type added
+next year must cost a fragment of a sentence, not a `.invalidResponse` for a ticket the user can see
+in their browser. `mention` contributes its rendered `@Ana` rather than an account id, and
+`inlineCard` its URL, which is often the PR the stand-up is about.
+
+**A comment's timestamp is the later of `created` and `updated`.** An edit moves `updated` alone, and
+an edit is news: the text the user would read out has changed.
+
+**Revised 2026-09-28, review round 2: the change id's revision is Jira's own timestamp string**, not
+a number derived from it. Round one used `Int(timeIntervalSince1970)`, which truncates to whole
+seconds — and Jira sends fractional seconds, so two edits inside one second collided and the second
+was dropped by the very dedup the revision had just been added to satisfy. Carrying the string keeps
+whatever precision the source sent and cannot round. `JiraComment.revision` sits beside `stamp` so the
+two cannot disagree about which timestamp wins.
+
+**Falsified by** the fourteen `AtlassianDocumentTests` cases, and
+`D-195: an edited comment is news even though it was created long ago`.
+
+---
+
+### D-196 — The changelog is paged backwards from `total`; comments are read newest-first
+
+**2026-09-28** · M4-02 · **Status:** accepted
+
+Verified against Atlassian's OpenAPI document on 2026-09-28: **neither `GET
+/issue/{key}/changelog` nor `GET /issue/{key}/comment` takes a date filter of any kind.** The
+changelog offers only `startAt` and `maxResults`; comments add `orderBy` (`created`, `-created`,
+`+created`). So the window is applied client-side.
+
+**Comments:** `orderBy=-created`, stopping at the first page whose oldest comment predates the
+window. One page for a normal ticket. Paged on `startAt + total`, because `PageOfComments` has no
+`isLast` — `PageBeanChangelog` does, and the asymmetry is real.
+
+**The changelog is ascending with no ordering parameter**, so forward paging reads a three-year
+history to find yesterday's transition. `total` makes the newest end reachable: one probe page at
+`startAt: 0` establishes `total` and settles the common case (a changelog that fits one page, where
+`isLast` is true and the probe *is* the answer), and anything longer is walked backwards from
+`total - maxResults`. The probe's values are discarded on that path — they are the oldest entries, and
+keeping them would let an ancient entry whose timestamp failed to parse be reported.
+
+**A shifting `total` is benign and a cap bounds it.** A ticket edited during the walk can move the
+page boundary, and the id-based dedup makes a re-read harmless.
+
+**Revised 2026-09-28, after review — two limitations that were previously described in terms which
+were not true** (Copilot, PR #43):
+
+- **A capped walk holds the watermark at the oldest item it read, and when both streams cap it
+  takes the *older* of the two floors** (revised in rounds 2 and 3). This entry first said the remainder "falls into the next pass's window", which was false: the
+  watermark advanced to the newest entry read, so the gap was closed over and never revisited. Round
+  one replaced that claim with a log line — and a mutation of the log survived the suite, which is
+  exactly how a fix at the wrong level announces itself. The watermark is now held at the oldest
+  entry read on any capped stream, so the gap stays *inside* the next window and fills itself once
+  the ticket quiets enough for the walk to reach past it. Both streams do this, because a fix landing
+  only on the one named in the review comment would leave the other closing over its own gap. Hitting
+  the cap is still logged at `error` with the ref named.
+
+  Round three corrected the two-stream case: the floors were combined with `max`, which reads as
+  "the point above which every stream is covered" — true, and useless, because it advances the window
+  past the older stream's gap and skips it permanently. `min` keeps more of the unreported union
+  inside the next window. `nil` — holding the anchor exactly where it was — covers all of it, and was
+  declined because after ten consecutive capped passes the previous watermark falls out of
+  `ResumePoint.scanDepth`'s scan and the anchor would be lost entirely. A monotone floor cannot do
+  that.
+
+  Round six found the whole hold-back **inert across passes**, and this is the one worth reading
+  twice. `ResumePoint` resolved several payloads' watermarks with `max`, deliberately, so a
+  watermark written out of order could not move the window backwards — and that discarded a
+  capped walk's lowered floor the moment the previous event was still inside the scan. Three
+  rounds of fixing produced no change in behaviour, and no single-fetch test could have shown it.
+  The payload now records `windowCapped`, so a deliberate lowering is distinguishable from
+  accidental disorder: a capped newest payload wins, everything else still resolves by `max`.
+  A two-pass regression covers it, because the cap tests all inspected one fetch.
+
+  Round six also corrected the comments floor: coverage after a capped walk is bounded by
+  `created`, which is the endpoint's traversal order, not by `stamp`. An old comment edited
+  recently has a newer `stamp`, and flooring on it would sit above comments the walk never
+  reached.
+
+  Round seven found the round-six fix **not wired up**: `JiraConnector` built its `SourceUpdate`
+  without forwarding `isWindowCapped`, which defaulted to `false` — so every capped walk in the
+  shipping app reported a complete window and the continuation fix was reachable only through a
+  test double. Neither side's tests could see it: `JiraChangeSet`'s stop before that adapter and
+  `ResumePoint`'s start after it. The flag is forwarded, the seam has a test in both directions,
+  and **the default is gone** so a connector that forgets it is a compile error rather than a
+  silent lie.
+- **An edit to a comment created before the paged window is not detected.** The endpoint orders by
+  `created` with no filter on `updated`, so that edit sits on a page the early stop never reaches.
+  Catching it means reading every comment on every pass; §5.2 asks for "new comments", so the
+  boundary is inside the requirement, and `an edit to a comment created before the paged window is
+  not detected` records it as a test rather than leaving it to be rediscovered.
+
+All four reads run concurrently, each `URLSession`-backed so cancellation is honoured, and each
+paging loop checks `Task.isCancelled` — M4-01's per-fetch deadline and pass budget are cooperative
+only.
+
+**Falsified by** `D-196: a long changelog is paged backwards from the end`,
+`a changelog that fits one page is one request`, `comments page on startAt plus total, because
+PageOfComments has no isLast`, and `a runaway walk stops at the page cap`.
+
+---
+
+### D-197 — Live verification is two hidden CLI subcommands
+
+**2026-09-28** · M4-02 · **Status:** accepted
+
+`make atlassian-login` and `make verify-jira ISSUE=PAY-421`, on `keychain-selftest`'s pattern
+(D-138). Both are hidden from `CLIUsage.text` and open no `ModelContainer`.
+
+**Why they exist:** `make test` denies outbound networking (§9.4, D-012) and never touches the
+Keychain (D-134), and FR-6's pane is M4-04 — so without them, nothing in this PR would ever have
+spoken to Atlassian, and the fixtures here would be the only description of the wire. That is the
+position D-143 and D-161 already identified as unacceptable for the AI transport. **Until
+`verify-jira` runs against a real ticket, these fixtures *are* the wire contract.**
+
+**The token is read from stdin with echo disabled, never from a flag.** An argument value lands in
+`ps` output and in shell history, which is what §8 keeps tokens out of. Not `getpass`, which is the
+obvious answer and truncates at `_PASSWORD_LEN` (128 bytes): an Atlassian API token is longer, so
+that would silently store a mangled token.
+
+`verify-jira` prints what the connector would report and fails if any request was not a GET — D5 as a
+live assertion rather than only a spy's. It asks for a 30-day window rather than `nil`, because a
+`nil` since establishes an anchor and reports nothing (D-188), which is useless to a human checking
+whether transitions come through.
+
+`ModelsSelftest` adopts the shared `CLISync` bridge rather than keeping its own semaphore-and-box:
+three harnesses would otherwise be three chances to get that ordering subtly wrong.
+
+**Falsified by** the nine `AtlassianLoginTests` cases and the nine `JiraSelftestTests` cases —
+including `§8: the token is read without echo and never printed back` and
+`§8: nothing it prints carries the token`.
+
+---
+
+### D-198 — The credential is memoized for thirty seconds, because routing asks per ref
+
+**2026-09-28** · M4-02 · **Status:** accepted · found in review of PR #43
+
+`JiraConnector` holds an `AtlassianCredentialCache`: one Keychain read, memoized for thirty
+seconds, `invalidate()` for M4-04 to call when it writes, and `testConnection()` bypassing it
+outright.
+
+**Why:** `SourceRegistry.dispatch` asks `isConfigured` for every ref it routes, and
+`SourceConnector`'s own doc comment says that property must be cheap and do no I/O — then this
+connector answered it with a `SecItemCopyMatching`. A twenty-ref pass meant twenty synchronous
+Keychain reads on the main actor, in the path M4-01 spent a milestone keeping non-blocking. The
+contract was right and the implementation broke it.
+
+**Thirty seconds, against two failure modes.** Shorter than a pass's own budget would put several
+reads back inside one pass, which is the thing being fixed. Much longer would make a credential the
+user has just saved look absent — so the button that matters, `testConnection()`, never answers from
+the memo. A `nil` result is memoized too: "nobody has configured this" is the ordinary state of a
+fresh machine, and re-learning it per ref is exactly the cost at issue.
+
+**Revised 2026-09-28, review round 4: the memo is told when it is wrong, by notification.** This
+entry first said M4-04 "invalidates on write" — and `invalidate()` was reachable only from a private
+property on a struct, so nothing could have called it: a credential saved while the app ran would
+have left routing on a memoized `nil` for half a minute. `AtlassianCredentialCache` now observes
+`.stenoCredentialsDidChange`, which `AtlassianKeychainStore` posts on every successful write and
+delete. A notification rather than an invalidation path threaded through `SourceRegistry` and every
+connector, for `.stenoDidWrite`'s reason (M1-08): the first registration someone forgets is a
+staleness bug that looks like the Keychain being flaky, and posting at the write is the one place
+that cannot be forgotten. Raised by Copilot in review round 4 of PR #43.
+
+**Round 5, on that same observer:** it was registered on the injected center and removed from
+`.default`, leaking the registration for every cache built with a center — which is every one in
+the test bundle. The cache keeps the center it was given and unregisters from that. Testable after
+all, because `NotificationCenter` is `open`: a subclass counting `removeObserver` calls turns what
+would have been "verified by inspection" into an assertion, which this PR has earned the habit of.
+
+A `final class` with a lock rather than a value: `JiraConnector` is a `Sendable` struct and its four
+fetches run concurrently, so an unsynchronized memo would be a data race in the one place that
+reads a secret.
+
+**Falsified by** `routing many refs reads the credential once, not once per ref`,
+`the credential memo expires, so a token saved later is still seen`, and
+`FR-6's connection test never answers from the memo`.
+
+---
+
+### D-199 — A Jira ref pointing at another instance is unhandled, not fetched from ours
+
+**2026-09-28** · M4-02 · **Status:** accepted · found in review round 3 of PR #43
+
+`JiraConnector.canHandle` claims a `.jiraIssue` ref only when it carries no URL, or when its URL
+is on the configured Atlassian Cloud site. Anything else — a self-hosted host, or a different
+`*.atlassian.net` site — is `.unhandled`.
+
+**Why the kind was not enough.** `SourceURLClassifier` classifies by path shape on purpose, and
+says so: a self-hosted `jira.corp.net/browse/PAY-421` is as much a Jira issue as a Cloud one, and
+the extractor cannot read the user's configured hosts without ceasing to be the pure function
+FR-1.5 requires. Claiming every `.jiraIssue` ref therefore meant fetching `PAY-421` from the
+configured site and filing *that* ticket's status against a ref pointing somewhere else — a
+stand-up line about a different instance's ticket, which is worse than no line. It also crosses
+D19's boundary while appearing to respect it.
+
+**A different Cloud site is refused for the sharper version of the same reason:** the same key
+exists on both, so answering from ours would be confidently wrong rather than obviously wrong.
+
+**A bare key is claimed**, because that is D7's common case — a ticket key in a task title — and
+the only instance it could mean is the configured one.
+
+**`false` means `.unhandled`, not `.notConfigured`** (D-166's distinction): nothing here can ever
+serve those refs, and "this integration isn't set up yet" would send the user to a Settings pane
+that cannot help. The one exception is a Cloud URL while nothing is configured, which *is*
+claimed — there is no site to compare against yet, and the setup nudge is the useful answer.
+
+**Falsified by** `D19: a self-hosted Jira URL is not this connector's, however Jira-shaped it is`,
+`another Atlassian Cloud site is refused too, because the same key exists on both`,
+`a bare ticket key with no URL is claimed`, and the two unconfigured cases.

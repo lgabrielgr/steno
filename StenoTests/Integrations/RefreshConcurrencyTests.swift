@@ -22,8 +22,16 @@ func overlappingTriggersAreSerialized() async throws {
     // is in flight, so two services run over one context. Sharing one gate is what
     // the running app does — `SourceRefreshService` defaults to `.shared`.
     let gate = SourceRefreshGate()
+
+    // The stub reports a watermark, because `since` is computed from one now (D-184).
+    // An hour before the pass, so the expected `since` below is a value no other clock
+    // in this test could produce by accident.
+    let watermark = RefreshFixture.origin.addingTimeInterval(-3600)
     let connector = StubSourceConnector(
-        scripts: ["PAY-421": .slow(.stub(summary: "In Review"), .milliseconds(80))])
+        scripts: [
+            "PAY-421": .slow(
+                .stub(summary: "In Review", watermark: watermark), .milliseconds(80))
+        ])
     let launch = fixture.service(connectors: [connector], nowOffset: 60, gate: gate)
     let prepare = fixture.service(connectors: [connector], nowOffset: 120, gate: gate)
 
@@ -42,9 +50,12 @@ func overlappingTriggersAreSerialized() async throws {
     #expect(outcomes.map(\.superseded).reduce(0, +) == 0)
     #expect(outcomes.map(\.attempted).reduce(0, +) == 2)
 
-    // The second pass was told to look for changes since the first pass's stamp, not
-    // since nil — the observable evidence that it read fresh rows.
-    #expect(connector.asked.compactMap(\.since).count == 1)
+    // **The second pass was told to look for changes since the watermark the first
+    // pass recorded, less D-185's overlap** — not since the row's `lastFetchedAt`
+    // (D-184, which is the app's clock and is what D-183 left open), and not since
+    // nil. This is the observable evidence that it read the log the first pass wrote.
+    #expect(
+        connector.asked.compactMap(\.since) == [watermark.addingTimeInterval(-ResumePoint.overlap)])
 }
 
 @MainActor
@@ -88,10 +99,24 @@ func theLaunchPassAndPrepareAreSerialized() async throws {
     // entry points have to be gated; a mutation that routed only `refresh(taskIDs:)`
     // through the gate survived until this test existed.
     let gate = SourceRefreshGate()
+
+    // The stub reports a watermark, because `since` is computed from one now (D-184).
+    // An hour before the pass, so the expected `since` below is a value no other clock
+    // in this test could produce by accident.
+    let watermark = RefreshFixture.origin.addingTimeInterval(-3600)
     let connector = StubSourceConnector(
-        scripts: ["PAY-421": .slow(.stub(summary: "In Review"), .milliseconds(80))])
-    let launch = fixture.service(connectors: [connector], nowOffset: 60, gate: gate)
-    let prepare = fixture.service(connectors: [connector], nowOffset: 120, gate: gate)
+        scripts: [
+            "PAY-421": .slow(
+                .stub(summary: "In Review", watermark: watermark), .milliseconds(80))
+        ])
+    // **A budget well clear of the two 80ms fetches.** What this test is about is the gate,
+    // not the clock — and with the fixture's 400ms default it went red once on a loaded machine
+    // because two serialized passes plus scheduling overran it. A flaky red on a correctness
+    // test teaches people to re-run the suite instead of reading it.
+    let launch = fixture.service(
+        connectors: [connector], nowOffset: 60, budget: .seconds(5), gate: gate)
+    let prepare = fixture.service(
+        connectors: [connector], nowOffset: 120, budget: .seconds(5), gate: gate)
 
     async let launchPass = launch.refreshDue()
     async let preparePass = prepare.refresh(taskIDs: [taskID])

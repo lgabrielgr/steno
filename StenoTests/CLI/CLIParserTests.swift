@@ -168,6 +168,11 @@ import Testing
         arguments: [
             (["keychain-selftest"], CLICommand.keychainSelftest),
             (["models-selftest"], CLICommand.modelsSelftest),
+            (["atlassian-login"], CLICommand.atlassianLogin),
+            (
+                ["jira-selftest", "--issue", "PAY-421"],
+                CLICommand.jiraSelftest(issueKey: "PAY-421")
+            ),
         ])
     func selftestParses(_ arguments: [String], _ expected: CLICommand) throws {
         #expect(try parse(arguments) == expected)
@@ -179,6 +184,7 @@ import Testing
         "a selftest takes no flags",
         arguments: [
             ["keychain-selftest", "--replace"], ["models-selftest", "--output", "/tmp/a"],
+            ["atlassian-login", "--token", "secret"],
         ])
     func selftestTakesNoFlags(_ arguments: [String]) throws {
         let error = try #require(throws: CLIUsageError.self) { try parse(arguments) }
@@ -189,8 +195,36 @@ import Testing
     /// features: `steno --help` describes what §10.5 shipped for a user to run,
     /// and a list that advertised a live API call against their key would be
     /// inviting one.
-    @Test("neither selftest appears in the usage text")
+    @Test("no harness appears in the usage text")
     func selftestsAreHidden() {
         #expect(CLIUsage.text.contains("selftest") == false)
+        #expect(CLIUsage.text.contains("atlassian") == false)
+    }
+
+    /// The token must never arrive as an argument: a flag value lands in `ps` output
+    /// and in shell history, which is what §8 keeps tokens out of. `atlassian-login`
+    /// therefore takes no flags at all, and the case above proves it rejects one.
+    @Test("jira-selftest requires the issue it is meant to read")
+    func jiraSelftestRequiresAnIssue() throws {
+        let error = try #require(throws: CLIUsageError.self) { try parse(["jira-selftest"]) }
+        #expect(error.message.contains("--issue is required"))
+    }
+
+    @Test("jira-selftest rejects an unknown flag")
+    func jiraSelftestRejectsUnknownFlags() throws {
+        let error = try #require(throws: CLIUsageError.self) {
+            try parse(["jira-selftest", "--ticket", "PAY-421"])
+        }
+        #expect(error.message.contains("unexpected argument"))
+    }
+
+    /// The missing-value guard applies here too: `--issue --replace` would otherwise
+    /// read a ticket literally named `--replace`.
+    @Test("jira-selftest refuses a flag where the key should be")
+    func jiraSelftestRefusesAFlagAsItsValue() throws {
+        let error = try #require(throws: CLIUsageError.self) {
+            try parse(["jira-selftest", "--issue", "--replace"])
+        }
+        #expect(error.message.contains("looks like a flag"))
     }
 }

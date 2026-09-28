@@ -38,6 +38,28 @@ extension Notification.Name {
     /// window reload?" unanswerable.
     public static let stenoAutoExportDidChange = Notification.Name(
         "com.lgabrielgr.steno.autoExportDidChange")
+
+    /// Posted after an integration credential is stored or deleted — by every store that
+    /// writes one.
+    ///
+    /// **Because a memo needs a way to be told it is wrong.** D-198 memoizes the Atlassian
+    /// credential for thirty seconds so routing does not read the Keychain once per ref, and
+    /// its doc comment said M4-04 "should call `invalidate()`" — a method reachable only from
+    /// a private property, so nothing could have called it. A credential saved in the running
+    /// app would have left routing on a memoized `nil` for half a minute. Raised by Copilot in
+    /// review round 4 of PR #43.
+    ///
+    /// **A notification rather than a protocol member**, for `.stenoDidWrite`'s reason: the
+    /// alternative is an invalidation path threaded through `SourceRegistry` and every
+    /// connector, and the first one forgotten is a staleness bug that looks like the Keychain
+    /// being flaky. This way M4-03's Confluence connector and M4-04's pane both get it by
+    /// posting, and a writer that forgets is the only failure mode — the same one
+    /// `.stenoDidWrite` has carried since M1-08.
+    ///
+    /// Separate from `.stenoDidWrite`, which is about the store: nothing here writes a row, and
+    /// a reader of this wants to forget a cached secret, not refetch a task list.
+    public static let stenoCredentialsDidChange = Notification.Name(
+        "com.lgabrielgr.steno.credentialsDidChange")
 }
 
 /// Holds a `NotificationCenter` token and removes it when its owner is

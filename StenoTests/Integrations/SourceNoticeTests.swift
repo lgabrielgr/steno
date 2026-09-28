@@ -3,6 +3,15 @@ import Testing
 
 @testable import StenoKit
 
+/// The sentence a notice would show.
+///
+/// M4-02 turned `SourceNotice.text` into `message`, which carries an optional link
+/// beside the wording (D-193). Every assertion in this file is about the wording, so
+/// this keeps them reading as wording; the link has its own tests.
+private func sentence(for outcome: RefreshOutcome, now: Date) -> String? {
+    SourceNotice.message(for: outcome, now: now)?.text
+}
+
 /// §5.2's staleness label (D-176).
 
 private let now = Date(timeIntervalSince1970: 1_700_000_000)
@@ -21,7 +30,7 @@ func aCleanPassIsSilent() {
     let outcome = RefreshOutcome(
         attempted: 2, cached: 2, changed: 1, oldestFetch: now.addingTimeInterval(-30))
 
-    #expect(SourceNotice.text(for: outcome, now: now) == nil)
+    #expect(sentence(for: outcome, now: now) == nil)
 }
 
 @Test("a failed fetch names the integration and how old the data is")
@@ -30,7 +39,7 @@ func aFailureNamesTheIntegration() {
         attempted: 1, failures: [failure(cachedAt: now.addingTimeInterval(-2 * 86400))])
 
     #expect(
-        SourceNotice.text(for: outcome, now: now) == "Couldn't reach Jira — using 2 days old data.")
+        sentence(for: outcome, now: now) == "Couldn't reach Jira — using 2 days old data.")
 }
 
 @Test("a failure with nothing cached says so rather than implying stale data exists")
@@ -38,7 +47,7 @@ func aFailureWithNoCacheSaysSo() {
     let outcome = RefreshOutcome(attempted: 1, failures: [failure()], oldestFetch: nil)
 
     #expect(
-        SourceNotice.text(for: outcome, now: now) == "Couldn't reach Jira — no cached data yet.")
+        sentence(for: outcome, now: now) == "Couldn't reach Jira — no cached data yet.")
 }
 
 @Test("one day reads as singular")
@@ -47,7 +56,7 @@ func oneDayIsSingular() {
         attempted: 1, failures: [failure(cachedAt: now.addingTimeInterval(-86400 - 60))])
 
     #expect(
-        SourceNotice.text(for: outcome, now: now) == "Couldn't reach Jira — using 1 day old data.")
+        sentence(for: outcome, now: now) == "Couldn't reach Jira — using 1 day old data.")
 }
 
 @Test("data fetched today reads as today's, not 0 days old")
@@ -56,7 +65,7 @@ func todayIsNotZeroDays() {
         attempted: 1, failures: [failure(cachedAt: now.addingTimeInterval(-3600))])
 
     #expect(
-        SourceNotice.text(for: outcome, now: now) == "Couldn't reach Jira — using today's data.")
+        sentence(for: outcome, now: now) == "Couldn't reach Jira — using today's data.")
 }
 
 @Test("a save failure outranks a fetch failure, because the user's retry differs")
@@ -68,7 +77,7 @@ func aSaveFailureWins() {
     // Retrying a fetch is free; a write that was refused means the draft is built
     // on older data than the app just successfully fetched.
     #expect(
-        SourceNotice.text(for: outcome, now: now)
+        sentence(for: outcome, now: now)
             == "Fetched updates couldn't be saved. This draft uses your last saved data.")
 }
 
@@ -77,14 +86,14 @@ func unconfiguredIsReported() {
     let outcome = RefreshOutcome(notConfigured: 2, oldestFetch: nil)
 
     #expect(
-        SourceNotice.text(for: outcome, now: now)
+        sentence(for: outcome, now: now)
             == "Some references have no integration set up yet.")
 }
 
 @Test("a failed candidate read is its own sentence, not a fetch failure")
 func aReadFailureIsItsOwnSentence() {
     #expect(
-        SourceNotice.text(for: RefreshOutcome(readFailed: true), now: now)
+        sentence(for: RefreshOutcome(readFailed: true), now: now)
             == "Couldn't check your integrations for this draft.")
 }
 
@@ -96,8 +105,8 @@ func quietlyOldDataIsReportedAfterADay() {
     let anHour = RefreshOutcome(attempted: 0, oldestFetch: now.addingTimeInterval(-3600))
     let threeDays = RefreshOutcome(attempted: 0, oldestFetch: now.addingTimeInterval(-3 * 86400))
 
-    #expect(SourceNotice.text(for: anHour, now: now) == nil)
-    #expect(SourceNotice.text(for: threeDays, now: now) == "Some integration data is 3 days old.")
+    #expect(sentence(for: anHour, now: now) == nil)
+    #expect(sentence(for: threeDays, now: now) == "Some integration data is 3 days old.")
 }
 
 @Test("D-165: a rejected credential is not reported as a reachability problem")
@@ -113,7 +122,7 @@ func aCredentialFailureIsNotAWifiProblem() {
     // D-165 separates .invalidCredential from .network precisely so a bad token
     // does not send the user to check their wifi, and this sentence used to undo
     // that by labelling every failure "Couldn't reach" (Copilot, PR #42).
-    let text = SourceNotice.text(for: outcome, now: now)
+    let text = sentence(for: outcome, now: now)
     #expect(text == "Jira: The integration rejected the saved credential — using 2 days old data.")
     #expect(text?.contains("Couldn't reach") == false)
 }
@@ -128,7 +137,7 @@ func aMissingReferenceIsNotAWifiProblem() {
         ])
 
     #expect(
-        SourceNotice.text(for: outcome, now: now)
+        sentence(for: outcome, now: now)
             == "Jira: That reference doesn't exist, or this account can't see it "
             + "— no cached data yet.")
 }
@@ -144,7 +153,7 @@ func aTimeoutIsAReachabilityProblem() {
         ])
 
     #expect(
-        SourceNotice.text(for: outcome, now: now) == "Couldn't reach Jira — using today's data.")
+        sentence(for: outcome, now: now) == "Couldn't reach Jira — using today's data.")
 }
 
 @Test("the age quoted is the failed ref's own, not the window's oldest")
@@ -162,5 +171,130 @@ func theAgeBelongsToTheFailedRef() {
         oldestFetch: now.addingTimeInterval(-2 * 86400))
 
     #expect(
-        SourceNotice.text(for: outcome, now: now) == "Couldn't reach Jira — no cached data yet.")
+        sentence(for: outcome, now: now) == "Couldn't reach Jira — no cached data yet.")
+}
+
+// MARK: - §5.2's token wording (D-193, D-194)
+
+/// A failure carrying the renewal link, as the service stamps it.
+private func expiredFailure(cachedAt: Date? = nil) -> RefreshOutcome.Failure {
+    RefreshOutcome.Failure(
+        connectorID: "jira", displayName: "Jira", error: .credentialExpired, cachedAt: cachedAt,
+        renewalURL: AtlassianTokenExpiry.renewalURL)
+}
+
+private func expiryWarning(daysRemaining: Int) -> SourceCredentialWarning {
+    SourceCredentialWarning(
+        displayName: "Jira", daysRemaining: daysRemaining,
+        renewalURL: AtlassianTokenExpiry.renewalURL)
+}
+
+@Test("§5.2: a 401 says the token expired and never mentions the network")
+func aFourOhOneNamesTheToken() throws {
+    let outcome = RefreshOutcome(attempted: 1, failures: [expiredFailure()])
+    let message = try #require(SourceNotice.message(for: outcome, now: RefreshFixture.origin))
+
+    #expect(message.text == "Jira: your token expired or was revoked — no cached data yet.")
+    // The words §5.2 forbids here, checked directly: "a silent 401 during stand-up prep
+    // is the worst possible time to debug auth", and sending the user to their wifi
+    // settings is how that time gets spent.
+    #expect(message.text.contains("reach") == false)
+    #expect(message.text.contains("connection") == false)
+}
+
+@Test("§5.2: the 401 sentence carries a direct link")
+func aFourOhOneCarriesALink() throws {
+    let outcome = RefreshOutcome(attempted: 1, failures: [expiredFailure()])
+    let action = try #require(
+        SourceNotice.message(for: outcome, now: RefreshFixture.origin)?.action)
+
+    #expect(action.label == "Create a new token")
+    #expect(action.url == AtlassianTokenExpiry.renewalURL)
+}
+
+@Test("the 401 sentence still says what the draft fell back on")
+func aFourOhOneStillNamesTheFallback() throws {
+    let twoDaysAgo = RefreshFixture.origin.addingTimeInterval(-2 * 24 * 60 * 60)
+    let outcome = RefreshOutcome(attempted: 1, failures: [expiredFailure(cachedAt: twoDaysAgo)])
+
+    #expect(
+        SourceNotice.message(for: outcome, now: RefreshFixture.origin)?.text
+            == "Jira: your token expired or was revoked — using 2 days old data.")
+}
+
+@Test("a connector with no renewal page gets the sentence without a link")
+func aConnectorWithoutARenewalPageGetsNoLink() throws {
+    let outcome = RefreshOutcome(
+        attempted: 1,
+        failures: [
+            RefreshOutcome.Failure(
+                connectorID: "x", displayName: "Something", error: .credentialExpired)
+        ])
+    let message = try #require(SourceNotice.message(for: outcome, now: RefreshFixture.origin))
+
+    #expect(message.text.contains("expired or was revoked"))
+    #expect(message.action == nil)
+}
+
+@Test(
+    "§5.2: the expiry warning counts down in days",
+    arguments: [
+        (9, "Your Jira token expires in 9 days."),
+        (1, "Your Jira token expires tomorrow."),
+        (0, "Your Jira token expires today."),
+        (-1, "Your Jira token has expired."),
+    ])
+func theExpiryWarningCountsDown(daysRemaining: Int, expected: String) throws {
+    let outcome = RefreshOutcome(credentialWarnings: [expiryWarning(daysRemaining: daysRemaining)])
+    let message = try #require(SourceNotice.message(for: outcome, now: RefreshFixture.origin))
+
+    #expect(message.text == expected)
+    #expect(message.action?.url == AtlassianTokenExpiry.renewalURL)
+}
+
+@Test("D-194: a fetch that is already failing outranks a token that expires on Friday")
+func afailureOutranksTheExpiryWarning() throws {
+    let outcome = RefreshOutcome(
+        attempted: 1,
+        failures: [
+            RefreshOutcome.Failure(connectorID: "jira", displayName: "Jira", error: .network)
+        ],
+        credentialWarnings: [expiryWarning(daysRemaining: 9)])
+
+    // One sentence only, and the actionable one wins: the first is breaking now, the
+    // second is a calendar.
+    #expect(
+        SourceNotice.message(for: outcome, now: RefreshFixture.origin)?.text
+            == "Couldn't reach Jira — no cached data yet.")
+}
+
+@Test("the expiry warning outranks not-configured and staleness")
+func theExpiryWarningOutranksTheQuieterSentences() throws {
+    let outcome = RefreshOutcome(
+        notConfigured: 2,
+        credentialWarnings: [expiryWarning(daysRemaining: 3)],
+        oldestFetch: RefreshFixture.origin.addingTimeInterval(-5 * 24 * 60 * 60))
+
+    #expect(
+        SourceNotice.message(for: outcome, now: RefreshFixture.origin)?.text
+            == "Your Jira token expires in 3 days.")
+}
+
+@Test("a save failure still outranks everything, including the token")
+func aSaveFailureOutranksTheToken() throws {
+    let outcome = RefreshOutcome(
+        credentialWarnings: [expiryWarning(daysRemaining: 1)], saveFailed: true)
+    #expect(
+        SourceNotice.message(for: outcome, now: RefreshFixture.origin)?.text
+            == "Fetched updates couldn't be saved. This draft uses your last saved data.")
+}
+
+@Test("a clean pass with a distant expiry says nothing at all")
+func acleanPassWithNoWarningIsSilent() {
+    // Silence is the correct label for data that is current — and a banner that fires
+    // on every draft is one the user stops reading (FR-5).
+    #expect(
+        SourceNotice.message(
+            for: RefreshOutcome(attempted: 2, cached: 2, oldestFetch: RefreshFixture.origin),
+            now: RefreshFixture.origin) == nil)
 }

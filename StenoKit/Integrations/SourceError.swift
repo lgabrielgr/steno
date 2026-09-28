@@ -20,11 +20,24 @@ public enum SourceError: Error, Equatable, Sendable {
 
     /// The service rejected the credential. Not retryable.
     ///
-    /// M4-02 adds a `credentialExpired` sibling for §5.2's 401 handling: an
-    /// Atlassian token that expired needs "create a new one" with a link, not
-    /// "check your password". Adding it is a compile error at every exhaustive
-    /// switch, which is the intent.
+    /// Its sibling below handles §5.2's 401.
     case invalidCredential
+
+    /// The service rejected the credential because it expired or was revoked
+    /// (§5.2, D-192).
+    ///
+    /// **Its own case because the sentence has to be different.** Atlassian Cloud
+    /// tokens created since December 2024 expire — one year maximum, set at
+    /// creation — so this is a scheduled, guaranteed failure rather than an edge
+    /// case, and §5.2 forbids reporting it as a generic network error: "a silent
+    /// 401 during stand-up prep is the worst possible time to debug auth", which
+    /// is exactly when it happens, because that is when the app fetches.
+    ///
+    /// **Mapped from a 401 without consulting the stored expiry date** (D-192).
+    /// Gating on "is `expiresAt` in the past" sounds more precise and is worse:
+    /// the date is typed in by hand, so it is precisely what is wrong or missing
+    /// when a token silently expires.
+    case credentialExpired
 
     /// The resource does not exist, or this credential cannot see it.
     ///
@@ -61,6 +74,13 @@ extension SourceError: LocalizedError {
             return "This integration isn't set up yet."
         case .invalidCredential:
             return "The integration rejected the saved credential."
+        case .credentialExpired:
+            // §5.2 requires "your Atlassian token expired — create a new one".
+            // **"or was revoked" is three deliberate words** (D-193): a 401 is
+            // also what a revoked or mistyped token returns, and the unhedged
+            // sentence would state something false in those cases. Expiry still
+            // leads, and `SourceNotice` attaches the link §5.2 asks for.
+            return "Your token expired or was revoked. Create a new one."
         case .notFound:
             return "That reference doesn't exist, or this account can't see it."
         case .network:
@@ -87,6 +107,7 @@ extension SourceError {
         switch self {
         case .notConfigured: return "notConfigured"
         case .invalidCredential: return "invalidCredential"
+        case .credentialExpired: return "credentialExpired"
         case .notFound: return "notFound"
         case .network: return "network"
         case .timedOut: return "timedOut"

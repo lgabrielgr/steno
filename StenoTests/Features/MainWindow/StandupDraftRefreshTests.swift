@@ -203,7 +203,7 @@ func theStalenessLabelIsAppSideOnly() async throws {
 
     await scripted.finish()
 
-    #expect(model.sourceNotice == "Couldn't reach Jira — using 2 days old data.")
+    #expect(model.sourceNotice?.text == "Couldn't reach Jira — using 2 days old data.")
     // D-176: the copied markdown is untouched. The label is for the user deciding
     // how much to trust the draft, not for the audience of the stand-up.
     #expect(!model.text.contains("Jira"))

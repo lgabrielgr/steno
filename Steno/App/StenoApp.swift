@@ -43,7 +43,13 @@ struct StenoApp: App {
     /// `.unhandled` and both refresh paths are no-ops. Registration order is
     /// priority, and it lives here — one readable array literal — rather than in a
     /// `register()` call some pane could reorder.
-    private let sourceRegistry = SourceRegistry(connectors: [])
+    /// **Registration order is priority** (D-166), and this array is the one place
+    /// it is decided. M4-01 shipped it empty (D-179); M4-02's connector is the first
+    /// entry, which is also what makes the draft sheet's "Refreshing…" line and its
+    /// staleness banner reachable in the running app for the first time.
+    private let sourceRegistry = SourceRegistry(connectors: [
+        JiraConnector(credentials: AtlassianKeychainStore())
+    ])
 
     /// §10.5's auto-export. Held for the whole process because it owns a timer
     /// and a termination observation — a controller that went out of scope

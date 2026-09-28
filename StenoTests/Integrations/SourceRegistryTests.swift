@@ -105,3 +105,49 @@ extension SourceDispatch: @retroactive Equatable {
         }
     }
 }
+
+// MARK: - The production shape (D-179)
+
+@Test("D-179: the registry is no longer empty — a Jira ref routes to the Jira connector")
+func ajiraRefRoutesToJira() throws {
+    // **This stands in for `StenoApp`'s array**, which no test can reach: the test bundle
+    // links `StenoKit`, not the application (D-010). What it asserts is the shape that
+    // array has — a configured `JiraConnector` claiming `jiraIssue` — so the wiring is
+    // checked even though the composition root is not.
+    let registry = SourceRegistry(connectors: [
+        JiraConnector(
+            credentials: InMemoryAtlassianStore(JiraFixture.credential()),
+            transport: StubJiraTransport(routes: [:]))
+    ])
+
+    let jiraRef = SourceRefSnapshot(refID: UUID(), kind: .jiraIssue, identifier: "PAY-421")
+    guard case .ready(let connector) = registry.dispatch(jiraRef) else {
+        Issue.record("a Jira issue ref did not reach a ready connector")
+        return
+    }
+    #expect(connector.id == "jira")
+
+    // A Confluence page is M4-03's, and until then it is unhandled rather than broken.
+    let pageRef = SourceRefSnapshot(refID: UUID(), kind: .confluencePage, identifier: "12345")
+    guard case .unhandled = registry.dispatch(pageRef) else {
+        Issue.record("a Confluence ref was claimed by something")
+        return
+    }
+}
+
+@Test("an unconfigured Jira connector reports the ref as awaiting setup")
+func anUnconfiguredJiraConnectorIsNotConfigured() throws {
+    // The distinction D-166 exists for: "no credential yet" is a sentence about Settings,
+    // where "nothing claims it" is silence.
+    let registry = SourceRegistry(connectors: [
+        JiraConnector(
+            credentials: InMemoryAtlassianStore(nil),
+            transport: StubJiraTransport(routes: [:]))
+    ])
+
+    let jiraRef = SourceRefSnapshot(refID: UUID(), kind: .jiraIssue, identifier: "PAY-421")
+    guard case .notConfigured = registry.dispatch(jiraRef) else {
+        Issue.record("an unconfigured connector did not report itself as unconfigured")
+        return
+    }
+}
