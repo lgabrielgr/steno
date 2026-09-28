@@ -5152,9 +5152,17 @@ ticket has ever contained.
 Fifteen minutes because the asymmetry points one way: a larger overlap costs duplicate reads nobody
 sees, and a smaller one costs a change nobody ever hears about.
 
-**Falsified by** `the overlap is dropped` surviving nothing — the mutation is caught by
-`D-184: the connector is asked for changes since the watermark, less the overlap` and by
-`D-183: two triggers firing together are serialized, so the second sees the first's write`.
+**Revised 2026-09-28, after review.** The window is now clamped to `ResumePoint.maxLookback` —
+thirty days — before `now`. The watermark is recorded *in an event*, so it only advances when one
+is written; a ref whose every fetch finds nothing new therefore keeps the same window, and on a
+long-lived ticket that meant re-walking the same pages on every pass, forever. Thirty days bounds
+that. What it gives up is an item the source reveals more than a month late, which is not a shape
+this API produces. Raised by Copilot in review of PR #43.
+
+**Falsified by** `D-184: the connector is asked for changes since the watermark, less the
+overlap`, `the window is clamped, so a stalled watermark cannot widen it forever`, and
+`a recent watermark is not clamped` — the last of which exists because a clamp that always fired
+would pass the other two and throw away the overlap.
 
 ---
 
@@ -5182,8 +5190,23 @@ entry alone silently drops the second.
 `RefreshOutcome.duplicates` counts them, separately from `superseded`: one is the overlap working as
 designed and is expected to be non-zero, the other means two passes raced (D-163's rule).
 
-**Falsified by** `D-186: a change the log has already reported is dropped, not repeated` and
-`D-186: one entry carrying two changes yields two ids, not one`.
+**Revised 2026-09-28, after review: a comment's id carries its revision**, `"9001@<updated
+epoch>"`. Jira keeps one comment id across edits and this dedup is keyed on it — so a bare comment
+id dropped every edit after the first observation, exactly cancelling the `stamp` rule D-195 wrote
+to treat an edit as news. The change-set test for edits passed because it never crossed the dedup;
+the test that was missing lives at that seam.
+
+**Also revised: a ref whose event log cannot be read is not fetched at all**, and is counted as
+`skipped`. The comment that stood in `+Reads.swift` called a failed read "the safe direction"
+because it produced a `nil` since. It was the opposite: a `nil` since makes a connector report
+what one page holds, and first-observation was decided from the cache column — so a transient read
+failure appended recent Jira history to the stand-up as news. Both raised by Copilot in review of
+PR #43.
+
+**Falsified by** `D-186: a change the log has already reported is dropped, not repeated`,
+`D-186: one entry carrying two changes yields two ids, not one`,
+`an edit to a comment already reported is reported, not swallowed by dedup`, and
+`a ref whose event log cannot be read is skipped, not fetched`.
 
 ---
 
@@ -5236,9 +5259,18 @@ returns everything inside its window including on a first observation, and `sinc
 Without the watermark being stamped on that first event, the second pass asks from `nil` and a ticket
 with three years of history arrives as a hundred-line stand-up.
 
-**Falsified by** `D-188: a first observation records the watermark and reports only the summary` and
-`a second pass with nothing new writes no event at all` — the second of which is the test that found
-the defect.
+**Revised 2026-09-28, after review: a first observation is one the *log* has never reported** —
+`row.lastFetchedAt == nil && resume[row.id] == nil` — not one whose cache column is empty. §10.2
+omits `lastFetchedAt` from an export by default while the `externalUpdate` payloads travel, so an
+imported ref has a resume point and a nil row timestamp; reading only the column made the first
+post-import pass suppress real changes *and* record their ids, so they were never reported at all.
+Raised by Copilot in review of PR #43.
+
+**Falsified by** `D-188: a first observation records the watermark and reports only the summary`,
+`a second pass with nothing new writes no event at all` — the test that found the original defect —
+plus `after an import, a ref with events but no cached timestamp still reports its changes` and
+`a ref the log has never mentioned is still a first observation`, which pin the revision in both
+directions.
 
 ---
 
@@ -5469,9 +5501,21 @@ history to find yesterday's transition. `total` makes the newest end reachable: 
 keeping them would let an ancient entry whose timestamp failed to parse be reported.
 
 **A shifting `total` is benign and a cap bounds it.** A ticket edited during the walk can move the
-page boundary; the id-based dedup makes a re-read harmless, and a ten-page cap stops a runaway. The
-watermark is then the newest item actually read, so the remainder falls into the next pass rather
-than being lost — degradation, not loss.
+page boundary, and the id-based dedup makes a re-read harmless.
+
+**Revised 2026-09-28, after review — two limitations that were previously described in terms which
+were not true** (Copilot, PR #43):
+
+- **Entries beyond the ten-page cap are not reported at all.** This entry said the remainder "falls
+  into the next pass's window"; it does not, because the watermark advances to the newest entry read
+  and the next window starts in the same place. Reaching the cap now needs more than a thousand
+  changelog entries inside D-185's thirty-day clamp, on one ticket, and hitting it is logged at
+  `error` with the ref named rather than at `info`.
+- **An edit to a comment created before the paged window is not detected.** The endpoint orders by
+  `created` with no filter on `updated`, so that edit sits on a page the early stop never reaches.
+  Catching it means reading every comment on every pass; §5.2 asks for "new comments", so the
+  boundary is inside the requirement, and `an edit to a comment created before the paged window is
+  not detected` records it as a test rather than leaving it to be rediscovered.
 
 All four reads run concurrently, each `URLSession`-backed so cancellation is honoured, and each
 paging loop checks `Task.isCancelled` — M4-01's per-fetch deadline and pass budget are cooperative
@@ -5512,3 +5556,34 @@ three harnesses would otherwise be three chances to get that ordering subtly wro
 **Falsified by** the nine `AtlassianLoginTests` cases and the nine `JiraSelftestTests` cases —
 including `§8: the token is read without echo and never printed back` and
 `§8: nothing it prints carries the token`.
+
+---
+
+### D-198 — The credential is memoized for thirty seconds, because routing asks per ref
+
+**2026-09-28** · M4-02 · **Status:** accepted · found in review of PR #43
+
+`JiraConnector` holds an `AtlassianCredentialCache`: one Keychain read, memoized for thirty
+seconds, `invalidate()` for M4-04 to call when it writes, and `testConnection()` bypassing it
+outright.
+
+**Why:** `SourceRegistry.dispatch` asks `isConfigured` for every ref it routes, and
+`SourceConnector`'s own doc comment says that property must be cheap and do no I/O — then this
+connector answered it with a `SecItemCopyMatching`. A twenty-ref pass meant twenty synchronous
+Keychain reads on the main actor, in the path M4-01 spent a milestone keeping non-blocking. The
+contract was right and the implementation broke it.
+
+**Thirty seconds, against two failure modes.** Shorter than a pass's own budget would put several
+reads back inside one pass, which is the thing being fixed. Much longer would make a credential the
+user has just saved look absent — so the button that matters, `testConnection()`, never answers
+from the memo, and M4-04 invalidates on write. A `nil` result is memoized too: "nobody has
+configured this" is the ordinary state of a fresh machine, and re-learning it per ref is exactly
+the cost at issue.
+
+A `final class` with a lock rather than a value: `JiraConnector` is a `Sendable` struct and its four
+fetches run concurrently, so an unsynchronized memo would be a data race in the one place that
+reads a secret.
+
+**Falsified by** `routing many refs reads the credential once, not once per ref`,
+`the credential memo expires, so a token saved later is still seen`, and
+`FR-6's connection test never answers from the memo`.
