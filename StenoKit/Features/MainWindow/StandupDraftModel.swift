@@ -87,7 +87,7 @@ public final class StandupDraftModel {
     /// are already separate because one means a write failed and retrying is safe
     /// while the other means the write landed; this third one means neither — the
     /// data is simply old. A single field could not say which.
-    public private(set) var sourceNotice: String?
+    public private(set) var sourceNotice: SourceNotice.Message?
 
     /// The model that produced the text now on screen, or `nil` for the raw
     /// report (D-151).
@@ -241,7 +241,7 @@ public final class StandupDraftModel {
         guard generation == polishGeneration else { return nil }
 
         isRefreshing = false
-        sourceNotice = SourceNotice.text(for: refreshed.outcome, now: now())
+        sourceNotice = SourceNotice.message(for: refreshed.outcome, now: now())
 
         // **A draft that has been copied or dismissed gets no polish at all.**
         // `commit` cancels this task and moves the phase to `.copied`, but

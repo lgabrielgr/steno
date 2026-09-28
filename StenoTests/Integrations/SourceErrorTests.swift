@@ -13,6 +13,7 @@ import Testing
 private let everyCase: [SourceError] = [
     .notConfigured,
     .invalidCredential,
+    .credentialExpired,
     .notFound,
     .network,
     .timedOut,
@@ -71,4 +72,26 @@ func rateLimitedCarriesItsInterval() {
         return
     }
     #expect(retryAfter == .seconds(30))
+}
+
+@Test("§5.2: the expired-token sentence names the token and says what to do")
+func theExpiredTokenSentenceIsActionable() throws {
+    let message = try #require(SourceError.credentialExpired.errorDescription)
+
+    // §5.2 forbids a generic network error here, and the words it forbids are the ones
+    // that send the user to their wifi settings during stand-up prep.
+    #expect(message.contains("expired"))
+    #expect(message.contains("Create a new one"))
+    #expect(message.lowercased().contains("connection") == false)
+    #expect(message.lowercased().contains("reach") == false)
+}
+
+@Test("D-192: an expired credential is not the same error as a rejected one")
+func expiredIsNotTheSameAsRejected() {
+    // The whole reason for a separate case: one needs "create a new one" with a link,
+    // the other needs "check what you pasted". Mutation: alias the two and this goes red.
+    #expect(SourceError.credentialExpired != SourceError.invalidCredential)
+    #expect(
+        SourceError.credentialExpired.errorDescription
+            != SourceError.invalidCredential.errorDescription)
 }

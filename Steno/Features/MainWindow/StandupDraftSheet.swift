@@ -42,9 +42,18 @@ struct StandupDraftSheet: View {
             // need fetch timestamps, and a line in the text would travel to Slack
             // on most reports because the launch pass runs on a 30-minute rule.
             if let sourceNotice = draft.sourceNotice {
-                Label(sourceNotice, systemImage: "clock.badge.exclamationmark")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+                // **The link is a `Link`, not text** (D-193). §5.2 requires a 401
+                // to carry a direct link, and a URL the user has to retype during
+                // stand-up prep is not one. `nil` for every other sentence, so the
+                // banner stays a banner.
+                HStack(spacing: 6) {
+                    Label(sourceNotice.text, systemImage: "clock.badge.exclamationmark")
+                    if let action = sourceNotice.action {
+                        Link(action.label, destination: action.url)
+                    }
+                }
+                .font(.caption)
+                .foregroundStyle(.secondary)
             }
 
             if let notice = draft.notice {
