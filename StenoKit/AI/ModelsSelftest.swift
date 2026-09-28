@@ -91,14 +91,7 @@ public enum ModelsSelftest {
         provider: any AIProvider,
         out: @escaping @Sendable (String) -> Void = CLIOutput.standardOut
     ) -> Int32 {
-        let box = ExitCode()
-        let finished = DispatchSemaphore(value: 0)
-        Task.detached {
-            box.value = await run(provider: provider, out: out)
-            finished.signal()
-        }
-        finished.wait()
-        return box.value
+        CLISync.runSynchronously { await run(provider: provider, out: out) }
     }
 
     /// What is safe to print about a thrown error.
@@ -113,14 +106,5 @@ public enum ModelsSelftest {
             return "the provider threw \(String(describing: type(of: error))), which is a defect"
         }
         return "\(aiError.localizedDescription) [\(aiError.metricsLabel)]"
-    }
-
-    /// A box the detached task writes and the waiting thread reads.
-    ///
-    /// `@unchecked Sendable` with no lock: the semaphore is the ordering. The
-    /// write happens before `signal()` and the read after `wait()`, which is
-    /// the same happens-before a lock would establish.
-    private final class ExitCode: @unchecked Sendable {
-        var value: Int32 = 1
     }
 }

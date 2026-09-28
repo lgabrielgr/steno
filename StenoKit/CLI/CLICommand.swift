@@ -39,6 +39,21 @@ public enum CLICommand: Equatable, Sendable {
     /// stored credential and makes one `GET`, so it is the network twin of the
     /// Keychain harness. See `ModelsSelftest`.
     case modelsSelftest
+
+    /// `steno atlassian-login` — hidden, and absent from `CLIUsage.text`.
+    ///
+    /// **Carries no store**, for `keychainSelftest`'s reason: storing a credential
+    /// has nothing to do with the event log, and creating the user's store as a side
+    /// effect of a login would be a worse tool than no tool. See `AtlassianLogin`.
+    case atlassianLogin
+
+    /// `steno jira-selftest --issue PAY-421` — hidden, and absent from
+    /// `CLIUsage.text`.
+    ///
+    /// **Carries no store either**, and carries the one argument it cannot default:
+    /// there is no sensible "any issue", and guessing one would spend a request on
+    /// somebody else's ticket. See `JiraSelftest`.
+    case jiraSelftest(issueKey: String)
 }
 
 /// A command line this build cannot act on.
