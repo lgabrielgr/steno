@@ -104,6 +104,16 @@ extension JiraComment {
         [JiraDate.parse(created), JiraDate.parse(updated)].compactMap { $0 }.max()
     }
 
+    /// When the comment was created, parsed.
+    ///
+    /// **The capped-walk floor uses this, not `stamp`.** The endpoint's traversal order is
+    /// `created`, so coverage after a capped walk is "everything created at or after the oldest
+    /// `created` read". A comment edited recently has a newer `stamp`, and a floor taken from
+    /// `stamp` would sit above unread comments whose `created` lies between — skipping them
+    /// permanently. `stamp` stays right for the complete-walk watermark, where an edit is news.
+    /// Raised by Copilot in review round 6 of PR #43.
+    var createdAt: Date? { JiraDate.parse(created) }
+
     /// The raw timestamp string behind `stamp`, for the change id's revision component.
     ///
     /// **The string, not a number derived from it.** A revision built from

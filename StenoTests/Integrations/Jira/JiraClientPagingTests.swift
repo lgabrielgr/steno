@@ -363,3 +363,35 @@ private actor TwoStreamCappedTransport: HTTPTransport {
         }
     }
 }
+
+@Test("a capped comment walk floors on created, not on a recent edit")
+func acappedCommentWalkFloorsOnCreated() async throws {
+    // **The traversal order decides the floor.** The endpoint pages by `created`, so coverage after
+    // a capped walk is "everything created at or after the oldest `created` read". The oldest
+    // comment on the last page read was edited recently, so its `stamp` is newer than comments the
+    // walk never reached — flooring on `stamp` would sit above them and skip them for good. Raised
+    // by Copilot in review round 6 of PR #43.
+    let oldCreated = "2026-09-23T08:00:00.000+0000"
+    let recentEdit = "2026-09-26T08:00:00.000+0000"
+
+    var routes = quietRoutes()
+    routes["comment@0"] = [
+        .ok(
+            JiraFixture.comments(
+                [JiraFixture.Comment(id: "c0", created: inWindow)], total: 10_000))
+    ]
+    let transport = StubJiraTransport(
+        routes: routes,
+        fallback: .ok(
+            JiraFixture.comments(
+                [JiraFixture.Comment(id: "cEdited", created: oldCreated, updated: recentEdit)],
+                total: 10_000)))
+
+    let set = try await JiraClient(transport: transport).changeSet(
+        key: JiraFixture.key, since: since, credential: JiraFixture.credential())
+
+    #expect(set.isWindowCapped)
+    #expect(set.watermark == JiraDate.parse(oldCreated))
+    // Mutation: floor on `stamp` and the watermark jumps to the edit, above unread comments.
+    #expect(set.watermark != JiraDate.parse(recentEdit))
+}

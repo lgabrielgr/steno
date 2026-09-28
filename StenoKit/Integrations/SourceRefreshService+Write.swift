@@ -179,7 +179,10 @@ extension SourceRefreshService {
                                 // on a first observation would be the ticket's whole
                                 // recent history, one pass later.
                                 changeIDs: update.changes.map(\.id),
-                                presentIDs: update.present.map(\.id)
+                                presentIDs: update.present.map(\.id),
+                                // `nil` rather than `false`, so an ordinary fetch's payload keeps
+                                // the bytes it had before this field existed (§10.2).
+                                windowCapped: update.isWindowCapped ? true : nil
                             ).encoded()))
                     applied.changed += 1
                 }

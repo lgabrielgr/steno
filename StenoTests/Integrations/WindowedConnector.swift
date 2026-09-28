@@ -33,6 +33,9 @@ final class WindowedConnector: SourceConnector, @unchecked Sendable {
     private let present: [SourceChange]
     private let kinds: Set<SourceRefKind>?
 
+    /// Reports a capped window with this floor, for the two-pass resume regression.
+    private let cappedFloor: Date?
+
     private let lock = NSLock()
     private var recorded: [Date?] = []
 
@@ -46,7 +49,8 @@ final class WindowedConnector: SourceConnector, @unchecked Sendable {
         isConfigured: Bool = true,
         credentialWarning: SourceCredentialWarning? = nil,
         credentialRenewalURL: URL? = nil,
-        kinds: Set<SourceRefKind>? = [.jiraIssue]
+        kinds: Set<SourceRefKind>? = [.jiraIssue],
+        cappedFloor: Date? = nil
     ) {
         self.summary = summary
         self.items = items
@@ -55,6 +59,7 @@ final class WindowedConnector: SourceConnector, @unchecked Sendable {
         self.credentialWarning = credentialWarning
         self.credentialRenewalURL = credentialRenewalURL
         self.kinds = kinds
+        self.cappedFloor = cappedFloor
     }
 
     func canHandle(_ ref: SourceRefSnapshot) -> Bool {
@@ -79,8 +84,10 @@ final class WindowedConnector: SourceConnector, @unchecked Sendable {
             url: nil,
             fetchedAt: RefreshFixture.origin,
             present: present,
-            // Over every item, reported or not (D-184).
-            watermark: items.map(\.stamp).max())
+            // Over every item, reported or not (D-184) — or the floor, when this connector is
+            // standing in for a walk that stopped at its page cap.
+            watermark: cappedFloor ?? items.map(\.stamp).max(),
+            isWindowCapped: cappedFloor != nil)
     }
 
     func testConnection() async throws {

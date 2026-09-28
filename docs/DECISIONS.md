@@ -5537,6 +5537,20 @@ were not true** (Copilot, PR #43):
   declined because after ten consecutive capped passes the previous watermark falls out of
   `ResumePoint.scanDepth`'s scan and the anchor would be lost entirely. A monotone floor cannot do
   that.
+
+  Round six found the whole hold-back **inert across passes**, and this is the one worth reading
+  twice. `ResumePoint` resolved several payloads' watermarks with `max`, deliberately, so a
+  watermark written out of order could not move the window backwards — and that discarded a
+  capped walk's lowered floor the moment the previous event was still inside the scan. Three
+  rounds of fixing produced no change in behaviour, and no single-fetch test could have shown it.
+  The payload now records `windowCapped`, so a deliberate lowering is distinguishable from
+  accidental disorder: a capped newest payload wins, everything else still resolves by `max`.
+  A two-pass regression covers it, because the cap tests all inspected one fetch.
+
+  Round six also corrected the comments floor: coverage after a capped walk is bounded by
+  `created`, which is the endpoint's traversal order, not by `stamp`. An old comment edited
+  recently has a newer `stamp`, and flooring on it would sit above comments the walk never
+  reached.
 - **An edit to a comment created before the paged window is not detected.** The endpoint orders by
   `created` with no filter on `updated`, so that edit sits on a page the early stop never reaches.
   Catching it means reading every comment on every pass; §5.2 asks for "new comments", so the

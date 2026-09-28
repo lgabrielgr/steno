@@ -145,7 +145,7 @@ func everyDeclaredPropertyIsEncoded() throws {
         url: "https://example.atlassian.net/browse/PAY-421",
         fetchedAt: Date(timeIntervalSince1970: 1_700_000_000),
         watermark: Date(timeIntervalSince1970: 1_699_999_000),
-        changeIDs: ["c1"], presentIDs: ["L1"])
+        changeIDs: ["c1"], presentIDs: ["L1"], windowCapped: true)
 
     let encoded = try #require(payload.encoded())
     let json = try #require(String(data: encoded, encoding: .utf8))

@@ -17,8 +17,19 @@ struct JiraChangeSet: Equatable {
     /// The complete current link set (D-187).
     let present: [SourceChange]
 
-    /// The newest item timestamp observed, whether or not it was reported (D-188).
+    /// The newest item timestamp observed, whether or not it was reported (D-188) — or, when a
+    /// walk was capped, the oldest point from which coverage is complete.
     let watermark: Date?
+
+    /// Whether a page walk stopped at the cap rather than at the end of the window.
+    ///
+    /// **Carried through to the payload, because the watermark alone cannot say it.**
+    /// `ResumePoint` resolves several payloads' watermarks with `max` — deliberately, so a
+    /// watermark written out of order cannot move the window backwards — and that discarded a
+    /// deliberately lowered floor the moment the previous event was still in the scan. So the
+    /// lowering has to be distinguishable from disorder, and this is the flag that does it.
+    /// Raised by Copilot in review round 6 of PR #43.
+    let isWindowCapped: Bool
 
     /// A stream whose walk stopped at the page cap rather than at the end of the window.
     ///
@@ -72,7 +83,8 @@ struct JiraChangeSet: Equatable {
             summary: summary(of: issue),
             changes: changes,
             present: linkChanges(in: links),
-            watermark: watermark)
+            watermark: watermark,
+            isWindowCapped: !incomplete.isEmpty)
     }
 
     // MARK: - Summary
@@ -247,9 +259,13 @@ struct JiraChangeSet: Equatable {
         // whole union: after ten consecutive capped passes the previous watermark falls out of
         // `ResumePoint.scanDepth`'s scan and the anchor would be lost altogether. A monotone
         // floor cannot do that.
+        // **The comments floor is `created`, not `stamp`.** The endpoint traverses by `created`,
+        // so coverage after a capped walk is "everything created at or after the oldest `created`
+        // read" — and a recently edited old comment has a newer `stamp`, which would put the floor
+        // above unread comments and skip them for good (Copilot, review round 6).
         let floors = [
             incomplete.contains(.changelog) ? historyDates.min() : nil,
-            incomplete.contains(.comments) ? commentDates.min() : nil,
+            incomplete.contains(.comments) ? comments.compactMap(\.createdAt).min() : nil,
         ].compactMap { $0 }
 
         // Never above what was actually seen: a floor cannot exceed the newest item, and with

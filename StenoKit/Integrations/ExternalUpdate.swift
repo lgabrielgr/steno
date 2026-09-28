@@ -85,6 +85,14 @@ struct ExternalUpdatePayload: Codable, Equatable {
     /// every time.
     let presentIDs: [String]?
 
+    /// `true` when the fetch that wrote this event stopped short of its whole window, which makes
+    /// `watermark` a floor rather than a high-water mark (D-184, revised in review round 6).
+    ///
+    /// Written as `nil` rather than `false` in the ordinary case, so a payload's bytes are
+    /// unchanged for every fetch that read its whole window — §10.2 keeps `Event.payload`
+    /// byte-exact, and a key that appears on every row is a key in every diff.
+    let windowCapped: Bool?
+
     /// **Written out rather than synthesized, so the three M4-02 fields can
     /// default.** They are optional because a payload written before M4-02 carries
     /// none; making every call site say `watermark: nil` would spread that fact over
@@ -98,7 +106,8 @@ struct ExternalUpdatePayload: Codable, Equatable {
         fetchedAt: Date,
         watermark: Date? = nil,
         changeIDs: [String]? = nil,
-        presentIDs: [String]? = nil
+        presentIDs: [String]? = nil,
+        windowCapped: Bool? = nil
     ) {
         self.refID = refID
         self.kind = kind
@@ -109,6 +118,7 @@ struct ExternalUpdatePayload: Codable, Equatable {
         self.watermark = watermark
         self.changeIDs = changeIDs
         self.presentIDs = presentIDs
+        self.windowCapped = windowCapped
     }
 
     /// **`.sortedKeys`, and it is load-bearing** (D-174). `Event.payload` is

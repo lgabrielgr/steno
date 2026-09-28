@@ -315,3 +315,37 @@ private final class RecordingNotificationCenter: NotificationCenter {
         super.removeObserver(observer)
     }
 }
+
+@MainActor
+@Test("a capped pass lowers the next pass's window, across two passes")
+func acappedPassLowersTheNextWindow() async throws {
+    // **The regression the cap tests were missing: they all inspected one fetch.** A capped walk
+    // lowers its watermark deliberately, and `ResumePoint` resolved several payloads with `max` —
+    // so the previous, higher watermark won on the very next pass and the band below the cap stayed
+    // unreachable. The hold-back was inert for three review rounds and no single-fetch test could
+    // have shown it. Raised by Copilot in review round 6 of PR #43.
+    let fixture = try RefreshFixture()
+    let task = try fixture.task("ship payments")
+    let ref = try fixture.ref("PAY-421", on: task, fetched: lastFetched, summary: "In Progress")
+
+    // The log already holds a recent, *un*capped watermark — the value that used to win.
+    let recent = RefreshFixture.origin.addingTimeInterval(-600)
+    try fixture.observed(ref, watermark: recent)
+
+    // Pass one hits its cap and reports a much older floor, with something to say so an event is
+    // written and the floor is recorded.
+    let floor = RefreshFixture.origin.addingTimeInterval(-7200)
+    let capped = WindowedConnector(
+        items: [.init(id: "c-new", text: "comment from Ana", stamp: RefreshFixture.origin)],
+        cappedFloor: floor)
+    let first = await fixture.service(connectors: [capped]).refresh(taskIDs: [task.id])
+    #expect(first.changed == 1)
+    #expect(capped.asked == [RefreshFixture.since(after: recent)])
+
+    // Pass two must resume from the floor, not from the recent watermark still sitting in the log.
+    let second = WindowedConnector(items: [])
+    _ = await fixture.service(connectors: [second], nowOffset: 60).refresh(taskIDs: [task.id])
+
+    #expect(second.asked == [RefreshFixture.since(after: floor)])
+    #expect(second.asked != [RefreshFixture.since(after: recent)])
+}

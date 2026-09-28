@@ -81,12 +81,26 @@ struct ResumePoint: Sendable, Equatable {
         let scanned = payloads.prefix(scanDepth)
         guard !scanned.isEmpty else { return .none }
 
-        // `max`, not "the first one that has a value": the payloads arrive newest
-        // first by timestamp, and the *event* timestamps are the app's clock while
-        // the watermarks are the source's. Those two orders can disagree across a
-        // clock change, and a watermark that moved backwards would re-report
-        // everything between the two values.
-        let watermark = scanned.compactMap(\.watermark).max()
+        // **A capped floor wins; otherwise `max`.** Both halves of this matter, and the second
+        // one hid a defect for three review rounds.
+        //
+        // `max` is here because the payloads arrive newest-first *by event timestamp*, which is
+        // the app's clock, while the watermarks are the source's: those two orders can disagree
+        // across a clock change, and a watermark that moved backwards would re-report everything
+        // between the two values.
+        //
+        // But a capped walk lowers its watermark deliberately — it is a floor meaning "coverage
+        // is complete above here" (D-196) — and `max` discarded that floor as soon as the
+        // previous event was still inside the scan, so the entries below the cap stayed
+        // unreachable and the whole hold-back was inert across passes. The capped flag is what
+        // tells the two cases apart: a deliberate lowering is honoured, accidental disorder is
+        // not. Raised by Copilot in review round 6 of PR #43.
+        let watermark: Date?
+        if let newest = scanned.first(where: { $0.watermark != nil }), newest.windowCapped == true {
+            watermark = newest.watermark
+        } else {
+            watermark = scanned.compactMap(\.watermark).max()
+        }
 
         let reported = scanned.reduce(into: Set<String>()) { ids, payload in
             ids.formUnion(payload.changeIDs ?? [])

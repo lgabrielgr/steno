@@ -95,6 +95,17 @@ public struct SourceUpdate: Sendable, Equatable {
     /// of the ticket's history.
     public let watermark: Date?
 
+    /// Whether the connector stopped short of the whole window — a page cap, a budget, anything
+    /// that leaves part of `since…now` unread.
+    ///
+    /// **It changes what the watermark means, so the log has to record it.** A connector that
+    /// stopped short reports a watermark that is a *floor* ("coverage is complete above here")
+    /// rather than a high-water mark, and `SourceRefreshService` resolves several payloads'
+    /// watermarks with `max` — which would throw that floor away in favour of an earlier,
+    /// higher one and leave the unread band unreachable. Defaulted to `false` for connectors
+    /// that always read their whole window.
+    public let isWindowCapped: Bool
+
     /// - Parameters:
     ///   - present: defaulted for connectors with no state stream, and for the
     ///     test doubles that predate one.
@@ -107,7 +118,8 @@ public struct SourceUpdate: Sendable, Equatable {
         url: URL?,
         fetchedAt: Date,
         present: [SourceChange] = [],
-        watermark: Date? = nil
+        watermark: Date? = nil,
+        isWindowCapped: Bool = false
     ) {
         self.summary = summary
         self.changes = changes
@@ -115,6 +127,7 @@ public struct SourceUpdate: Sendable, Equatable {
         self.fetchedAt = fetchedAt
         self.present = present
         self.watermark = watermark
+        self.isWindowCapped = isWindowCapped
     }
 }
 

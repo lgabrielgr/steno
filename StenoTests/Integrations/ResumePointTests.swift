@@ -9,11 +9,13 @@ private let refID = UUID(uuidString: "0BC7A3A0-0000-4000-8000-0000000000AA") ?? 
 private let origin = Date(timeIntervalSince1970: 1_700_000_000)
 
 private func payload(
-    watermark: Date?, changeIDs: [String]? = nil, presentIDs: [String]? = nil
+    watermark: Date?, changeIDs: [String]? = nil, presentIDs: [String]? = nil,
+    capped: Bool? = nil
 ) -> ExternalUpdatePayload {
     ExternalUpdatePayload(
         refID: refID, kind: .jiraIssue, identifier: "PAY-421", changes: [], url: nil,
-        fetchedAt: origin, watermark: watermark, changeIDs: changeIDs, presentIDs: presentIDs)
+        fetchedAt: origin, watermark: watermark, changeIDs: changeIDs, presentIDs: presentIDs,
+        windowCapped: capped)
 }
 
 @Test("no payloads means no anchor, and a nil since")
@@ -117,4 +119,44 @@ func arecentWatermarkIsNotClamped() {
     let recent = origin.addingTimeInterval(-3600)
     let point = ResumePoint.from(payloads: [payload(watermark: recent)])
     #expect(point.since(now: origin) == recent.addingTimeInterval(-ResumePoint.overlap))
+}
+
+@Test("a capped floor wins over an older, higher watermark")
+func acappedFloorWinsOverAnOlderWatermark() {
+    // **The defect this pins was three rounds old and inert.** A capped walk lowers its watermark
+    // deliberately (D-196), and `max` across the scanned payloads threw that floor away as soon as
+    // the previous event was still inside the scan — so the entries below the cap stayed
+    // unreachable and the whole hold-back did nothing across passes. Raised by Copilot in review
+    // round 6 of PR #43.
+    let floor = origin.addingTimeInterval(-7200)
+    let point = ResumePoint.from(payloads: [
+        payload(watermark: floor, capped: true),
+        payload(watermark: origin),
+    ])
+
+    #expect(point.watermark == floor)
+    #expect(point.since(now: origin) == floor.addingTimeInterval(-ResumePoint.overlap))
+}
+
+@Test("an uncapped newest payload still resolves by max, so disorder cannot move the window back")
+func anUncappedNewestPayloadStillUsesMax() {
+    // The other half, and the reason `max` is there at all: payloads arrive newest-first by *event*
+    // timestamp, which is our clock, while watermarks are the source's — so the two orders can
+    // disagree across a clock change, and honouring the newest blindly would re-report everything
+    // between the two values.
+    let point = ResumePoint.from(payloads: [
+        payload(watermark: origin.addingTimeInterval(-7200)),
+        payload(watermark: origin),
+    ])
+    #expect(point.watermark == origin)
+}
+
+@Test("a capped payload that is not the newest does not lower the window")
+func anOlderCappedPayloadDoesNotLowerTheWindow() {
+    // Once a later pass has read its whole window, the gap is behind us and the floor is history.
+    let point = ResumePoint.from(payloads: [
+        payload(watermark: origin),
+        payload(watermark: origin.addingTimeInterval(-7200), capped: true),
+    ])
+    #expect(point.watermark == origin)
 }
