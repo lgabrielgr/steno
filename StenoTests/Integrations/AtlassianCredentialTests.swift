@@ -115,22 +115,40 @@ final class InMemoryAtlassianStore: AtlassianCredentialStore, @unchecked Sendabl
     private let lock = NSLock()
     private var stored: AtlassianCredential?
     private let readError: (any Error)?
+    private let writeError: (any Error)?
+    private var reads = 0
 
-    /// - Parameter readError: injected so the connector's "a Keychain failure reads as
-    ///   absent" path can be exercised — the one that keeps a refresh from crashing
-    ///   where §5.5 says it must never block a report.
-    init(_ credential: AtlassianCredential? = nil, readError: (any Error)? = nil) {
+    /// How many times the credential was read, for the routing contract: `isConfigured` is
+    /// asked once per ref, and the connector must not answer it with a Keychain read each
+    /// time (Copilot, PR #43).
+    var readCount: Int { lock.withLock { reads } }
+
+    /// - Parameters:
+    ///   - readError: injected so the connector's "a Keychain failure reads as absent" path
+    ///     can be exercised — the one that keeps a refresh from crashing where §5.5 says it
+    ///     must never block a report.
+    ///   - writeError: injected so `atlassian-login` can be shown reporting a refused write
+    ///     rather than printing "stored" over it.
+    init(
+        _ credential: AtlassianCredential? = nil, readError: (any Error)? = nil,
+        writeError: (any Error)? = nil
+    ) {
         self.stored = credential
         self.readError = readError
+        self.writeError = writeError
     }
 
     func store(_ credential: AtlassianCredential) throws {
+        if let writeError { throw writeError }
         lock.withLock { stored = credential }
     }
 
     func credential() throws -> AtlassianCredential? {
         if let readError { throw readError }
-        return lock.withLock { stored }
+        return lock.withLock {
+            reads += 1
+            return stored
+        }
     }
 
     func delete() throws {

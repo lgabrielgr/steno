@@ -24,6 +24,16 @@ public struct JiraConnector: SourceConnector {
     private let client: JiraClient
     private let now: @Sendable () -> Date
 
+    /// Memoizes the credential for a moment, so **routing does not read the Keychain once
+    /// per ref**.
+    ///
+    /// `SourceRegistry.dispatch` asks `isConfigured` for every ref it routes, and
+    /// `SourceConnector` states that the property must be cheap — then this connector
+    /// answered it with a `SecItemCopyMatching`, which is twenty synchronous Keychain
+    /// reads on the main actor for a twenty-ref pass. Raised by Copilot in review of
+    /// PR #43.
+    private let cache = AtlassianCredentialCache()
+
     /// - Parameters:
     ///   - transport: injected so `make test` can exercise every path with
     ///     networking denied (§9.4). The default is the real adapter, and the client
@@ -94,7 +104,10 @@ public struct JiraConnector: SourceConnector {
     }
 
     public func testConnection() async throws {
-        guard let credential else { throw SourceError.notConfigured }
+        // **Deliberately uncached.** FR-6's test exists to say whether what is stored
+        // *right now* works, and answering it from a memo would make a freshly pasted
+        // token look broken for as long as the cache lives.
+        guard let credential = credential(fresh: true) else { throw SourceError.notConfigured }
         try await client.verify(credential: credential)
     }
 
@@ -106,13 +119,63 @@ public struct JiraConnector: SourceConnector {
     /// not usable right now — which produces the not-configured wording rather than
     /// a crash in a refresh that §5.5 says must never block a report.
     private var credential: AtlassianCredential? {
-        do {
-            return try credentials.credential()
-        } catch {
-            Log.sources.error(
-                "could not read the Atlassian credential: \(String(describing: error), privacy: .public)"
-            )
-            return nil
+        credential(fresh: false)
+    }
+
+    /// - Parameter fresh: bypasses the memo. Used by `testConnection()` only.
+    private func credential(fresh: Bool) -> AtlassianCredential? {
+        cache.credential(now: now(), fresh: fresh) {
+            do {
+                return try credentials.credential()
+            } catch {
+                Log.sources.error(
+                    "could not read the Atlassian credential: \(String(describing: error), privacy: .public)"
+                )
+                return nil
+            }
         }
+    }
+}
+
+/// A short-lived memo over one Keychain read.
+///
+/// **Thirty seconds, chosen against two failure modes.** Shorter than a refresh pass's own
+/// budget would put several Keychain reads back into one pass, which is what this exists to
+/// prevent; much longer would make a credential the user has just saved look absent. M4-04
+/// writes the credential and should call `invalidate()` when it does, which removes the
+/// staleness question entirely — `testConnection()` already bypasses the memo, so the button
+/// that matters is never answered from it.
+///
+/// A `final class` with a lock because `JiraConnector` is a `Sendable` struct and four
+/// fetches run concurrently: an unsynchronized memo would be a data race in the one place
+/// that reads a secret.
+final class AtlassianCredentialCache: @unchecked Sendable {
+    static let ttl: TimeInterval = 30
+
+    private let lock = NSLock()
+    private var stored: (credential: AtlassianCredential?, readAt: Date)?
+
+    /// The memoized credential, reading through `read` when the memo is cold, stale, or
+    /// bypassed.
+    ///
+    /// **A `nil` result is memoized too.** "No credential" is the ordinary state of a
+    /// machine nobody has configured, and re-reading the Keychain per ref to learn it again
+    /// is exactly the cost being avoided.
+    func credential(
+        now: Date, fresh: Bool, read: () -> AtlassianCredential?
+    ) -> AtlassianCredential? {
+        lock.withLock {
+            if !fresh, let stored, now.timeIntervalSince(stored.readAt) < Self.ttl {
+                return stored.credential
+            }
+            let value = read()
+            stored = (value, now)
+            return value
+        }
+    }
+
+    /// Drop the memo. For M4-04, after it writes a credential.
+    func invalidate() {
+        lock.withLock { stored = nil }
     }
 }

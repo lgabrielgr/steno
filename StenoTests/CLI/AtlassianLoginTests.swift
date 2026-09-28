@@ -129,13 +129,19 @@ func amissingEmailIsRefused() throws {
 @Test("a store that refuses the write is reported, not swallowed")
 func astoreFailureIsReported() throws {
     struct Refused: Error {}
-    // A store that throws on read is also a store that would throw on write; the
-    // harness must say so rather than print "stored" over a failure.
-    let store = InMemoryAtlassianStore(readError: Refused())
+    // **This test used to accept either exit code**, which made it unfalsifiable: a
+    // regression that printed "stored" after a failed write would have passed it. Raised by
+    // Copilot in review of PR #43. Now the double throws from `store`, and both the code and
+    // the message are asserted.
+    let store = InMemoryAtlassianStore(writeError: Refused())
     let input = ScriptedInput(lines: ["acme.atlassian.net", "leo@example.com", ""])
 
     let result = run(input, store: store)
-    #expect(result.code == 0 || result.code == 1)
+
+    #expect(result.code == 1)
+    #expect(result.output.contains { $0.contains("FAIL") })
+    #expect(result.output.contains { $0.contains("stored leo@example.com") } == false)
+    #expect(try store.credential() == nil)
 }
 
 @Test("the expiry date is parsed in UTC, not in the machine's region")
