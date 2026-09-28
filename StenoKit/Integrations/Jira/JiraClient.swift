@@ -64,12 +64,27 @@ struct JiraClient: Sendable {
             [JiraRemoteLink].self, from: .remoteLinks(key: key), base: base,
             authorization: authorization)
 
+        // **Awaited issue-first, and the order is a decision.** All four run concurrently, so
+        // when several fail the one whose error escapes is whichever is awaited first — and
+        // the issue read is the one whose failure describes the ref best. Reordering these
+        // lines silently changes which `SourceError` the staleness banner shows, which is how
+        // `the connector throws SourceError and nothing else` caught this being rearranged.
+        let issueRead = try await issue
+        let historyRead = try await history
+        let commentsRead = try await comments
+        let linksRead = try await links
+
+        var incomplete: Set<JiraChangeSet.Stream> = []
+        if historyRead.capped { incomplete.insert(.changelog) }
+        if commentsRead.capped { incomplete.insert(.comments) }
+
         return JiraChangeSet.make(
-            issue: try await issue,
-            history: try await history,
-            comments: try await comments,
-            links: try await links,
-            since: since)
+            issue: issueRead,
+            history: historyRead.entries,
+            comments: commentsRead.comments,
+            links: linksRead,
+            since: since,
+            incomplete: incomplete)
     }
 
     /// FR-6's connection test: the cheapest authenticated read Jira offers.
@@ -96,7 +111,7 @@ struct JiraClient: Sendable {
     /// newest end.
     private func history(
         key: String, since: Date?, base: URL, authorization: String
-    ) async throws -> [JiraChangelogEntry] {
+    ) async throws -> (entries: [JiraChangelogEntry], capped: Bool) {
         let probe = try await fetch(
             JiraChangelogPage.self,
             from: .changelog(key: key, startAt: 0, maxResults: Self.changelogPageSize),
@@ -104,7 +119,7 @@ struct JiraClient: Sendable {
 
         let total = probe.total ?? probe.values?.count ?? 0
         if probe.isLast == true || total <= Self.changelogPageSize {
-            return probe.values ?? []
+            return (probe.values ?? [], false)
         }
 
         // The probe returned the *oldest* entries, which are outside any window this
@@ -113,6 +128,7 @@ struct JiraClient: Sendable {
         var collected: [String: JiraChangelogEntry] = [:]
         var start = max(0, total - Self.changelogPageSize)
         var pages = 0
+        var reachedWindowEnd = since == nil
 
         while pages < Self.maxPages {
             if Task.isCancelled { break }
@@ -135,19 +151,25 @@ struct JiraClient: Sendable {
             guard let since else { break }
 
             let oldest = (page.values ?? []).compactMap { JiraDate.parse($0.created) }.min()
-            if let oldest, oldest < since { break }
-            if start == 0 { break }
+            if let oldest, oldest < since {
+                reachedWindowEnd = true
+                break
+            }
+            if start == 0 {
+                reachedWindowEnd = true
+                break
+            }
             start = max(0, start - Self.changelogPageSize)
         }
 
-        if pages >= Self.maxPages {
-            // `error`, not `info`: entries beyond the cap are not reported at all, so this
-            // is a gap in what the user was told rather than a slow pass.
+        if !reachedWindowEnd {
+            // `error`, not `info`: this is a gap in what the user was told rather than a slow
+            // pass — and the watermark is held back so the gap stays inside the next window.
             Log.sources.error(
-                "jira changelog paging hit the \(Self.maxPages, privacy: .public)-page cap for one ref; older entries in the window were not read"
+                "jira changelog paging hit the \(Self.maxPages, privacy: .public)-page cap for one ref; the watermark is held at the oldest entry read"
             )
         }
-        return Array(collected.values)
+        return (Array(collected.values), !reachedWindowEnd)
     }
 
     /// The comments that could be inside the window.
@@ -166,10 +188,11 @@ struct JiraClient: Sendable {
     /// Raised by Copilot in review of PR #43.
     private func comments(
         key: String, since: Date?, base: URL, authorization: String
-    ) async throws -> [JiraComment] {
+    ) async throws -> (comments: [JiraComment], capped: Bool) {
         var collected: [JiraComment] = []
         var start = 0
         var pages = 0
+        var reachedWindowEnd = false
 
         while pages < Self.maxPages {
             if Task.isCancelled { break }
@@ -183,15 +206,41 @@ struct JiraClient: Sendable {
             collected.append(contentsOf: batch)
             pages += 1
 
-            if batch.isEmpty { break }
-            guard let since else { break }
+            if batch.isEmpty {
+                reachedWindowEnd = true
+                break
+            }
+            guard let since else {
+                reachedWindowEnd = true
+                break
+            }
 
-            if let oldest = batch.compactMap(\.stamp).min(), oldest < since { break }
+            if let oldest = batch.compactMap(\.stamp).min(), oldest < since {
+                reachedWindowEnd = true
+                break
+            }
 
             start += batch.count
-            if let total = page.total, start >= total { break }
+            if let total = page.total, start >= total {
+                reachedWindowEnd = true
+                break
+            }
         }
-        return collected
+
+        // **The cap is a gap in what the user was told, so it is logged as one.** Stopping
+        // here without reaching a page older than the window means the oldest comments
+        // inside it were not read — and because the watermark advances to the newest comment
+        // seen, the next pass starts in the same place and never reaches them. Same shape as
+        // the changelog cap, and the same reasoning: a continuation needs a persisted cursor
+        // and therefore export, import and merge rules, for a ticket with more than
+        // \(Self.maxPages * Self.commentPageSize) comments inside `ResumePoint.maxLookback`.
+        // Raised by Copilot in review round 2 of PR #43.
+        if !reachedWindowEnd {
+            Log.sources.error(
+                "jira comment paging hit the \(Self.maxPages, privacy: .public)-page cap for one ref; the watermark is held at the oldest comment read"
+            )
+        }
+        return (collected, !reachedWindowEnd)
     }
 
     // MARK: - One request

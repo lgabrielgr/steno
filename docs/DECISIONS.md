@@ -5475,6 +5475,13 @@ in their browser. `mention` contributes its rendered `@Ana` rather than an accou
 **A comment's timestamp is the later of `created` and `updated`.** An edit moves `updated` alone, and
 an edit is news: the text the user would read out has changed.
 
+**Revised 2026-09-28, review round 2: the change id's revision is Jira's own timestamp string**, not
+a number derived from it. Round one used `Int(timeIntervalSince1970)`, which truncates to whole
+seconds — and Jira sends fractional seconds, so two edits inside one second collided and the second
+was dropped by the very dedup the revision had just been added to satisfy. Carrying the string keeps
+whatever precision the source sent and cannot round. `JiraComment.revision` sits beside `stamp` so the
+two cannot disagree about which timestamp wins.
+
 **Falsified by** the fourteen `AtlassianDocumentTests` cases, and
 `D-195: an edited comment is news even though it was created long ago`.
 
@@ -5506,11 +5513,15 @@ page boundary, and the id-based dedup makes a re-read harmless.
 **Revised 2026-09-28, after review — two limitations that were previously described in terms which
 were not true** (Copilot, PR #43):
 
-- **Entries beyond the ten-page cap are not reported at all.** This entry said the remainder "falls
-  into the next pass's window"; it does not, because the watermark advances to the newest entry read
-  and the next window starts in the same place. Reaching the cap now needs more than a thousand
-  changelog entries inside D-185's thirty-day clamp, on one ticket, and hitting it is logged at
-  `error` with the ref named rather than at `info`.
+- **A capped walk holds the watermark at the oldest item it read** (revised again in review round
+  2). This entry first said the remainder "falls into the next pass's window", which was false: the
+  watermark advanced to the newest entry read, so the gap was closed over and never revisited. Round
+  one replaced that claim with a log line — and a mutation of the log survived the suite, which is
+  exactly how a fix at the wrong level announces itself. The watermark is now held at the oldest
+  entry read on any capped stream, so the gap stays *inside* the next window and fills itself once
+  the ticket quiets enough for the walk to reach past it. Both streams do this, because a fix landing
+  only on the one named in the review comment would leave the other closing over its own gap. Hitting
+  the cap is still logged at `error` with the ref named.
 - **An edit to a comment created before the paged window is not detected.** The endpoint orders by
   `created` with no filter on `updated`, so that edit sits on a page the early stop never reaches.
   Catching it means reading every comment on every pass; §5.2 asks for "new comments", so the

@@ -20,6 +20,20 @@ struct JiraChangeSet: Equatable {
     /// The newest item timestamp observed, whether or not it was reported (D-188).
     let watermark: Date?
 
+    /// A stream whose walk stopped at the page cap rather than at the end of the window.
+    ///
+    /// **Why this has to reach the watermark.** The watermark means "everything above this
+    /// has been reported". A capped walk reads the *newest* page and misses the oldest
+    /// entries inside the window, so claiming the newest timestamp would close over a gap and
+    /// the next pass — which starts from that timestamp — would never look at it again. The
+    /// first attempt at this finding logged the cap and changed nothing, and a mutation of
+    /// that log survived the suite, which is what showed the fix was in the wrong place.
+    /// Raised by Copilot in review round 2 of PR #43.
+    enum Stream: Sendable {
+        case changelog
+        case comments
+    }
+
     /// Assemble one fetch's answer.
     ///
     /// - Parameter since: `nil` means "no anchor yet" — the client then reads only the
@@ -31,14 +45,21 @@ struct JiraChangeSet: Equatable {
     /// first observation saw unrecorded, so the next pass — whose window deliberately
     /// overlaps by fifteen minutes (D-185) — found them again and reported them as
     /// news. A connector says what it saw; the service says what is new.
+    ///
+    /// - Parameter incomplete: streams whose walk hit the page cap. The watermark is then
+    ///   the oldest point from which coverage *is* complete, so the gap stays inside the
+    ///   next pass's window instead of being closed over — and fills itself once the ticket
+    ///   quiets down enough for the walk to reach past it.
     static func make(
         issue: JiraIssue,
         history: [JiraChangelogEntry],
         comments: [JiraComment],
         links: [JiraRemoteLink],
-        since: Date?
+        since: Date?,
+        incomplete: Set<Stream> = []
     ) -> JiraChangeSet {
-        let watermark = self.watermark(history: history, comments: comments)
+        let watermark = self.watermark(
+            history: history, comments: comments, incomplete: incomplete)
 
         // `.distantPast` for a first observation: every item the client chose to fetch
         // is inside the window, and the service is what keeps them out of the event
@@ -164,11 +185,18 @@ struct JiraChangeSet: Equatable {
 
             // **The id carries the revision, not just the comment** (Copilot, PR #43).
             // Jira keeps one id across edits, and `SourceRefreshService` de-duplicates on
-            // it — so a bare comment id made every edit after the first observation
-            // undroppable news into silently dropped news, which is the opposite of what
-            // `stamp` was written to do. The comment id stays the prefix, so the source
-            // identity is still legible in a payload.
-            let revision = comment.stamp.map { "@\(Int($0.timeIntervalSince1970))" } ?? ""
+            // it — so a bare comment id made every edit after the first observation into
+            // silently dropped news, which is the opposite of what `stamp` was written to
+            // do. The comment id stays the prefix, so the source identity is still legible
+            // in a payload.
+            //
+            // **The revision is Jira's own timestamp string, not a number we derive from
+            // it.** The first fix used `Int(timeIntervalSince1970)`, which truncates to
+            // whole seconds — so two edits inside one second collided and the second was
+            // dropped again, by the same dedup, for a new reason. Carrying the string keeps
+            // whatever precision the source sent and cannot round. Raised by Copilot in
+            // review round 2 of PR #43.
+            let revision = comment.revision.map { "@\($0)" } ?? ""
             return SourceChange(id: "\(id)\(revision)", text: text)
         }
     }
@@ -201,10 +229,27 @@ struct JiraChangeSet: Equatable {
     /// it from the reported subset would move it backwards whenever a pass reported
     /// nothing, and re-report everything in between.
     private static func watermark(
-        history: [JiraChangelogEntry], comments: [JiraComment]
+        history: [JiraChangelogEntry], comments: [JiraComment], incomplete: Set<Stream>
     ) -> Date? {
         let historyDates = history.compactMap { JiraDate.parse($0.created) }
         let commentDates = comments.compactMap(\.stamp)
-        return (historyDates + commentDates).max()
+
+        guard !incomplete.isEmpty else { return (historyDates + commentDates).max() }
+
+        // **The oldest point with complete coverage**, which is the newest of the capped
+        // streams' oldest entries: above that line every stream was read to the end of its
+        // window. A capped stream that read nothing at all contributes no line and cannot
+        // raise it.
+        let floors = [
+            incomplete.contains(.changelog) ? historyDates.min() : nil,
+            incomplete.contains(.comments) ? commentDates.min() : nil,
+        ].compactMap { $0 }
+
+        // Never above what was actually seen: a floor cannot exceed the newest item, and
+        // with nothing read there is no anchor to report at all.
+        guard let floor = floors.max(), let newest = (historyDates + commentDates).max() else {
+            return nil
+        }
+        return min(floor, newest)
     }
 }

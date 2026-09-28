@@ -103,6 +103,23 @@ extension JiraComment {
     var stamp: Date? {
         [JiraDate.parse(created), JiraDate.parse(updated)].compactMap { $0 }.max()
     }
+
+    /// The raw timestamp string behind `stamp`, for the change id's revision component.
+    ///
+    /// **The string, not a number derived from it.** A revision built from
+    /// `Int(timeIntervalSince1970)` truncates to whole seconds, so two edits inside one
+    /// second produce one id and the second is dropped by the service's dedup — the same
+    /// defect the revision was added to fix, one layer down. This carries whatever
+    /// precision Jira sent, including the fractional seconds it actually sends.
+    ///
+    /// Computed beside `stamp` so the two cannot disagree about which timestamp wins.
+    var revision: String? {
+        let candidates = [created, updated].compactMap { raw -> (String, Date)? in
+            guard let raw, let parsed = JiraDate.parse(raw) else { return nil }
+            return (raw, parsed)
+        }
+        return candidates.max { $0.1 < $1.1 }?.0
+    }
 }
 
 /// A remote link — §5.2's "linked PR references".

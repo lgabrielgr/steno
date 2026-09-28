@@ -303,3 +303,89 @@ func anEditOutsideThePagedWindowIsNotDetected() async throws {
     #expect(asked.filter { $0.hasPrefix("comment") } == ["comment@0"])
     #expect(set.changes.isEmpty)
 }
+
+@Test("a capped comment walk holds the watermark at the oldest comment it read")
+func acommentWalkThatHitsTheCapStops() async throws {
+    // Every page is inside the window and `total` claims there is always more — a ticket with
+    // hundreds of recent comments. The walk stops at the cap, so the oldest comments inside
+    // the window are never read.
+    //
+    // **The watermark is therefore held at the oldest comment read, not the newest.**
+    // Advancing it would close over that gap, and the next pass — which starts from the
+    // watermark — would never look at it again. Held back, the gap stays inside the window and
+    // fills itself once the ticket quiets enough for the walk to reach past it. Raised by
+    // Copilot in review round 2 of PR #43; the first attempt only logged the cap, and a
+    // mutation of that log survived the suite, which is what showed the fix was in the wrong
+    // place.
+    //
+    // **The pages carry different timestamps on purpose.** The first version of this test gave
+    // every comment the same one, so `min` and `max` were the same value and the assertions
+    // below could not tell a held-back watermark from an advanced one — two mutations survived
+    // it. Page one is the newest comment; every later page is older but still inside the
+    // window, so the walk runs to the cap.
+    let midWindow = "2026-09-24T09:00:00.000+0000"
+    var routes = quietRoutes()
+    routes["comment@0"] = [
+        .ok(
+            JiraFixture.comments(
+                [JiraFixture.Comment(id: "c0", created: inWindow)], total: 10_000))
+    ]
+    let transport = StubJiraTransport(
+        routes: routes,
+        fallback: .ok(
+            JiraFixture.comments(
+                [JiraFixture.Comment(id: "cN", created: midWindow)], total: 10_000)))
+
+    let set = try await JiraClient(transport: transport).changeSet(
+        key: JiraFixture.key, since: since, credential: JiraFixture.credential())
+
+    let asked = await transport.received.map(StubJiraTransport.endpointKey)
+    #expect(asked.filter { $0.hasPrefix("comment") }.count == JiraClient.maxPages)
+    // What it read is still reported — a partial window beats an empty one (§5.5).
+    #expect(set.changes.isEmpty == false)
+    #expect(set.watermark == JiraDate.parse(midWindow))
+    #expect(set.watermark != JiraDate.parse(inWindow))
+}
+
+@Test("a capped changelog walk also holds the watermark back")
+func acappedChangelogWalkHoldsTheWatermarkBack() async throws {
+    // The same rule on the other stream, because a fix that landed on only the stream in the
+    // review comment would leave the other one closing over its own gap.
+    let older = "2026-09-23T08:00:00.000+0000"
+    var routes = quietRoutes()
+    routes["changelog@0"] = [.ok(JiraFixture.changelog([], total: 10_000, isLast: false))]
+    let transport = StubJiraTransport(
+        routes: routes,
+        fallback: .ok(
+            JiraFixture.changelog(
+                [
+                    .status(id: "new", created: inWindow, from: "a", to: "b"),
+                    .status(id: "old", created: older, from: "c", to: "d"),
+                ], total: 10_000, isLast: false)))
+
+    let set = try await JiraClient(transport: transport).changeSet(
+        key: JiraFixture.key, since: since, credential: JiraFixture.credential())
+
+    #expect(set.watermark == JiraDate.parse(older))
+}
+
+@Test("a complete walk still reports the newest timestamp it saw")
+func acompleteWalkReportsTheNewest() async throws {
+    // The other direction, because "always hold the watermark back" would pass both tests
+    // above and stall every ordinary ref's window forever.
+    var routes = quietRoutes()
+    routes["comment@0"] = [
+        .ok(
+            JiraFixture.comments(
+                [
+                    JiraFixture.Comment(id: "9001", created: inWindow),
+                    JiraFixture.Comment(id: "9002", created: outOfWindow),
+                ], total: 2))
+    ]
+    let transport = StubJiraTransport(routes: routes)
+
+    let set = try await JiraClient(transport: transport).changeSet(
+        key: JiraFixture.key, since: since, credential: JiraFixture.credential())
+
+    #expect(set.watermark == JiraDate.parse(inWindow))
+}

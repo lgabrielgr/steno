@@ -164,10 +164,9 @@ func aNewCommentIsReported() throws {
     let set = try make(comments: [JiraFixture.Comment(id: "9001", created: recent)])
     #expect(set.changes.map(\.text) == ["comment from Ana Ruiz: Could you add the migration plan?"])
     // **The id carries the comment's revision**, because the service de-duplicates on it
-    // and Jira keeps one comment id across edits (Copilot, PR #43). The comment id stays
-    // the prefix so the source identity is still legible.
-    let stamp = try #require(JiraDate.parse(recent))
-    #expect(set.changes.map(\.id) == ["9001@\(Int(stamp.timeIntervalSince1970))"])
+    // and Jira keeps one comment id across edits (Copilot, PR #43). The revision is Jira's
+    // own timestamp string, so it cannot lose precision the source sent.
+    #expect(set.changes.map(\.id) == ["9001@\(recent)"])
 }
 
 @Test("a comment with no readable body still says who commented")
@@ -192,8 +191,7 @@ func anEditedCommentIsNews() throws {
     let set = try make(comments: [
         JiraFixture.Comment(id: "9004", created: older, updated: recent)
     ])
-    let stamp = try #require(JiraDate.parse(recent))
-    #expect(set.changes.map(\.id) == ["9004@\(Int(stamp.timeIntervalSince1970))"])
+    #expect(set.changes.map(\.id) == ["9004@\(recent)"])
     // And it says so, rather than reading as a comment that has just arrived.
     #expect(
         set.changes.map(\.text) == [
@@ -218,6 +216,24 @@ func eachEditIsItsOwnChange() throws {
     #expect(first.changes.map(\.id) != second.changes.map(\.id))
     #expect(first.changes.first?.id.hasPrefix("9004@") == true)
     #expect(second.changes.first?.id.hasPrefix("9004@") == true)
+}
+
+@Test("two edits inside one second are two revisions, not one")
+func twoEditsInOneSecondAreTwoRevisions() throws {
+    // **Whole-second precision was the first fix's own bug.** Jira sends fractional
+    // seconds, so truncating the revision to `Int(timeIntervalSince1970)` made two edits
+    // inside one second collide — and the second was dropped by the same dedup the revision
+    // was added to satisfy. Raised by Copilot in review round 2 of PR #43.
+    let first = try make(comments: [
+        JiraFixture.Comment(id: "9004", created: recent, updated: "2026-09-25T18:04:11.100+0000")
+    ])
+    let second = try make(comments: [
+        JiraFixture.Comment(id: "9004", created: recent, updated: "2026-09-25T18:04:11.900+0000")
+    ])
+
+    #expect(first.changes.map(\.id) != second.changes.map(\.id))
+    #expect(first.changes.count == 1)
+    #expect(second.changes.count == 1)
 }
 
 @Test("a comment with no usable timestamp falls back to its bare id")
