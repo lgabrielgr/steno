@@ -5358,9 +5358,16 @@ simply never to name it.
 
 **A key that is not a key is refused locally**, and that branch exists because the first version of
 it was unreachable: `URLComponents` percent-encodes a key with a space in it happily, so the `nil`
-path was dead code with a comment claiming otherwise. It now rejects empty and whitespace-bearing
-keys, which saves a round trip Jira would answer 400 to, and the rejection is `.notFound` — what a
-mistyped reference in a task title deserves.
+path was dead code with a comment claiming otherwise. The rejection is `.notFound` — what a mistyped
+reference in a task title deserves — and it saves a round trip Jira would answer 400 to.
+
+**Revised 2026-09-28, review round 4: the check is an allow-list, not a whitespace test.** Rejecting
+only whitespace let `PAY/421` through, and `URLComponents` does not encode a path separator — so the
+key became an extra path segment and the request went to a *different Jira route* instead of taking
+the local `.notFound` path. Capture's own regex could never produce such a key, but an imported ref
+and `jira-selftest --issue` both bypass it. A key is now ASCII letters, digits, `-` and `_`, and the
+regression covers `/`, `?`, `#`, `%2F`, `..` and three other delimiters. Raised by Copilot in review
+round 4 of PR #43.
 
 **Falsified by** `D5: every endpoint builds a GET`, `D5: POST is not allowed`,
 `D5: every request in a full fetch is a GET`, `D5: a whole fetch through the connector issues only
@@ -5594,10 +5601,19 @@ contract was right and the implementation broke it.
 
 **Thirty seconds, against two failure modes.** Shorter than a pass's own budget would put several
 reads back inside one pass, which is the thing being fixed. Much longer would make a credential the
-user has just saved look absent — so the button that matters, `testConnection()`, never answers
-from the memo, and M4-04 invalidates on write. A `nil` result is memoized too: "nobody has
-configured this" is the ordinary state of a fresh machine, and re-learning it per ref is exactly
-the cost at issue.
+user has just saved look absent — so the button that matters, `testConnection()`, never answers from
+the memo. A `nil` result is memoized too: "nobody has configured this" is the ordinary state of a
+fresh machine, and re-learning it per ref is exactly the cost at issue.
+
+**Revised 2026-09-28, review round 4: the memo is told when it is wrong, by notification.** This
+entry first said M4-04 "invalidates on write" — and `invalidate()` was reachable only from a private
+property on a struct, so nothing could have called it: a credential saved while the app ran would
+have left routing on a memoized `nil` for half a minute. `AtlassianCredentialCache` now observes
+`.stenoCredentialsDidChange`, which `AtlassianKeychainStore` posts on every successful write and
+delete. A notification rather than an invalidation path threaded through `SourceRegistry` and every
+connector, for `.stenoDidWrite`'s reason (M1-08): the first registration someone forgets is a
+staleness bug that looks like the Keychain being flaky, and posting at the write is the one place
+that cannot be forgotten. Raised by Copilot in review round 4 of PR #43.
 
 A `final class` with a lock rather than a value: `JiraConnector` is a `Sendable` struct and its four
 fetches run concurrently, so an unsynchronized memo would be a data race in the one place that

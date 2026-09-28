@@ -86,11 +86,22 @@ enum JiraEndpoint: Equatable {
     /// Whether `key` is shaped like a Jira issue key at all.
     ///
     /// Deliberately not a pattern for `ABC-123`: project keys are more varied than that
-    /// (digits and underscores are allowed, and lengths differ by site), and a regex
-    /// that was almost right would reject real tickets. What this rejects is what cannot
-    /// be a key under any scheme — empty, or carrying whitespace.
+    /// (digits and underscores are allowed, and lengths differ by site), and a regex that was
+    /// almost right would reject real tickets. What this accepts is the character set a key can
+    /// be drawn from — ASCII letters, digits, `-` and `_`.
+    ///
+    /// **An allow-list, because the first version only rejected whitespace** — and `PAY/421`
+    /// then interpolated into the path as an extra segment, sending the request to a different
+    /// Jira route instead of taking the local `.notFound` path. Capture's own regex would never
+    /// produce such a key, but an imported ref and `jira-selftest --issue` both bypass it.
+    /// Raised by Copilot in review round 4 of PR #43.
     static func isValidKey(_ key: String) -> Bool {
-        !key.isEmpty && !key.contains(where: \.isWhitespace)
+        guard !key.isEmpty else { return false }
+        return key.allSatisfy { character in
+            character.isASCII
+                && (character.isLetter || character.isNumber || character == "-"
+                    || character == "_")
+        }
     }
 
     private var path: String {

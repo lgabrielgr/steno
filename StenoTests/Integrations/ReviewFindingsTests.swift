@@ -241,3 +241,44 @@ func aremovedAndReaddedLinkIsMissed() async throws {
     #expect(readded.duplicates == 1)
     #expect(try fixture.eventsInStore(kind: .externalUpdate).count == 1)
 }
+
+@Test("a credential write tells the memo to forget what it read")
+func acredentialWriteInvalidatesTheMemo() {
+    // **The finding was a comment promising a method nobody could call.** D-198's memo said
+    // M4-04 "should call `invalidate()`", and the cache is a private property on a struct — so a
+    // credential saved while the app ran would have left routing on a memoized `nil` for half a
+    // minute. Raised by Copilot in review round 4 of PR #43.
+    //
+    // A private `NotificationCenter` rather than `.default`: this test must not be affected by,
+    // or affect, anything else in the bundle.
+    let notifications = NotificationCenter()
+    let store = InMemoryAtlassianStore(JiraFixture.credential())
+    let cache = AtlassianCredentialCache(notifications: notifications)
+    let start = RefreshFixture.origin
+
+    _ = cache.credential(now: start, fresh: false) { try? store.credential() }
+    _ = cache.credential(now: start, fresh: false) { try? store.credential() }
+    #expect(store.readCount == 1)
+
+    notifications.post(name: .stenoCredentialsDidChange, object: nil)
+
+    // Same instant, so only the notification can explain the second read.
+    _ = cache.credential(now: start, fresh: false) { try? store.credential() }
+    #expect(store.readCount == 2)
+}
+
+@Test("an unrelated notification does not drop the memo")
+func anUnrelatedNotificationLeavesTheMemoAlone() {
+    // The other direction: an observer registered for the wrong name, or for every name, would
+    // pass the test above and put the per-ref Keychain read back.
+    let notifications = NotificationCenter()
+    let store = InMemoryAtlassianStore(JiraFixture.credential())
+    let cache = AtlassianCredentialCache(notifications: notifications)
+    let start = RefreshFixture.origin
+
+    _ = cache.credential(now: start, fresh: false) { try? store.credential() }
+    notifications.post(name: .stenoDidWrite, object: nil)
+    _ = cache.credential(now: start, fresh: false) { try? store.credential() }
+
+    #expect(store.readCount == 1)
+}

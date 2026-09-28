@@ -87,7 +87,16 @@ func theCredentialIsAHeader() throws {
 
 @Test(
     "a key that is not a key yields nil rather than a wasted round trip",
-    arguments: ["", "   ", "PAY 421", "PAY-421\n"])
+    arguments: [
+        "", "   ", "PAY 421", "PAY-421\n",
+        // **URL delimiters, which the first version of this check let through.** `PAY/421`
+        // interpolated into the path as an extra segment and sent the request to a different
+        // Jira route rather than taking the local `.notFound` path; capture's regex would never
+        // produce these, but an imported ref and `jira-selftest --issue` both bypass it. Raised
+        // by Copilot in review round 4 of PR #43.
+        "PAY/421", "PAY-421/comment", "../../myself", "PAY?expand=x", "PAY#421", "PAY%2F421",
+        "PAY.421", "PAY:421", "PAY@421",
+    ])
 func anInvalidKeyIsRefused(key: String) throws {
     let base = try #require(base)
     // `URLComponents` would encode all of these happily and Jira would answer 400, so

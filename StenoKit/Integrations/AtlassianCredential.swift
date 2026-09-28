@@ -142,15 +142,26 @@ public struct AtlassianKeychainStore: AtlassianCredentialStore {
 
         switch status {
         case errSecSuccess:
+            announceChange()
             return
         case errSecDuplicateItem:
             let updated = SecItemUpdate(
                 KeychainQuery.lookup(service: Self.service, account: Self.account) as CFDictionary,
                 KeychainQuery.update(data) as CFDictionary)
             guard updated == errSecSuccess else { throw KeychainError.from(updated) }
+            announceChange()
         default:
             throw KeychainError.from(status)
         }
+    }
+
+    /// Tell every memo of this credential to forget it (D-198).
+    ///
+    /// **Posted here rather than by each caller**, for `.stenoDidWrite`'s reason: a writer that
+    /// forgets to post is a staleness bug that looks like the Keychain being flaky, and the one
+    /// place that cannot forget is the write itself.
+    private func announceChange() {
+        NotificationCenter.default.post(name: .stenoCredentialsDidChange, object: nil)
     }
 
     public func credential() throws -> AtlassianCredential? {
@@ -179,5 +190,6 @@ public struct AtlassianKeychainStore: AtlassianCredentialStore {
         guard status == errSecSuccess || status == errSecItemNotFound else {
             throw KeychainError.from(status)
         }
+        announceChange()
     }
 }

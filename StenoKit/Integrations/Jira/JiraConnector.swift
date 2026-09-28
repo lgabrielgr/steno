@@ -169,10 +169,15 @@ public struct JiraConnector: SourceConnector {
 ///
 /// **Thirty seconds, chosen against two failure modes.** Shorter than a refresh pass's own
 /// budget would put several Keychain reads back into one pass, which is what this exists to
-/// prevent; much longer would make a credential the user has just saved look absent. M4-04
-/// writes the credential and should call `invalidate()` when it does, which removes the
-/// staleness question entirely — `testConnection()` already bypasses the memo, so the button
-/// that matters is never answered from it.
+/// prevent; much longer would make a credential the user has just saved look absent.
+///
+/// **And it is told when it is wrong**, by observing `.stenoCredentialsDidChange`, which every
+/// store that writes a credential posts. The first version of this comment said M4-04 "should
+/// call `invalidate()`" — a method reachable only from a private property on a struct, so
+/// nothing could have called it, and a credential saved while the app ran would have left
+/// routing on a memoized `nil` for half a minute. `testConnection()` bypasses the memo besides,
+/// so the button that matters is never answered from it. Raised by Copilot in review round 4 of
+/// PR #43.
 ///
 /// A `final class` with a lock because `JiraConnector` is a `Sendable` struct and four
 /// fetches run concurrently: an unsynchronized memo would be a data race in the one place
@@ -182,6 +187,21 @@ final class AtlassianCredentialCache: @unchecked Sendable {
 
     private let lock = NSLock()
     private var stored: (credential: AtlassianCredential?, readAt: Date)?
+    private var observer: (any NSObjectProtocol)?
+
+    init(notifications: NotificationCenter = .default) {
+        // `nonisolated` queue so the memo is dropped wherever the write happened, and `weak`
+        // so an observer cannot keep a connector alive past the app.
+        observer = notifications.addObserver(
+            forName: .stenoCredentialsDidChange, object: nil, queue: nil
+        ) { [weak self] _ in
+            self?.invalidate()
+        }
+    }
+
+    deinit {
+        if let observer { NotificationCenter.default.removeObserver(observer) }
+    }
 
     /// The memoized credential, reading through `read` when the memo is cold, stale, or
     /// bypassed.
@@ -202,7 +222,7 @@ final class AtlassianCredentialCache: @unchecked Sendable {
         }
     }
 
-    /// Drop the memo. For M4-04, after it writes a credential.
+    /// Drop the memo. Called by the observer above, and directly by tests.
     func invalidate() {
         lock.withLock { stored = nil }
     }
