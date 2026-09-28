@@ -5615,6 +5615,12 @@ connector, for `.stenoDidWrite`'s reason (M1-08): the first registration someone
 staleness bug that looks like the Keychain being flaky, and posting at the write is the one place
 that cannot be forgotten. Raised by Copilot in review round 4 of PR #43.
 
+**Round 5, on that same observer:** it was registered on the injected center and removed from
+`.default`, leaking the registration for every cache built with a center — which is every one in
+the test bundle. The cache keeps the center it was given and unregisters from that. Testable after
+all, because `NotificationCenter` is `open`: a subclass counting `removeObserver` calls turns what
+would have been "verified by inspection" into an assertion, which this PR has earned the habit of.
+
 A `final class` with a lock rather than a value: `JiraConnector` is a `Sendable` struct and its four
 fetches run concurrently, so an unsynchronized memo would be a data race in the one place that
 reads a secret.

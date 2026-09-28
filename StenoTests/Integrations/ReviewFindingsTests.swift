@@ -282,3 +282,36 @@ func anUnrelatedNotificationLeavesTheMemoAlone() {
 
     #expect(store.readCount == 1)
 }
+
+@Test("the memo unregisters from the center it registered on")
+func thememoUnregistersFromItsOwnCenter() {
+    // **The finding:** the observer was registered on the injected center and removed from
+    // `.default`, so every cache built with a center — which is every one in this bundle — left
+    // its registration behind. Raised by Copilot in review round 5 of PR #43.
+    //
+    // Foundation exposes no observer count, so the center itself does the reporting: it is an
+    // `open` class, and overriding `removeObserver` turns "verified by inspection" into an
+    // assertion. Mutation: remove from `NotificationCenter.default` in `deinit` and this goes red.
+    let center = RecordingNotificationCenter()
+
+    do {
+        let cache = AtlassianCredentialCache(notifications: center)
+        _ = cache.credential(now: RefreshFixture.origin, fresh: false) { nil }
+        #expect(center.removals == 0)
+    }
+
+    #expect(center.removals == 1)
+}
+
+/// A `NotificationCenter` that counts how many observers were removed from it.
+private final class RecordingNotificationCenter: NotificationCenter {
+    private let lock = NSLock()
+    private var removed = 0
+
+    var removals: Int { lock.withLock { removed } }
+
+    override func removeObserver(_ observer: Any) {
+        lock.withLock { removed += 1 }
+        super.removeObserver(observer)
+    }
+}

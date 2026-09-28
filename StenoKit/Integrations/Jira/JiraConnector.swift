@@ -187,9 +187,18 @@ final class AtlassianCredentialCache: @unchecked Sendable {
 
     private let lock = NSLock()
     private var stored: (credential: AtlassianCredential?, readAt: Date)?
+
+    /// The center the observer was registered on, kept so `deinit` removes it from **that**
+    /// center rather than from `.default`.
+    ///
+    /// The first version stored only the token and unregistered from `.default`, which leaks the
+    /// registration whenever a center is injected — every test in this bundle does. Raised by
+    /// Copilot in review round 5 of PR #43.
+    private let notifications: NotificationCenter
     private var observer: (any NSObjectProtocol)?
 
     init(notifications: NotificationCenter = .default) {
+        self.notifications = notifications
         // `nonisolated` queue so the memo is dropped wherever the write happened, and `weak`
         // so an observer cannot keep a connector alive past the app.
         observer = notifications.addObserver(
@@ -200,7 +209,7 @@ final class AtlassianCredentialCache: @unchecked Sendable {
     }
 
     deinit {
-        if let observer { NotificationCenter.default.removeObserver(observer) }
+        if let observer { notifications.removeObserver(observer) }
     }
 
     /// The memoized credential, reading through `read` when the memo is cold, stale, or
