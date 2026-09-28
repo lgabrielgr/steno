@@ -23,7 +23,7 @@ public enum ExternalUpdateBody {
     public static func text(
         identifier: String,
         summary: String,
-        changes: [String],
+        changes: [SourceChange],
         isFirstObservation: Bool
     ) -> String? {
         if isFirstObservation {
@@ -33,7 +33,7 @@ public enum ExternalUpdateBody {
 
         let stated =
             changes
-            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .map { $0.text.trimmingCharacters(in: .whitespacesAndNewlines) }
             .filter { !$0.isEmpty }
         return stated.isEmpty ? nil : "\(identifier): \(stated.joined(separator: "; "))"
     }
@@ -56,6 +56,60 @@ struct ExternalUpdatePayload: Codable, Equatable {
 
     /// The connector's own timestamp, kept here rather than on the row (D-171).
     let fetchedAt: Date
+
+    /// **The watermark, and the reason M4-02 needed no schema change** (D-184).
+    ///
+    /// The newest item timestamp this event reported. `SourceRefreshService` reads
+    /// it back from the newest payloads for a ref and computes the next `since`
+    /// from it, so the window is anchored on what the source confirmed it served
+    /// rather than on our own clock — which is the defect D-183 left open.
+    ///
+    /// **Why here rather than on `SourceRef`**: a row field would need a §3.4
+    /// amendment, a §10.1 merge rule, and a §10.2 decision about export — and
+    /// cached external data is excluded from an export by default, so a
+    /// row-based watermark would reset on the machine you import onto and report
+    /// a ticket's whole recent history as news. Events always export. §10.1
+    /// already says a field recomputable from the log should be.
+    ///
+    /// Optional because a payload written before M4-02 carries none, and because
+    /// a connector may have no anchor to report.
+    let watermark: Date?
+
+    /// Stable source ids of the items reported in *this* event — the dedup key
+    /// (D-186). Optional for the reason `watermark` is.
+    let changeIDs: [String]?
+
+    /// The complete set of state-item ids observed at this fetch, **not a delta**
+    /// (D-187). Remote links carry no timestamp, so "what is new" is this set
+    /// minus the previous one, and that only works if the whole set is recorded
+    /// every time.
+    let presentIDs: [String]?
+
+    /// **Written out rather than synthesized, so the three M4-02 fields can
+    /// default.** They are optional because a payload written before M4-02 carries
+    /// none; making every call site say `watermark: nil` would spread that fact over
+    /// the tests instead of keeping it here.
+    init(
+        refID: UUID,
+        kind: SourceRefKind,
+        identifier: String,
+        changes: [String],
+        url: String?,
+        fetchedAt: Date,
+        watermark: Date? = nil,
+        changeIDs: [String]? = nil,
+        presentIDs: [String]? = nil
+    ) {
+        self.refID = refID
+        self.kind = kind
+        self.identifier = identifier
+        self.changes = changes
+        self.url = url
+        self.fetchedAt = fetchedAt
+        self.watermark = watermark
+        self.changeIDs = changeIDs
+        self.presentIDs = presentIDs
+    }
 
     /// **`.sortedKeys`, and it is load-bearing** (D-174). `Event.payload` is
     /// exported as base64 and `ExportRecords` keeps it byte-exact by design;

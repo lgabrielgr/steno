@@ -55,6 +55,28 @@ public enum EventQueries {
         )
     }
 
+    /// Every event on one task, newest first, **including redacted rows**.
+    ///
+    /// **The exception to this enum's rule, and the only one.** §3.3 hides a
+    /// redacted event from summaries and every other descriptor here excludes
+    /// them — but M4-02 reads `externalUpdate` payloads to decide what it has
+    /// already reported to the user (D-184), and a redaction must not make a
+    /// change look unreported. Redacting the sentence a user reads is not a
+    /// statement that the ticket never moved; without this, redacting one
+    /// `externalUpdate` would make the next pass re-report every change it
+    /// mentioned.
+    ///
+    /// The kind is filtered in memory after the fetch, for this file's usual
+    /// reason: an `EventKind` inside a `#Predicate` does not compile in either
+    /// spelling. D18 caps the dataset, so the fetch is the cost and the filter is
+    /// free.
+    public static func allEvents(forTaskID id: UUID) -> FetchDescriptor<Event> {
+        FetchDescriptor<Event>(
+            predicate: #Predicate { $0.taskID == id },
+            sortBy: [SortDescriptor(\.timestamp, order: .reverse)]
+        )
+    }
+
     /// Every still-live event stamped at or after `date` (FR-4.1's undo).
     ///
     /// **A narrowing, not a match.** `StandupUndoService` is looking for the
