@@ -109,8 +109,14 @@ func theLaunchPassAndPrepareAreSerialized() async throws {
             "PAY-421": .slow(
                 .stub(summary: "In Review", watermark: watermark), .milliseconds(80))
         ])
-    let launch = fixture.service(connectors: [connector], nowOffset: 60, gate: gate)
-    let prepare = fixture.service(connectors: [connector], nowOffset: 120, gate: gate)
+    // **A budget well clear of the two 80ms fetches.** What this test is about is the gate,
+    // not the clock — and with the fixture's 400ms default it went red once on a loaded machine
+    // because two serialized passes plus scheduling overran it. A flaky red on a correctness
+    // test teaches people to re-run the suite instead of reading it.
+    let launch = fixture.service(
+        connectors: [connector], nowOffset: 60, budget: .seconds(5), gate: gate)
+    let prepare = fixture.service(
+        connectors: [connector], nowOffset: 120, budget: .seconds(5), gate: gate)
 
     async let launchPass = launch.refreshDue()
     async let preparePass = prepare.refresh(taskIDs: [taskID])

@@ -14,6 +14,27 @@ enum JiraFixture {
     static let key = "PAY-421"
     static let site = "acme.atlassian.net"
 
+    // MARK: - The window every client test shares
+
+    /// Inside the window.
+    static let inWindow = "2026-09-25T18:04:11.000+0000"
+
+    /// Before it.
+    static let outOfWindow = "2026-09-20T09:00:00.000+0000"
+
+    /// The window start: after `outOfWindow`, before `inWindow`.
+    static let windowStart = JiraDate.parse("2026-09-22T00:00:00.000+0000")
+
+    /// Routes that answer every endpoint with an empty, well-formed page.
+    static func quietRoutes() -> [String: [StubJiraTransport.Answer]] {
+        [
+            "issue": [.ok(issue())],
+            "changelog@0": [.ok(changelog([], total: 0, isLast: true))],
+            "comment@0": [.ok(comments([], total: 0))],
+            "remotelink": [.ok(remoteLinks([]))],
+        ]
+    }
+
     static func credential(expiresAt: Date? = nil) -> AtlassianCredential {
         AtlassianCredential(
             site: site, email: "leo@example.com", apiToken: "token-value", expiresAt: expiresAt)

@@ -76,10 +76,38 @@ public struct JiraConnector: SourceConnector {
         AtlassianTokenExpiry.renewalURL
     }
 
-    /// Jira issues only. Confluence pages are M4-03's, on the same credential
-    /// (§5.3) — "Jira and Confluence are distinct REST APIs; do not conflate them".
+    /// Jira issues on **this** Atlassian Cloud site. Confluence pages are M4-03's, on the
+    /// same credential (§5.3) — "Jira and Confluence are distinct REST APIs; do not conflate
+    /// them".
+    ///
+    /// **The kind is not enough, and that is a D19 boundary** (Copilot, review round 3 of
+    /// PR #43). `SourceURLClassifier` classifies by path shape on purpose — a self-hosted
+    /// `jira.corp.net/browse/PAY-421` is as much a Jira issue as a Cloud one, and the
+    /// extractor cannot read the user's configured hosts without ceasing to be the pure
+    /// function FR-1.5 requires. So claiming every `.jiraIssue` ref meant fetching `PAY-421`
+    /// from the configured Cloud site and filing *that* ticket's status against a ref pointing
+    /// somewhere else entirely — a stand-up line about a different company's ticket.
+    ///
+    /// Three cases, and `false` means `.unhandled` rather than `.notConfigured`: nothing here
+    /// can serve those refs, and telling the user to configure Atlassian would not help.
+    ///
+    /// - A bare key with no URL is claimed. That is D7's common case — a ticket key in a task
+    ///   title — and the only instance it could mean is the configured one.
+    /// - A URL on the configured site is claimed.
+    /// - A URL anywhere else is refused, including another `*.atlassian.net` site: the same
+    ///   key exists on both, so answering from ours would be confidently wrong.
     public func canHandle(_ ref: SourceRefSnapshot) -> Bool {
-        ref.kind == .jiraIssue
+        guard ref.kind == .jiraIssue else { return false }
+        guard let url = ref.url else { return true }
+        guard let host = AtlassianCredential.cloudHost(in: url) else { return false }
+
+        // With nothing configured there is no site to compare against, so a Cloud URL is
+        // claimed and reported as awaiting setup — which is the sentence that helps.
+        guard let configured = credential?.site,
+            let configuredHost = AtlassianCredential.cloudHost(in: configured)
+        else { return true }
+
+        return host == configuredHost
     }
 
     public func fetch(_ ref: SourceRefSnapshot, since: Date?) async throws -> SourceUpdate {

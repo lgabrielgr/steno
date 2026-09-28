@@ -186,3 +186,70 @@ func testConnectionSucceeds() async throws {
     let (jira, _) = connector(routes: ["myself": [.ok(JiraFixture.currentUser)]])
     try await jira.testConnection()
 }
+
+// MARK: - D19's instance boundary (review round 3)
+
+@Test("a bare ticket key with no URL is claimed")
+func abareKeyIsClaimed() {
+    // D7's common case: a ticket key in a task title, whose only possible instance is the
+    // configured one.
+    let (jira, _) = connector()
+    #expect(
+        jira.canHandle(SourceRefSnapshot(refID: UUID(), kind: .jiraIssue, identifier: "PAY-421")))
+}
+
+@Test("a URL on the configured site is claimed")
+func aurlOnTheConfiguredSiteIsClaimed() {
+    let (jira, _) = connector()
+    #expect(
+        jira.canHandle(
+            SourceRefSnapshot(
+                refID: UUID(), kind: .jiraIssue, identifier: "PAY-421",
+                url: "https://acme.atlassian.net/browse/PAY-421")))
+}
+
+@Test("D19: a self-hosted Jira URL is not this connector's, however Jira-shaped it is")
+func aselfHostedJiraURLIsRefused() {
+    // `SourceURLClassifier` classifies by path shape on purpose, so this arrives as a
+    // `.jiraIssue` ref — and claiming it meant fetching `PAY-421` from the configured Cloud
+    // site and filing a different instance's ticket against it. Raised by Copilot in review
+    // round 3 of PR #43.
+    let (jira, _) = connector()
+    #expect(
+        jira.canHandle(
+            SourceRefSnapshot(
+                refID: UUID(), kind: .jiraIssue, identifier: "PAY-421",
+                url: "https://jira.corp.net/browse/PAY-421")) == false)
+}
+
+@Test("another Atlassian Cloud site is refused too, because the same key exists on both")
+func anotherCloudSiteIsRefused() {
+    let (jira, _) = connector()
+    #expect(
+        jira.canHandle(
+            SourceRefSnapshot(
+                refID: UUID(), kind: .jiraIssue, identifier: "PAY-421",
+                url: "https://other.atlassian.net/browse/PAY-421")) == false)
+}
+
+@Test("with nothing configured, a Cloud URL is still claimed so the user is told to set it up")
+func acloudURLIsClaimedWhenUnconfigured() {
+    // `false` would mean `.unhandled` — silence — where the useful answer is "this integration
+    // isn't set up yet".
+    let (jira, _) = connector(credential: nil)
+    #expect(
+        jira.canHandle(
+            SourceRefSnapshot(
+                refID: UUID(), kind: .jiraIssue, identifier: "PAY-421",
+                url: "https://acme.atlassian.net/browse/PAY-421")))
+}
+
+@Test("with nothing configured, a self-hosted URL is still refused")
+func aselfHostedURLIsRefusedWhenUnconfigured() {
+    let (jira, _) = connector(credential: nil)
+    #expect(
+        jira.canHandle(
+            SourceRefSnapshot(
+                refID: UUID(), kind: .jiraIssue, identifier: "PAY-421",
+                url: "https://jira.corp.net/browse/PAY-421")) == false)
+}

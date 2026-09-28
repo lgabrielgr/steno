@@ -5513,8 +5513,8 @@ page boundary, and the id-based dedup makes a re-read harmless.
 **Revised 2026-09-28, after review — two limitations that were previously described in terms which
 were not true** (Copilot, PR #43):
 
-- **A capped walk holds the watermark at the oldest item it read** (revised again in review round
-  2). This entry first said the remainder "falls into the next pass's window", which was false: the
+- **A capped walk holds the watermark at the oldest item it read, and when both streams cap it
+  takes the *older* of the two floors** (revised in rounds 2 and 3). This entry first said the remainder "falls into the next pass's window", which was false: the
   watermark advanced to the newest entry read, so the gap was closed over and never revisited. Round
   one replaced that claim with a log line — and a mutation of the log survived the suite, which is
   exactly how a fix at the wrong level announces itself. The watermark is now held at the oldest
@@ -5522,6 +5522,14 @@ were not true** (Copilot, PR #43):
   the ticket quiets enough for the walk to reach past it. Both streams do this, because a fix landing
   only on the one named in the review comment would leave the other closing over its own gap. Hitting
   the cap is still logged at `error` with the ref named.
+
+  Round three corrected the two-stream case: the floors were combined with `max`, which reads as
+  "the point above which every stream is covered" — true, and useless, because it advances the window
+  past the older stream's gap and skips it permanently. `min` keeps more of the unreported union
+  inside the next window. `nil` — holding the anchor exactly where it was — covers all of it, and was
+  declined because after ten consecutive capped passes the previous watermark falls out of
+  `ResumePoint.scanDepth`'s scan and the anchor would be lost entirely. A monotone floor cannot do
+  that.
 - **An edit to a comment created before the paged window is not detected.** The endpoint orders by
   `created` with no filter on `updated`, so that edit sits on a page the early stop never reaches.
   Catching it means reading every comment on every pass; §5.2 asks for "new comments", so the
@@ -5598,3 +5606,36 @@ reads a secret.
 **Falsified by** `routing many refs reads the credential once, not once per ref`,
 `the credential memo expires, so a token saved later is still seen`, and
 `FR-6's connection test never answers from the memo`.
+
+---
+
+### D-199 — A Jira ref pointing at another instance is unhandled, not fetched from ours
+
+**2026-09-28** · M4-02 · **Status:** accepted · found in review round 3 of PR #43
+
+`JiraConnector.canHandle` claims a `.jiraIssue` ref only when it carries no URL, or when its URL
+is on the configured Atlassian Cloud site. Anything else — a self-hosted host, or a different
+`*.atlassian.net` site — is `.unhandled`.
+
+**Why the kind was not enough.** `SourceURLClassifier` classifies by path shape on purpose, and
+says so: a self-hosted `jira.corp.net/browse/PAY-421` is as much a Jira issue as a Cloud one, and
+the extractor cannot read the user's configured hosts without ceasing to be the pure function
+FR-1.5 requires. Claiming every `.jiraIssue` ref therefore meant fetching `PAY-421` from the
+configured site and filing *that* ticket's status against a ref pointing somewhere else — a
+stand-up line about a different instance's ticket, which is worse than no line. It also crosses
+D19's boundary while appearing to respect it.
+
+**A different Cloud site is refused for the sharper version of the same reason:** the same key
+exists on both, so answering from ours would be confidently wrong rather than obviously wrong.
+
+**A bare key is claimed**, because that is D7's common case — a ticket key in a task title — and
+the only instance it could mean is the configured one.
+
+**`false` means `.unhandled`, not `.notConfigured`** (D-166's distinction): nothing here can ever
+serve those refs, and "this integration isn't set up yet" would send the user to a Settings pane
+that cannot help. The one exception is a Cloud URL while nothing is configured, which *is*
+claimed — there is no site to compare against yet, and the setup nudge is the useful answer.
+
+**Falsified by** `D19: a self-hosted Jira URL is not this connector's, however Jira-shaped it is`,
+`another Atlassian Cloud site is refused too, because the same key exists on both`,
+`a bare ticket key with no URL is claimed`, and the two unconfigured cases.

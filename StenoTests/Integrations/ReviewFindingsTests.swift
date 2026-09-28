@@ -207,3 +207,37 @@ private final class ScriptedChangeConnector: SourceConnector, @unchecked Sendabl
 
     func testConnection() async throws {}
 }
+
+@MainActor
+@Test("a link removed and re-added with nothing else happening is missed")
+func aremovedAndReaddedLinkIsMissed() async throws {
+    // **A limitation pinned, not a bug hidden.** The recorded link set is only written when an
+    // event is written, and D-187 deliberately reports nothing for a link that disappears — so
+    // a remove-then-re-add with no other reportable change in between leaves the old set
+    // standing and the re-addition reads as the status quo.
+    //
+    // Closing it needs an event D-187 declined ("unlinked acme/api#421" is Jira's bookkeeping,
+    // not the user's work) or row state D-184 declined. Raised by Copilot in review round 3 of
+    // PR #43. If a later task decides the trade is wrong, this test is where that decision gets
+    // made — it should fail when the behaviour changes.
+    let fixture = try RefreshFixture()
+    let task = try fixture.task("ship payments")
+    let ref = try fixture.ref("PAY-421", on: task, fetched: lastFetched, summary: "In Progress")
+    try fixture.observed(ref, watermark: watermark, presentIDs: ["L1"])
+
+    let link = SourceChange(id: "L1", text: "linked acme/api#421")
+
+    // Pass one: the link is gone. Nothing is reported, so nothing records the smaller set.
+    let removed = await fixture.service(connectors: [WindowedConnector(present: [])])
+        .refresh(taskIDs: [task.id])
+    #expect(removed.changed == 0)
+
+    // Pass two: it is back, and the log still says it was present all along.
+    let readded = await fixture.service(
+        connectors: [WindowedConnector(present: [link])], nowOffset: 60
+    ).refresh(taskIDs: [task.id])
+
+    #expect(readded.changed == 0)
+    #expect(readded.duplicates == 1)
+    #expect(try fixture.eventsInStore(kind: .externalUpdate).count == 1)
+}

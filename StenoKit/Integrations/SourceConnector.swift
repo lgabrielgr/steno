@@ -63,6 +63,16 @@ public struct SourceUpdate: Sendable, Equatable {
     /// timestamp of any kind, so no `since` can window them and set difference is
     /// the only thing that can decide what is new. A connector with nothing of
     /// this shape leaves it empty.
+    ///
+    /// **Known gap: a removal is silent, so remove-then-re-add can be missed.** The set is
+    /// recorded only when an event is written (D-184), and D-187 deliberately reports no
+    /// event for a link that disappears — so if a link is removed and re-added with no other
+    /// reportable change in between, the recorded set still contains it and the re-addition
+    /// reads as the status quo. Closing it needs either an event D-187 declined ("unlinked
+    /// acme/api#421" is Jira's bookkeeping, not the user's work) or state on the row that
+    /// D-184 declined. Raised by Copilot in review round 3 of PR #43;
+    /// `aremovedAndReaddedLinkIsMissed` pins today's behaviour so the trade is revisitable
+    /// rather than rediscovered.
     public let present: [SourceChange]
 
     public let url: URL?

@@ -236,18 +236,25 @@ struct JiraChangeSet: Equatable {
 
         guard !incomplete.isEmpty else { return (historyDates + commentDates).max() }
 
-        // **The oldest point with complete coverage**, which is the newest of the capped
-        // streams' oldest entries: above that line every stream was read to the end of its
-        // window. A capped stream that read nothing at all contributes no line and cannot
-        // raise it.
+        // **The oldest floor, not the newest.** Each capped stream was read down to its own
+        // floor, so the unreported region is the union of what lies below them — and the
+        // smaller boundary is the one that keeps more of that union inside the next window.
+        // Taking the newer boundary reads as "the point above which every stream is covered",
+        // which is true and useless: it advances the window past the older stream's gap and
+        // skips it permanently. Raised by Copilot in review round 3 of PR #43.
+        //
+        // Not `nil` either, which would hold the anchor exactly where it was and cover the
+        // whole union: after ten consecutive capped passes the previous watermark falls out of
+        // `ResumePoint.scanDepth`'s scan and the anchor would be lost altogether. A monotone
+        // floor cannot do that.
         let floors = [
             incomplete.contains(.changelog) ? historyDates.min() : nil,
             incomplete.contains(.comments) ? commentDates.min() : nil,
         ].compactMap { $0 }
 
-        // Never above what was actually seen: a floor cannot exceed the newest item, and
-        // with nothing read there is no anchor to report at all.
-        guard let floor = floors.max(), let newest = (historyDates + commentDates).max() else {
+        // Never above what was actually seen: a floor cannot exceed the newest item, and with
+        // nothing read there is no anchor to report at all.
+        guard let floor = floors.min(), let newest = (historyDates + commentDates).max() else {
             return nil
         }
         return min(floor, newest)
