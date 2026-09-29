@@ -110,14 +110,14 @@ func confluenceNextWithoutACursorEndsTheWalk(next: String?) {
 @Test(
     "a page id that is not a page id never reaches a URL",
     arguments: ["", "abc", "12 34", "12/34", "12345\u{200B}", "١٢٣", "-1", "12.0"])
-func confluenceInvalidPageIDsAreRefusedLocally(id: String) {
+func confluenceInvalidPageIDsAreRefusedLocally(id: String) throws {
     #expect(ConfluenceEndpoint.isValidPageID(id) == false)
 
-    let base = URL(string: "https://acme.atlassian.net")
-    #expect(ConfluenceEndpoint.page(id: id).request(base: base!, authorization: "Basic xyz") == nil)
+    let base = try #require(site)
+    #expect(ConfluenceEndpoint.page(id: id).request(base: base, authorization: "Basic xyz") == nil)
     #expect(
         ConfluenceEndpoint.versions(pageID: id, cursor: nil, limit: 50)
-            .request(base: base!, authorization: "Basic xyz") == nil)
+            .request(base: base, authorization: "Basic xyz") == nil)
 }
 
 @Test("a real page id is accepted")
