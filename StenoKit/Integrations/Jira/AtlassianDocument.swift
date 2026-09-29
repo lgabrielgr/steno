@@ -15,7 +15,10 @@ enum AtlassianDocument {
     /// A gist, not the comment: the event body is one line of a stand-up draft, and
     /// §3.3's log is not a copy of Jira. Truncation is on a word boundary, because a
     /// sentence cut mid-word reads as a bug rather than as a summary.
-    static let limit = 200
+
+    /// D-195's limit. Defined by `AtlassianText` now, so both connectors bound their
+    /// free text at the same length.
+    static let limit = AtlassianText.limit
 
     /// `node` as plain text, collapsed and truncated.
     ///
@@ -23,8 +26,10 @@ enum AtlassianDocument {
     /// comment, say — which the caller treats as "no gist", not as a failure.
     static func plainText(_ node: ADFNode?, limit: Int = limit) -> String {
         guard let node else { return "" }
-        let collapsed = collapse(fragments(node).joined())
-        return truncate(collapsed, to: limit)
+        // The collapse-and-truncate rules live in `AtlassianText` now: Confluence's
+        // version messages are free text from the same kind of box and need both, and a
+        // private copy here is how one caller got them and the other did not (D-202).
+        return AtlassianText.gist(fragments(node).joined(), limit: limit)
     }
 
     /// The text fragments of one node, in reading order.
@@ -55,27 +60,5 @@ enum AtlassianDocument {
             let children = (node.content ?? []).flatMap(fragments)
             return children.isEmpty ? [] : children + [" "]
         }
-    }
-
-    /// Runs of whitespace to single spaces, trimmed.
-    private static func collapse(_ value: String) -> String {
-        value.split(whereSeparator: \.isWhitespace).joined(separator: " ")
-    }
-
-    /// `value` at most `limit` characters, cut on a word boundary with an ellipsis.
-    ///
-    /// The ellipsis is one character and counts toward the limit, so the result never
-    /// exceeds what the caller asked for.
-    private static func truncate(_ value: String, to limit: Int) -> String {
-        guard value.count > limit, limit > 1 else {
-            return value.count > limit ? String(value.prefix(limit)) : value
-        }
-
-        let head = value.prefix(limit - 1)
-        guard let lastSpace = head.lastIndex(of: " ") else { return head + "…" }
-        let word = head[head.startIndex..<lastSpace]
-        // A single word longer than the limit has no boundary to cut on, so the hard
-        // cut is what is left.
-        return word.isEmpty ? head + "…" : word + "…"
     }
 }

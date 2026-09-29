@@ -134,8 +134,14 @@ struct ConfluenceChangeSet: Equatable {
         // habit would find their afternoon's editing invisible in the morning.
         let minor = version.minorEdit == true ? " (minor)" : ""
 
-        let message = version.message?.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard let message, !message.isEmpty else { return "v\(number) by \(editor)\(minor)" }
+        // **Collapsed and bounded, by the same rule Jira's comment bodies get** (D-195,
+        // via `AtlassianText`). A version message is free text from a box the editor
+        // can type anything into, and this string becomes one line of a stand-up: a
+        // newline in it silently becomes two lines, the second having lost its subject,
+        // and an unbounded one turns the report into a paste of somebody's release
+        // notes. Found by asking which inputs §5.3 implies that no test covered.
+        let message = AtlassianText.gist(version.message ?? "")
+        guard !message.isEmpty else { return "v\(number) by \(editor)\(minor)" }
         return "v\(number) by \(editor)\(minor): \(message)"
     }
 

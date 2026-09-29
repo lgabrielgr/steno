@@ -266,3 +266,40 @@ func confluenceUncappedSetIsNotFlagged() {
 
     #expect(set.isWindowCapped == false)
 }
+
+// MARK: - Free text from a box the editor can type anything into
+
+@Test("a version message with newlines stays one line of a stand-up")
+func confluenceMessageNewlinesAreCollapsed() {
+    // The change text becomes one line of a report the user reads aloud. A newline in
+    // it silently becomes two lines, the second having lost its subject.
+    let set = make(versions: [
+        aVersion(
+            9, at: ConfluenceFixture.inWindow,
+            message: "rewrote the rollback steps\n\n- drain the queue\n- flip the flag")
+    ])
+
+    let text = try? #require(set.changes.first?.text)
+    #expect(text?.contains("\n") == false)
+    #expect(
+        text
+            == "v9 by Leo Gutierrez: rewrote the rollback steps - drain the queue - flip the flag")
+}
+
+@Test("D-195's limit applies to a version message too, not only to a Jira comment")
+func confluenceLongMessageIsTruncated() {
+    // Without this a stand-up line is whatever length somebody's release notes were.
+    let long = String(repeating: "migration ", count: 60)
+    let set = make(versions: [aVersion(9, at: ConfluenceFixture.inWindow, message: long)])
+
+    let text = try? #require(set.changes.first?.text)
+    #expect((text?.count ?? 0) <= AtlassianText.limit + "v9 by Leo Gutierrez: ".count)
+    #expect(text?.hasSuffix("…") == true)
+}
+
+@Test("a message of nothing but whitespace is no message at all")
+func confluenceWhitespaceOnlyMessageIsOmitted() {
+    let set = make(versions: [aVersion(9, at: ConfluenceFixture.inWindow, message: "  \n\t ")])
+
+    #expect(set.changes.first?.text == "v9 by Leo Gutierrez")
+}

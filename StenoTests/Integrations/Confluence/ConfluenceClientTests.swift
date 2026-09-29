@@ -340,3 +340,21 @@ func confluenceVerifyDistinguishesARefusedCredential() async throws {
         try await client(transport).verify(credential: ConfluenceFixture.credential())
     }
 }
+
+@Test("a versions response with no results at all ends the walk")
+func confluenceVersionsWithoutResultsEndsTheWalk() async throws {
+    // `{"results": …}` absent is not the same shape as `[]`, and a walk that treated
+    // "no key" as "keep going" would page to the cap against a server saying nothing.
+    let transport = StubConfluenceTransport(
+        routes: [
+            "page": [.ok(ConfluenceFixture.page())],
+            "versions": [.ok(#"{"_links":{"next":"/wiki/api/v2/pages/12345/versions?cursor=X"}}"#)],
+        ], users: knownUsers)
+
+    let set = try await changeSet(transport)
+
+    let versionRequests = await transport.urls.filter { $0.contains("/versions") }
+    #expect(versionRequests.count == 1)
+    #expect(set.isWindowCapped == false)
+    #expect(set.changes.isEmpty)
+}

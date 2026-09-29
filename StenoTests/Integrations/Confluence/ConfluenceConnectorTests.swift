@@ -311,3 +311,23 @@ func confluenceConnectorTestWithoutACredential() async throws {
     let received = await transport.received
     #expect(received.isEmpty)
 }
+
+@Test("a webui with characters a URL must encode still produces an openable link")
+func confluenceConnectorEncodesAnUnencodedWebui() async throws {
+    // `webui` is a string from a response, and a page titled with a space or an accent
+    // is ordinary. This was written expecting `URL(string:)` to refuse an unencoded
+    // path and the ref's URL to be used instead — it does not: this Foundation
+    // percent-encodes. The assertion is therefore what actually matters to the user,
+    // which is that the link opens the right page either way.
+    let (confluence, _) = connector(
+        routes: [
+            "page": [.ok(ConfluenceFixture.page(webui: "/spaces/ENG/pages/12345/Café Plan"))],
+            "versions": [.ok(ConfluenceFixture.versions([]))],
+        ], users: knownUsers)
+
+    let update = try await confluence.fetch(pageRef(), since: nil)
+
+    #expect(
+        update.url?.absoluteString
+            == "https://acme.atlassian.net/wiki/spaces/ENG/pages/12345/Caf%C3%A9%20Plan")
+}

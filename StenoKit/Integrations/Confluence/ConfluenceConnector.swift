@@ -151,6 +151,12 @@ public struct ConfluenceConnector: SourceConnector {
             return ref.url.flatMap(URL.init(string:))
         }
         let path = webui.hasPrefix("/") ? webui : "/\(webui)"
+        // **The second fallback is a belt, and an honest comment says so.** A page
+        // titled "Café Plan" arrives with characters a URL must encode, and this
+        // Foundation's `URL(string:)` percent-encodes them rather than returning nil —
+        // `a webui with characters a URL must encode still produces an openable link`
+        // pins that. So this `??` covers only whatever it still refuses, and is kept
+        // because losing the link entirely is worse than the line costs.
         return URL(string: "\(base.absoluteString)/wiki\(path)")
             ?? ref.url.flatMap(URL.init(string:))
     }
