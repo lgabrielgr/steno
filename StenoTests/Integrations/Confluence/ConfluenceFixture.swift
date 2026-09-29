@@ -154,14 +154,25 @@ actor StubConfluenceTransport: HTTPTransport {
     }
 
     private var routes: [String: [Answer]]
+    private let users: [String: Answer]
     private let fallback: Answer
     private(set) var received: [HTTPRequest] = []
 
-    /// - Parameter routes: keyed by `page`, `versions`, `user`, `spaces`. A key's
-    ///   answers are consumed in order, which is what lets a paging test script page
-    ///   one and page two.
-    init(routes: [String: [Answer]], fallback: Answer = .status(500)) {
+    /// - Parameters:
+    ///   - routes: keyed by `page`, `versions`, `user`, `spaces`. A key's answers are
+    ///     consumed in order, which is what lets a paging test script page one and page
+    ///     two.
+    ///   - users: keyed by account id, answered **by lookup rather than in order**. The
+    ///     name lookups run concurrently, so a shared queue would hand whichever child
+    ///     task arrived first whichever answer happened to be next — a test that passes
+    ///     or fails on scheduling. Keying by id is what makes "Leo's id resolves to
+    ///     Leo's name" a fact rather than a race.
+    init(
+        routes: [String: [Answer]], users: [String: Answer] = [:],
+        fallback: Answer = .status(500)
+    ) {
         self.routes = routes
+        self.users = users
         self.fallback = fallback
     }
 
@@ -183,6 +194,13 @@ actor StubConfluenceTransport: HTTPTransport {
         received.append(request)
 
         let key = Self.endpointKey(request)
+        if key == "user", let id = Self.accountID(in: request), let answer = users[id] {
+            switch answer {
+            case .respond(let response): return response
+            case .fail(let error): throw error
+            }
+        }
+
         let answer: Answer
         if var queued = routes[key], !queued.isEmpty {
             answer = queued.removeFirst()
@@ -197,6 +215,12 @@ actor StubConfluenceTransport: HTTPTransport {
         case .fail(let error):
             throw error
         }
+    }
+
+    /// The `accountId` a name lookup asked about.
+    static func accountID(in request: HTTPRequest) -> String? {
+        URLComponents(url: request.url, resolvingAgainstBaseURL: false)?
+            .queryItems?.first { $0.name == "accountId" }?.value
     }
 
     /// `versions` before `page`, because a versions path contains the page path.
