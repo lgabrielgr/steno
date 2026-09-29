@@ -180,7 +180,10 @@ func confluenceFirstObservationReportsWhatItSaw() {
     // Filtering here as well would leave the ids unrecorded, and the next pass — whose
     // window deliberately overlaps — would find them again and call them news.
     let set = make(
-        versions: [aVersion(9, at: ConfluenceFixture.inWindow), aVersion(1, at: "2019-01-01T00:00:00.000Z")],
+        versions: [
+            aVersion(9, at: ConfluenceFixture.inWindow),
+            aVersion(1, at: "2019-01-01T00:00:00.000Z"),
+        ],
         since: nil)
 
     #expect(set.changes.count == 2)

@@ -475,8 +475,9 @@ func confluencePageRequestAsksForNoBody() throws {
 @Test("the version walk is sorted newest-first, and says so on every page")
 func confluenceVersionsAreSortedNewestFirst() throws {
     let first = try built(.versions(pageID: "12345", cursor: nil, limit: 50))
-    let items = try #require(URLComponents(url: first.url, resolvingAgainstBaseURL: false)?
-        .queryItems)
+    let items = try #require(
+        URLComponents(url: first.url, resolvingAgainstBaseURL: false)?
+            .queryItems)
 
     #expect(items.contains(URLQueryItem(name: "sort", value: "-modified-date")))
     #expect(items.contains(URLQueryItem(name: "limit", value: "50")))
@@ -1496,7 +1497,10 @@ func confluenceFirstObservationReportsWhatItSaw() {
     // Filtering here as well would leave the ids unrecorded, and the next pass — whose
     // window deliberately overlaps — would find them again and call them news.
     let set = make(
-        versions: [aVersion(9, at: ConfluenceFixture.inWindow), aVersion(1, at: "2019-01-01T00:00:00.000Z")],
+        versions: [
+            aVersion(9, at: ConfluenceFixture.inWindow),
+            aVersion(1, at: "2019-01-01T00:00:00.000Z"),
+        ],
         since: nil)
 
     #expect(set.changes.count == 2)
@@ -1925,7 +1929,10 @@ func confluenceWalkResumesOnTheCursor() async throws {
             "versions": [
                 .ok(
                     ConfluenceFixture.versions(
-                        [ConfluenceFixture.version(number: 9, createdAt: ConfluenceFixture.inWindow)],
+                        [
+                            ConfluenceFixture.version(
+                                number: 9, createdAt: ConfluenceFixture.inWindow)
+                        ],
                         next: ConfluenceFixture.next(cursor: "PAGE2"))),
                 .ok(
                     ConfluenceFixture.versions([
@@ -2022,7 +2029,10 @@ func confluenceFirstObservationReadsOnePage() async throws {
             "versions": [
                 .ok(
                     ConfluenceFixture.versions(
-                        [ConfluenceFixture.version(number: 9, createdAt: ConfluenceFixture.inWindow)],
+                        [
+                            ConfluenceFixture.version(
+                                number: 9, createdAt: ConfluenceFixture.inWindow)
+                        ],
                         next: ConfluenceFixture.next(cursor: "PAGE2")))
             ],
         ], users: knownUsers)
@@ -2198,7 +2208,9 @@ func confluenceInvalidPageIDNeverReachesTheNetwork() async throws {
 
 @Test("FR-6: the connection test reads spaces, and an empty result still passes")
 func confluenceVerifyPassesOnAnEmptySpaceList() async throws {
-    let transport = StubConfluenceTransport(routes: ["spaces": [.ok(ConfluenceFixture.spaces(count: 0))]])
+    let transport = StubConfluenceTransport(routes: [
+        "spaces": [.ok(ConfluenceFixture.spaces(count: 0))]
+    ])
 
     try await client(transport).verify(credential: ConfluenceFixture.credential())
 

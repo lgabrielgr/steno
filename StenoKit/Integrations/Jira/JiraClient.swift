@@ -267,7 +267,9 @@ struct JiraClient: Sendable {
             throw AtlassianErrors.error(forTransport: error)
         }
 
-        if let failure = AtlassianErrors.error(forStatus: response.status, headers: response.headers) {
+        if let failure = AtlassianErrors.error(
+            forStatus: response.status, headers: response.headers)
+        {
             throw failure
         }
 

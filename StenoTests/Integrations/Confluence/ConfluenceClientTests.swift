@@ -48,7 +48,10 @@ func confluenceWalkResumesOnTheCursor() async throws {
             "versions": [
                 .ok(
                     ConfluenceFixture.versions(
-                        [ConfluenceFixture.version(number: 9, createdAt: ConfluenceFixture.inWindow)],
+                        [
+                            ConfluenceFixture.version(
+                                number: 9, createdAt: ConfluenceFixture.inWindow)
+                        ],
                         next: ConfluenceFixture.next(cursor: "PAGE2"))),
                 .ok(
                     ConfluenceFixture.versions([
@@ -145,7 +148,10 @@ func confluenceFirstObservationReadsOnePage() async throws {
             "versions": [
                 .ok(
                     ConfluenceFixture.versions(
-                        [ConfluenceFixture.version(number: 9, createdAt: ConfluenceFixture.inWindow)],
+                        [
+                            ConfluenceFixture.version(
+                                number: 9, createdAt: ConfluenceFixture.inWindow)
+                        ],
                         next: ConfluenceFixture.next(cursor: "PAGE2")))
             ],
         ], users: knownUsers)
@@ -321,7 +327,9 @@ func confluenceInvalidPageIDNeverReachesTheNetwork() async throws {
 
 @Test("FR-6: the connection test reads spaces, and an empty result still passes")
 func confluenceVerifyPassesOnAnEmptySpaceList() async throws {
-    let transport = StubConfluenceTransport(routes: ["spaces": [.ok(ConfluenceFixture.spaces(count: 0))]])
+    let transport = StubConfluenceTransport(routes: [
+        "spaces": [.ok(ConfluenceFixture.spaces(count: 0))]
+    ])
 
     try await client(transport).verify(credential: ConfluenceFixture.credential())
 

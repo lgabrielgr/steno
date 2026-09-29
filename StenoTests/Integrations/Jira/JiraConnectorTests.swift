@@ -130,7 +130,8 @@ func therenewalLinkIsUnconditional() {
 func afetchBecomesASourceUpdate() async throws {
     let (jira, _) = connector(routes: fullRoutes())
 
-    let update = try await jira.fetch(ref(), since: AtlassianDate.parse("2026-09-22T00:00:00.000+0000"))
+    let update = try await jira.fetch(
+        ref(), since: AtlassianDate.parse("2026-09-22T00:00:00.000+0000"))
 
     #expect(update.summary == "Add the migration plan — In Review · assigned to Leo Gutierrez")
     #expect(
@@ -279,7 +280,8 @@ func acappedWalkReachesTheSourceUpdate() async throws {
         credentials: InMemoryAtlassianStore(JiraFixture.credential()), transport: transport,
         now: { now })
 
-    let update = try await jira.fetch(ref(), since: AtlassianDate.parse("2026-09-22T00:00:00.000+0000"))
+    let update = try await jira.fetch(
+        ref(), since: AtlassianDate.parse("2026-09-22T00:00:00.000+0000"))
 
     #expect(update.isWindowCapped)
 }
@@ -290,7 +292,8 @@ func anOrdinaryFetchIsNotCapped() async throws {
     // above and hold every ref's window still forever.
     let (jira, _) = connector(routes: fullRoutes())
 
-    let update = try await jira.fetch(ref(), since: AtlassianDate.parse("2026-09-22T00:00:00.000+0000"))
+    let update = try await jira.fetch(
+        ref(), since: AtlassianDate.parse("2026-09-22T00:00:00.000+0000"))
 
     #expect(update.isWindowCapped == false)
 }

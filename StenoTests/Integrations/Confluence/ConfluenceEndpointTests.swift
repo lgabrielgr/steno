@@ -49,8 +49,9 @@ func confluencePageRequestAsksForNoBody() throws {
 @Test("the version walk is sorted newest-first, and says so on every page")
 func confluenceVersionsAreSortedNewestFirst() throws {
     let first = try built(.versions(pageID: "12345", cursor: nil, limit: 50))
-    let items = try #require(URLComponents(url: first.url, resolvingAgainstBaseURL: false)?
-        .queryItems)
+    let items = try #require(
+        URLComponents(url: first.url, resolvingAgainstBaseURL: false)?
+            .queryItems)
 
     #expect(items.contains(URLQueryItem(name: "sort", value: "-modified-date")))
     #expect(items.contains(URLQueryItem(name: "limit", value: "50")))
