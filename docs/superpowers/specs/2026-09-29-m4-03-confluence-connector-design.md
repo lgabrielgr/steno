@@ -92,17 +92,26 @@ fixture wrong in the same way as the design is a test that cannot fail.
 | `GET /wiki/rest/api/user` carries **no deprecation notice** in the current v1 reference | the name lookup is available, and is a GET (D-201) |
 | `GET /wiki/api/v2/pages/{id}` returns `id`, `status`, `title`, `spaceId`, `authorId`, `ownerId`, `createdAt`, `version{number, createdAt, message, minorEdit, authorId}`, `_links{webui, editui, tinyui}` | title, current version and the human-facing URL come from one request |
 | Its `version` carries **`authorId` only** — no display name, and no expansion produces one | the name lookup is not optional (D-201) |
-| `GET /wiki/api/v2/pages/{id}/versions` takes `sort`, `limit`, `cursor` and `body-format` | the window is applied client-side, newest-first |
-| A v2 version carries `number`, `authorId`, `message`, `createdAt`, `minorEdit`, `prevVersion`, `nextVersion`, `collaborators`, `contentTypeModified` | `createdAt` is the watermark source; `number` is the dedup key (D-203) |
+| `GET /wiki/api/v2/pages/{id}` takes `include-version`, which **defaults to `true`** | the current version arrives without being asked for |
+| `GET /wiki/api/v2/pages/{id}/versions` takes `sort`, `limit`, `cursor` and `body-format`; `limit` defaults to 25 and caps at 250 | the window is applied client-side, newest-first |
+| `VersionSortOrder` is exactly `["modified-date", "-modified-date"]` | `sort=-modified-date` is valid, and is the whole basis of the backwards walk |
+| A `Version` carries `createdAt`, `message`, `number`, `minorEdit`, `authorId` — and nothing else | `createdAt` is the watermark source; `number` is the dedup key (D-203) |
 | v2 paginates by **cursor**: the response's `_links.next` is a *relative* URL carrying a `cursor` query item, mirrored by a `Link: <…>; rel="next"` header, and absent when the walk is done | paging is neither `startAt` nor `isLast`; the cursor is extracted, not followed (D-205) |
 | The only v2 account-id → name endpoint is `POST /wiki/api/v2/users-bulk` | rejected: `ReadOnlyTransport` allows GET and nothing else (D5, D-191) |
 
-**Not yet confirmed, and treated as such.** The `sort` parameter's enum is documented as
-`VersionSortOrder` without its values being listed on the reference page; this design sends
-`sort=-modified-date`. The plan phase verifies the spelling against the OpenAPI document before
-a fixture is written, and `make verify-confluence` is what would catch a `400`. The fallback, if
-descending order turns out unavailable, is an ascending walk under the same page cap and the same
-floor watermark — slower on a long-lived page, not incorrect.
+**Where these came from.** The reference pages name the parameters but truncate their enums, so
+every row above was read out of Atlassian's own OpenAPI document —
+`https://dac-static.atlassian.com/cloud/confluence/openapi-v2.v3.json`, 600 KB, HTTP 200,
+`info.version` 2.0.0 — on 2026-09-29, the way M4-02 read the Jira contract out of
+`swagger-v3.v3.json`. The one value this design depends on most, `sort=-modified-date`, was the
+reason: the reference page names the type `VersionSortOrder` and does not list its cases, and an
+unverified sort value would have made the backwards walk silently ascending or a `400`.
+
+The document also settles the response envelope: a versions page is
+`MultiEntityResult<Version>` — `results[]` plus `_links{next, base}`, where `next` is documented
+as *"the relative URL for the next set of results, using a cursor query parameter"* and is absent
+when the walk is done. A single page's `_links` is `{webui, editui, tinyui}` with no `base`, which
+is why `SourceUpdate.url` is built from the credential's own host rather than from the response.
 
 **What the summary says.** `SourceUpdate.summary` becomes `SourceRef.cachedSummary`, which §5.3
 and §5.2 give two jobs: the baseline a later fetch is described against, and what the app shows
@@ -479,12 +488,11 @@ an anchor and report nothing, which is correct behaviour and useless output.
 
 ## Risks
 
-1. **`sort=-modified-date` is the one parameter value not confirmed.** The reference documents
-   the parameter and names its enum without listing its cases. The plan phase confirms the
-   spelling against the OpenAPI document before a fixture is written; if it is wrong the API
-   answers 400, `make verify-confluence` shows it immediately, and the fallback is an ascending
-   walk under the same cap. It is recorded as a risk rather than asserted as a fact because this
-   repo has shipped a decision record containing an unmeasured claim before.
+1. ~~**`sort=-modified-date` is the one parameter value not confirmed.**~~ **Closed before the
+   plan was written**, by reading `VersionSortOrder` out of the OpenAPI document: the enum is
+   exactly `["modified-date", "-modified-date"]`. It is left here rather than deleted because the
+   check is the point — an unverified sort value would have made the backwards walk silently
+   ascending, and this repo has shipped a decision record containing an unmeasured claim before.
 2. **The fixtures are the wire contract until `verify-confluence` runs.** Mitigated by building
    them from the published v2 shapes recorded above, and closed by the harness — but if the live
    run disagrees, the fixtures are what is wrong, and the finding goes in the PR body.
