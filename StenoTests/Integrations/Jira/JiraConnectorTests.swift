@@ -130,7 +130,7 @@ func therenewalLinkIsUnconditional() {
 func afetchBecomesASourceUpdate() async throws {
     let (jira, _) = connector(routes: fullRoutes())
 
-    let update = try await jira.fetch(ref(), since: JiraDate.parse("2026-09-22T00:00:00.000+0000"))
+    let update = try await jira.fetch(ref(), since: AtlassianDate.parse("2026-09-22T00:00:00.000+0000"))
 
     #expect(update.summary == "Add the migration plan — In Review · assigned to Leo Gutierrez")
     #expect(
@@ -139,7 +139,7 @@ func afetchBecomesASourceUpdate() async throws {
             "comment from Ana Ruiz: Could you add the migration plan?",
         ])
     #expect(update.present.map(\.text) == ["linked acme/api#421"])
-    #expect(update.watermark == JiraDate.parse("2026-09-25T19:00:00.000+0000"))
+    #expect(update.watermark == AtlassianDate.parse("2026-09-25T19:00:00.000+0000"))
     // The human-facing page, not the API endpoint: this reaches an event payload.
     #expect(update.url?.absoluteString == "https://acme.atlassian.net/browse/PAY-421")
     // The connector's own clock, diagnostic only — the row's stamp is the app's (D-171).
@@ -279,7 +279,7 @@ func acappedWalkReachesTheSourceUpdate() async throws {
         credentials: InMemoryAtlassianStore(JiraFixture.credential()), transport: transport,
         now: { now })
 
-    let update = try await jira.fetch(ref(), since: JiraDate.parse("2026-09-22T00:00:00.000+0000"))
+    let update = try await jira.fetch(ref(), since: AtlassianDate.parse("2026-09-22T00:00:00.000+0000"))
 
     #expect(update.isWindowCapped)
 }
@@ -290,7 +290,7 @@ func anOrdinaryFetchIsNotCapped() async throws {
     // above and hold every ref's window still forever.
     let (jira, _) = connector(routes: fullRoutes())
 
-    let update = try await jira.fetch(ref(), since: JiraDate.parse("2026-09-22T00:00:00.000+0000"))
+    let update = try await jira.fetch(ref(), since: AtlassianDate.parse("2026-09-22T00:00:00.000+0000"))
 
     #expect(update.isWindowCapped == false)
 }

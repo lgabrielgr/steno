@@ -23,7 +23,7 @@ enum JiraFixture {
     static let outOfWindow = "2026-09-20T09:00:00.000+0000"
 
     /// The window start: after `outOfWindow`, before `inWindow`.
-    static let windowStart = JiraDate.parse("2026-09-22T00:00:00.000+0000")
+    static let windowStart = AtlassianDate.parse("2026-09-22T00:00:00.000+0000")
 
     /// Routes that answer every endpoint with an empty, well-formed page.
     static func quietRoutes() -> [String: [StubJiraTransport.Answer]] {

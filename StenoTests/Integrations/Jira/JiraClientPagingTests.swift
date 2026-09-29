@@ -240,8 +240,8 @@ func acommentWalkThatHitsTheCapStops() async throws {
     #expect(asked.filter { $0.hasPrefix("comment") }.count == JiraClient.maxPages)
     // What it read is still reported — a partial window beats an empty one (§5.5).
     #expect(set.changes.isEmpty == false)
-    #expect(set.watermark == JiraDate.parse(midWindow))
-    #expect(set.watermark != JiraDate.parse(inWindow))
+    #expect(set.watermark == AtlassianDate.parse(midWindow))
+    #expect(set.watermark != AtlassianDate.parse(inWindow))
 }
 
 @Test("a capped changelog walk also holds the watermark back")
@@ -263,7 +263,7 @@ func acappedChangelogWalkHoldsTheWatermarkBack() async throws {
     let set = try await JiraClient(transport: transport).changeSet(
         key: JiraFixture.key, since: since, credential: JiraFixture.credential())
 
-    #expect(set.watermark == JiraDate.parse(older))
+    #expect(set.watermark == AtlassianDate.parse(older))
 }
 
 @Test("a complete walk still reports the newest timestamp it saw")
@@ -284,7 +284,7 @@ func acompleteWalkReportsTheNewest() async throws {
     let set = try await JiraClient(transport: transport).changeSet(
         key: JiraFixture.key, since: since, credential: JiraFixture.credential())
 
-    #expect(set.watermark == JiraDate.parse(inWindow))
+    #expect(set.watermark == AtlassianDate.parse(inWindow))
 }
 
 @Test("when both streams cap, the watermark takes the older floor")
@@ -318,8 +318,8 @@ func bothStreamsCappedTakesTheOlderFloor() async throws {
         key: JiraFixture.key, since: since, credential: JiraFixture.credential())
 
     // The older of the two floors, not the newer.
-    #expect(set.watermark == JiraDate.parse(changelogFloor))
-    #expect(set.watermark != JiraDate.parse(commentFloor))
+    #expect(set.watermark == AtlassianDate.parse(changelogFloor))
+    #expect(set.watermark != AtlassianDate.parse(commentFloor))
 }
 
 /// Answers later pages of each stream at that stream's own floor.
@@ -391,7 +391,7 @@ func acappedCommentWalkFloorsOnCreated() async throws {
         key: JiraFixture.key, since: since, credential: JiraFixture.credential())
 
     #expect(set.isWindowCapped)
-    #expect(set.watermark == JiraDate.parse(oldCreated))
+    #expect(set.watermark == AtlassianDate.parse(oldCreated))
     // Mutation: floor on `stamp` and the watermark jumps to the edit, above unread comments.
-    #expect(set.watermark != JiraDate.parse(recentEdit))
+    #expect(set.watermark != AtlassianDate.parse(recentEdit))
 }

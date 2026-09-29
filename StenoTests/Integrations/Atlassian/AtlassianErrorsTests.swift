@@ -26,13 +26,13 @@ import Testing
         (302, SourceError?.some(.unavailable(status: 302))),
     ])
 func theStatusTable(status: Int, expected: SourceError?) {
-    #expect(JiraErrors.error(forStatus: status, headers: [:]) == expected)
+    #expect(AtlassianErrors.error(forStatus: status, headers: [:]) == expected)
 }
 
 @Test("429 carries the interval the service named")
 func rateLimitCarriesRetryAfter() {
     #expect(
-        JiraErrors.error(forStatus: 429, headers: ["retry-after": "30"])
+        AtlassianErrors.error(forStatus: 429, headers: ["retry-after": "30"])
             == .rateLimited(retryAfter: .seconds(30)))
 }
 
@@ -44,7 +44,7 @@ func rateLimitWithoutAUsableInterval(value: String) {
     // missing value as "no interval was named", which is correct for a shape this API
     // does not use in practice.
     #expect(
-        JiraErrors.error(forStatus: 429, headers: ["retry-after": value])
+        AtlassianErrors.error(forStatus: 429, headers: ["retry-after": value])
             == .rateLimited(retryAfter: nil))
 }
 
@@ -54,7 +54,7 @@ func retryAfterIsFoundWhateverTheCase() {
     // and the reason that normalization is load-bearing rather than tidiness.
     let response = HTTPResponse(status: 429, headers: ["Retry-After": "12"])
     #expect(
-        JiraErrors.error(forStatus: response.status, headers: response.headers)
+        AtlassianErrors.error(forStatus: response.status, headers: response.headers)
             == .rateLimited(retryAfter: .seconds(12)))
 }
 
@@ -63,34 +63,34 @@ func jiraCancellationIsATimeout() {
     // The only thing that cancels a fetch is the per-fetch deadline or the pass budget,
     // and telling a user with working wifi that they are offline sends them to fix the
     // wrong thing.
-    #expect(JiraErrors.error(forTransport: CancellationError()) == .timedOut)
-    #expect(JiraErrors.error(forTransport: URLError(.cancelled)) == .timedOut)
+    #expect(AtlassianErrors.error(forTransport: CancellationError()) == .timedOut)
+    #expect(AtlassianErrors.error(forTransport: URLError(.cancelled)) == .timedOut)
 }
 
 @Test(
     "the transport's own failures are network failures",
     arguments: [URLError.Code.notConnectedToInternet, .cannotFindHost, .secureConnectionFailed])
 func transportFailuresAreNetwork(code: URLError.Code) {
-    #expect(JiraErrors.error(forTransport: URLError(code)) == .network)
+    #expect(AtlassianErrors.error(forTransport: URLError(code)) == .network)
 }
 
 @Test("a response that was not HTTP is a network failure")
 func notHTTPIsNetwork() {
     // `TransportError` exists so `URLSessionTransport` could move to `Support/` without
     // dragging the AI layer's error type with it (D-189).
-    #expect(JiraErrors.error(forTransport: TransportError.notHTTP) == .network)
+    #expect(AtlassianErrors.error(forTransport: TransportError.notHTTP) == .network)
 }
 
 @Test("a SourceError passes through unchanged")
 func sourceErrorsPassThrough() {
     // The client throws these itself — an invalid key, a missing credential — and
     // re-mapping them would turn a precise sentence into "check your connection".
-    #expect(JiraErrors.error(forTransport: SourceError.notFound) == .notFound)
-    #expect(JiraErrors.error(forTransport: SourceError.notConfigured) == .notConfigured)
+    #expect(AtlassianErrors.error(forTransport: SourceError.notFound) == .notFound)
+    #expect(AtlassianErrors.error(forTransport: SourceError.notConfigured) == .notConfigured)
 }
 
 @Test("an unrecognised error degrades to network")
 func unknownErrorsDegradeToNetwork() {
     struct Surprise: Error {}
-    #expect(JiraErrors.error(forTransport: Surprise()) == .network)
+    #expect(AtlassianErrors.error(forTransport: Surprise()) == .network)
 }

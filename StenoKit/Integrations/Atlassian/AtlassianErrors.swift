@@ -1,13 +1,18 @@
 import Foundation
 
-/// Jira's failures, mapped onto `SourceError` and nothing else (D-192).
+/// Atlassian's failures, mapped onto `SourceError` and nothing else (D-192).
+///
+/// **One map for both APIs** (D-202). Every branch below is a statement about an HTTP
+/// status and a header, and neither API is named in the logic — see the `400` case for
+/// the one branch whose *justification* had to be checked against both rather than
+/// assumed.
 ///
 /// **Pure functions over a status code and a header dictionary**, for the reason
 /// `AnthropicErrors` is: no response body reaches this file, so §8's "never full
 /// payloads" is a property of the shape rather than a rule each branch has to
 /// remember. There is no parameter here that could carry a ticket title, a comment
 /// body or an assignee's name.
-enum JiraErrors {
+enum AtlassianErrors {
     /// `nil` when the status is a success. Anything else is a `SourceError` the
     /// caller must throw.
     static func error(forStatus status: Int, headers: [String: String]) -> SourceError? {
@@ -20,6 +25,13 @@ enum JiraErrors {
             // task title — which is exactly what `.notFound` tells the user, while
             // "the integration is unavailable" would send them to a status page over
             // a typo.
+            //
+            // **The same reading holds for Confluence**, which is why this branch is
+            // shared rather than duplicated: a page id that is not a number is a
+            // mangled reference, and `.notFound` is the sentence that helps there too.
+            // Checked against both APIs when this moved, because a shared rule
+            // justified by one caller's behaviour is how the next reader concludes it
+            // does not apply to them.
             return .notFound
         case 401:
             // §5.2: never a generic network error. D-192 maps every 401 here without

@@ -122,7 +122,7 @@ struct JiraChangeSet: Equatable {
         in history: [JiraChangelogEntry], since: Date
     ) -> [SourceChange] {
         history.flatMap { entry -> [SourceChange] in
-            let created = JiraDate.parse(entry.created)
+            let created = AtlassianDate.parse(entry.created)
 
             // **An unparseable timestamp is reported, not dropped.** It cannot be
             // placed in the window, and the safe direction is to say it: the id-based
@@ -243,7 +243,7 @@ struct JiraChangeSet: Equatable {
     private static func watermark(
         history: [JiraChangelogEntry], comments: [JiraComment], incomplete: Set<Stream>
     ) -> Date? {
-        let historyDates = history.compactMap { JiraDate.parse($0.created) }
+        let historyDates = history.compactMap { AtlassianDate.parse($0.created) }
         let commentDates = comments.compactMap(\.stamp)
 
         guard !incomplete.isEmpty else { return (historyDates + commentDates).max() }

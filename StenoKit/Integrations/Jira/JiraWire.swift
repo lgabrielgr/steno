@@ -101,7 +101,7 @@ extension JiraComment {
     /// changed. One property rather than the same expression in the client's paging
     /// and in `JiraChangeSet` — a fact in two places is wrong in one of them.
     var stamp: Date? {
-        [JiraDate.parse(created), JiraDate.parse(updated)].compactMap { $0 }.max()
+        [AtlassianDate.parse(created), AtlassianDate.parse(updated)].compactMap { $0 }.max()
     }
 
     /// When the comment was created, parsed.
@@ -112,7 +112,7 @@ extension JiraComment {
     /// `stamp` would sit above unread comments whose `created` lies between — skipping them
     /// permanently. `stamp` stays right for the complete-walk watermark, where an edit is news.
     /// Raised by Copilot in review round 6 of PR #43.
-    var createdAt: Date? { JiraDate.parse(created) }
+    var createdAt: Date? { AtlassianDate.parse(created) }
 
     /// The raw timestamp string behind `stamp`, for the change id's revision component.
     ///
@@ -125,7 +125,7 @@ extension JiraComment {
     /// Computed beside `stamp` so the two cannot disagree about which timestamp wins.
     var revision: String? {
         let candidates = [created, updated].compactMap { raw -> (String, Date)? in
-            guard let raw, let parsed = JiraDate.parse(raw) else { return nil }
+            guard let raw, let parsed = AtlassianDate.parse(raw) else { return nil }
             return (raw, parsed)
         }
         return candidates.max { $0.1 < $1.1 }?.0
@@ -167,32 +167,5 @@ struct ADFNode: Decodable, Equatable {
         let shortName: String?
         /// An inline card's target — often the PR link a stand-up wants.
         let url: String?
-    }
-}
-
-/// Jira's timestamps, parsed.
-///
-/// **Two formats, tried in order, because Jira sends the fractional-seconds form
-/// and Foundation's default parser rejects it.** `2026-09-25T18:04:11.123+0000` needs
-/// `.withFractionalSeconds`; a value without the fraction needs it absent, since the
-/// option is a requirement rather than a permission. Getting this wrong does not
-/// throw — it returns `nil`, and every timestamp silently becoming `nil` would leave
-/// the watermark `nil` forever and the window permanently open.
-enum JiraDate {
-    /// `nil` for an absent or unparseable value.
-    ///
-    /// The formatters are built per call rather than held in a `static let`: an
-    /// `ISO8601DateFormatter` is not `Sendable`, and D18's twenty tickets make the
-    /// allocation irrelevant next to the request that fetched the string.
-    static func parse(_ value: String?) -> Date? {
-        guard let value, !value.isEmpty else { return nil }
-
-        let withFraction = ISO8601DateFormatter()
-        withFraction.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        if let date = withFraction.date(from: value) { return date }
-
-        let plain = ISO8601DateFormatter()
-        plain.formatOptions = [.withInternetDateTime]
-        return plain.date(from: value)
     }
 }

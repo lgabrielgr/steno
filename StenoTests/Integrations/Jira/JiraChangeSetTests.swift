@@ -11,7 +11,7 @@ private let older = "2026-09-20T09:00:00.000+0000"
 private let ancient = "2024-01-02T03:04:05.000+0000"
 
 /// The window start used by most tests here: after `older`, before `recent`.
-private let since = JiraDate.parse("2026-09-22T00:00:00.000+0000")
+private let since = AtlassianDate.parse("2026-09-22T00:00:00.000+0000")
 
 private func decode<T: Decodable>(_ type: T.Type, _ json: String) throws -> T {
     try JSONDecoder().decode(type, from: Data(json.utf8))
@@ -298,7 +298,7 @@ func theWatermarkIsTheNewestSeen() throws {
     // **Over everything, not over what was reported.** Taking it from the reported
     // subset would move it backwards whenever a pass reported nothing, and re-report
     // everything in between.
-    #expect(set.watermark == JiraDate.parse(recent))
+    #expect(set.watermark == AtlassianDate.parse(recent))
 }
 
 @Test("the watermark counts items outside the window too")
@@ -307,16 +307,16 @@ func theWatermarkCountsUnreportedItems() throws {
     // the next pass asks the same question and gets the same answer forever.
     let set = try make(
         history: [.status(id: "a", created: older, from: "To Do", to: "In Progress")],
-        since: JiraDate.parse(recent))
+        since: AtlassianDate.parse(recent))
 
     #expect(set.changes.isEmpty)
-    #expect(set.watermark == JiraDate.parse(older))
+    #expect(set.watermark == AtlassianDate.parse(older))
 }
 
 @Test("an edited comment moves the watermark to its edit")
 func theWatermarkFollowsAnEdit() throws {
     let set = try make(comments: [JiraFixture.Comment(id: "9004", created: older, updated: recent)])
-    #expect(set.watermark == JiraDate.parse(recent))
+    #expect(set.watermark == AtlassianDate.parse(recent))
 }
 
 @Test("nothing timestamped means no watermark, which leaves the window open")
@@ -341,7 +341,7 @@ func withNoAnchorEverythingIsReturned() throws {
     // seen them. Filtering here as well left those ids unrecorded and made the second
     // pass announce them; that cost a test to find.
     #expect(set.changes.count == 2)
-    #expect(set.watermark == JiraDate.parse(recent))
+    #expect(set.watermark == AtlassianDate.parse(recent))
     // The link set is recorded too, so an existing PR reference is not news later.
     #expect(set.present.count == 1)
 }

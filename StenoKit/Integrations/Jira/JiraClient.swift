@@ -150,7 +150,7 @@ struct JiraClient: Sendable {
             // and no changes will be reported from it anyway (D-188).
             guard let since else { break }
 
-            let oldest = (page.values ?? []).compactMap { JiraDate.parse($0.created) }.min()
+            let oldest = (page.values ?? []).compactMap { AtlassianDate.parse($0.created) }.min()
             if let oldest, oldest < since {
                 reachedWindowEnd = true
                 break
@@ -264,10 +264,10 @@ struct JiraClient: Sendable {
         do {
             response = try await transport.send(request)
         } catch {
-            throw JiraErrors.error(forTransport: error)
+            throw AtlassianErrors.error(forTransport: error)
         }
 
-        if let failure = JiraErrors.error(forStatus: response.status, headers: response.headers) {
+        if let failure = AtlassianErrors.error(forStatus: response.status, headers: response.headers) {
             throw failure
         }
 

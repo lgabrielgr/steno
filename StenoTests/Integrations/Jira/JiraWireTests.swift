@@ -8,7 +8,7 @@ import Testing
 @Test("Jira's own format, with fractional seconds, parses")
 func jiraTimestampsParse() throws {
     // The form Atlassian actually sends: milliseconds, and a zone with no colon.
-    let parsed = try #require(JiraDate.parse("2026-09-25T18:04:11.123+0000"))
+    let parsed = try #require(AtlassianDate.parse("2026-09-25T18:04:11.123+0000"))
     #expect(parsed.timeIntervalSince1970 == 1_790_359_451.123)
 }
 
@@ -17,14 +17,14 @@ func timestampsWithoutFractionsParse() throws {
     // `.withFractionalSeconds` is a requirement rather than a permission, so one
     // formatter cannot read both forms — which is why there are two, tried in order.
     // Mutation: drop the second formatter and this goes red.
-    let parsed = try #require(JiraDate.parse("2026-09-25T18:04:11Z"))
+    let parsed = try #require(AtlassianDate.parse("2026-09-25T18:04:11Z"))
     #expect(parsed.timeIntervalSince1970 == 1_790_359_451)
 }
 
 @Test("a zone offset is honoured, not ignored")
 func zoneOffsetsAreHonoured() throws {
-    let utc = try #require(JiraDate.parse("2026-09-25T18:04:11.000+0000"))
-    let plusTwo = try #require(JiraDate.parse("2026-09-25T20:04:11.000+0200"))
+    let utc = try #require(AtlassianDate.parse("2026-09-25T18:04:11.000+0000"))
+    let plusTwo = try #require(AtlassianDate.parse("2026-09-25T20:04:11.000+0200"))
     #expect(utc == plusTwo)
 }
 
@@ -32,7 +32,7 @@ func zoneOffsetsAreHonoured() throws {
 func nonsenseTimestampsAreNil(value: String) {
     // `nil` matters more than it looks: a timestamp silently becoming 1970 would make
     // every item look ancient and the watermark meaningless.
-    #expect(JiraDate.parse(value) == nil)
+    #expect(AtlassianDate.parse(value) == nil)
 }
 
 @Test("a comment's stamp is the later of created and updated")
@@ -49,7 +49,7 @@ func aCommentsStampIsTheLater() throws {
     let comment = try #require(page.comments?.first)
     // An edit is news: the text the user would read out has changed, and `created`
     // alone would put this comment outside a window it belongs in.
-    #expect(comment.stamp == JiraDate.parse("2026-09-26T11:30:00.000+0000"))
+    #expect(comment.stamp == AtlassianDate.parse("2026-09-26T11:30:00.000+0000"))
 }
 
 @Test("the changelog page carries isLast, which the comment page does not")
