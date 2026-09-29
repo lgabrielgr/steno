@@ -23,6 +23,15 @@ struct ConfluenceChangeSet: Equatable {
     /// (D-196's reasoning, and `ResumePoint` resolves several watermarks with `max`).
     let isWindowCapped: Bool
 
+    /// The page's `_links.webui`, exactly as it arrived: relative, and rooted at the
+    /// Confluence site rather than the Cloud host.
+    ///
+    /// **Raw rather than composed, because composing needs the credential** — the site
+    /// this app is configured for — and this type is pure by construction. The
+    /// connector joins the two, which is also the layer that knows to fall back on the
+    /// ref's own URL.
+    let webui: String?
+
     /// Assemble one fetch's answer.
     ///
     /// - Parameters:
@@ -54,7 +63,8 @@ struct ConfluenceChangeSet: Equatable {
             changes: versionChanges(
                 in: versions, pageID: pageID, names: names, since: window),
             watermark: watermark(page: page, versions: versions, isCapped: isCapped),
-            isWindowCapped: isCapped)
+            isWindowCapped: isCapped,
+            webui: page.links?.webui)
     }
 
     // MARK: - Summary
