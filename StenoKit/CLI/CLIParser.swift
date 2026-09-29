@@ -36,6 +36,8 @@ public enum CLIParser {
             return try parseImport(Array(rest.dropFirst()))
         case "jira-selftest":
             return try parseJiraSelftest(Array(rest.dropFirst()))
+        case "confluence-selftest":
+            return try parseConfluenceSelftest(Array(rest.dropFirst()))
         default:
             throw CLIUsageError(
                 "steno: unknown subcommand \"\(subcommand)\".\n\n\(CLIUsage.text)")
@@ -117,6 +119,31 @@ public enum CLIParser {
             throw CLIUsageError("steno jira-selftest: --issue is required.")
         }
         return .jiraSelftest(issueKey: issueKey)
+    }
+
+    /// `steno confluence-selftest --page 12345`.
+    ///
+    /// The page id is required and has no default, for `--issue`'s reason: a harness
+    /// that picked a page would spend a request on a document nobody asked about.
+    private static func parseConfluenceSelftest(_ flags: [String]) throws -> CLICommand {
+        var pageID: String?
+        var index = 0
+
+        while index < flags.count {
+            let flag = flags[index]
+            switch flag {
+            case "--page":
+                pageID = try value(after: flag, in: flags, at: &index)
+            default:
+                throw unexpected(flag, of: "confluence-selftest")
+            }
+            index += 1
+        }
+
+        guard let pageID else {
+            throw CLIUsageError("steno confluence-selftest: --page is required.")
+        }
+        return .confluenceSelftest(pageID: pageID)
     }
 
     /// The argument after `flag`, advancing past it.

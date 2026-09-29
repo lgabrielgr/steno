@@ -103,6 +103,10 @@ public enum CLIEntry {
             return JiraSelftest.runSynchronously(
                 issueKey: issueKey, credentials: AtlassianKeychainStore())
         }
+        if case .confluenceSelftest(let pageID) = command {
+            return ConfluenceSelftest.runSynchronously(
+                pageID: pageID, credentials: AtlassianKeychainStore())
+        }
 
         // **Before the store is opened, not after.** `StenoStore.live` creates
         // the store directory and, on a fresh path, the store itself — so a

@@ -81,7 +81,7 @@ public enum JiraSelftest {
 
         // D5 as a live assertion, not only a unit test: if the live path ever built a
         // write, this is where a human would see it.
-        guard methods.allSatisfy({ $0 == "GET" }) else {
+        guard CountingTransport.isReadOnly(methods) else {
             out("jira-selftest: FAIL — a non-GET request was issued, which breaks D5")
             return 1
         }
@@ -123,29 +123,5 @@ public enum JiraSelftest {
         CLISync.runSynchronously {
             await run(issueKey: issueKey, credentials: credentials, out: out)
         }
-    }
-}
-
-/// Records the method of every request that passes through, for the harness's
-/// read-only claim.
-///
-/// Its own type rather than a closure, because it has to be `Sendable` and hold
-/// state: four requests run concurrently, and an unsynchronized recorder does not
-/// merely race — it makes the harness lie about what the code did, which is the
-/// lesson `StubSourceConnector` already carries.
-final class CountingTransport: HTTPTransport, @unchecked Sendable {
-    private let wrapped: any HTTPTransport
-    private let lock = NSLock()
-    private var recorded: [String] = []
-
-    init(wrapping wrapped: any HTTPTransport) {
-        self.wrapped = wrapped
-    }
-
-    var methods: [String] { lock.withLock { recorded } }
-
-    func send(_ request: HTTPRequest) async throws -> HTTPResponse {
-        lock.withLock { recorded.append(request.method.rawValue) }
-        return try await wrapped.send(request)
     }
 }
