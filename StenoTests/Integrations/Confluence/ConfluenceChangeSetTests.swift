@@ -62,21 +62,38 @@ func confluenceSummaryCarriesNoTimestamp() {
     #expect(set.summary.contains("ago") == false)
 }
 
+/// One row of the summary table. A struct rather than a 4-tuple because
+/// `make lint --strict` caps a tuple at two members — and it reads better besides.
+private struct SummaryCase {
+    let title: String?
+    let number: Int?
+    let authorID: String?
+    let expected: String
+}
+
 @Test(
     "a missing part is omitted, never rendered as the word unknown",
     arguments: [
-        (nil, 9, ConfluenceFixture.leo, "v9, edited by Leo Gutierrez"),
-        ("Payments Migration Plan", nil, ConfluenceFixture.leo, "Payments Migration Plan"),
-        ("Payments Migration Plan", 9, "557058:nobody", "Payments Migration Plan — v9"),
-        ("Payments Migration Plan", nil, nil, "Payments Migration Plan"),
-    ] as [(String?, Int?, String?, String)])
-func confluenceSummaryOmitsWhatItCannotSay(
-    title: String?, number: Int?, authorID: String?, expected: String
-) {
-    let version = number.map { aVersion($0, at: ConfluenceFixture.inWindow, by: authorID) }
-    let set = make(page: aPage(title: title, version: version))
+        SummaryCase(
+            title: nil, number: 9, authorID: ConfluenceFixture.leo,
+            expected: "v9, edited by Leo Gutierrez"),
+        SummaryCase(
+            title: "Payments Migration Plan", number: nil, authorID: ConfluenceFixture.leo,
+            expected: "Payments Migration Plan"),
+        SummaryCase(
+            title: "Payments Migration Plan", number: 9, authorID: "557058:nobody",
+            expected: "Payments Migration Plan — v9"),
+        SummaryCase(
+            title: "Payments Migration Plan", number: nil, authorID: nil,
+            expected: "Payments Migration Plan"),
+    ])
+private func confluenceSummaryOmitsWhatItCannotSay(testCase: SummaryCase) {
+    let version = testCase.number.map {
+        aVersion($0, at: ConfluenceFixture.inWindow, by: testCase.authorID)
+    }
+    let set = make(page: aPage(title: testCase.title, version: version))
 
-    #expect(set.summary == expected)
+    #expect(set.summary == testCase.expected)
 }
 
 @Test("a page with no title and no readable version still produces a string")
