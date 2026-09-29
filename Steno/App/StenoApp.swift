@@ -38,17 +38,20 @@ struct StenoApp: App {
 
     /// §5.1's connectors, built once for the process.
     ///
-    /// **Empty this milestone** (D-179): no connector conforms to
-    /// `SourceConnector` until M4-02, so every `SourceRef` dispatches
-    /// `.unhandled` and both refresh paths are no-ops. Registration order is
-    /// priority, and it lives here — one readable array literal — rather than in a
-    /// `register()` call some pane could reorder.
-    /// **Registration order is priority** (D-166), and this array is the one place
-    /// it is decided. M4-01 shipped it empty (D-179); M4-02's connector is the first
-    /// entry, which is also what makes the draft sheet's "Refreshing…" line and its
-    /// staleness banner reachable in the running app for the first time.
+    /// **Registration order is priority** (D-166), and this array is the one place it
+    /// is decided — rather than a `register()` call some pane could reorder. M4-01
+    /// shipped it empty (D-179), M4-02 added Jira, and M4-03 adds Confluence.
+    ///
+    /// **Two stores, one credential** (§5.3). `AtlassianKeychainStore` is a stateless
+    /// struct over a single Keychain item, so both connectors read the same site, email
+    /// and token — which is what makes "configure Atlassian once and both work" true
+    /// rather than aspirational. Each keeps its own thirty-second memo of it (D-198).
+    ///
+    /// The two claim different `SourceRefKind`s, so order decides nothing today; it
+    /// will when M5's MCP connector claims kinds a native connector also claims.
     private let sourceRegistry = SourceRegistry(connectors: [
-        JiraConnector(credentials: AtlassianKeychainStore())
+        JiraConnector(credentials: AtlassianKeychainStore()),
+        ConfluenceConnector(credentials: AtlassianKeychainStore()),
     ])
 
     /// §10.5's auto-export. Held for the whole process because it owns a timer

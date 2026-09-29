@@ -1,12 +1,13 @@
 # REQUIREMENTS.md — Steno
 
-**Status:** Draft v1.22
-**Date:** 2026-09-26
+**Status:** Draft v1.23
+**Date:** 2026-09-29
 **Audience:** Engineering agents in future sessions. This document is the source of truth for task generation and implementation.
 
 > **Steno** — a stenographer records what was said, verbatim, without editorializing. That is the product in one word: an accurate record of what you did, lightly organized, never embellished.
 
 **Changelog**
+- *v1.23* — §5.3 names **which** Confluence API it means, as §5.2 already does for Jira. The section was silent on version, which was harmless while no code existed and is now the difference between an implementation that works and one built on endpoints whose removal Atlassian announced for 2025-03-31. It is REST **v2** — and v2 carries a consequence §5.3 should not leave a future reader to rediscover: its version objects identify an editor by account id only, so "last editor" costs a second request, and the only v2 endpoint that resolves one is a `POST`, which D5's read-only enforcement refuses. Nothing §5.3 requires changes — the four fields, the shared credential and §5.5's degradation are untouched. Found while designing M4-03; the implementation choices are `DECISIONS.md` D-200 and D-201, which point here.
 - *v1.22* — §5.2 says **where** cached external state appears in a report. Read literally, "a report can be generated offline with last-known state" required the source layer to reach into M2-02's renderer *and* §7.3's prompt, which §13 and M4-01's own scope forbid — and putting it in the renderer alone would make an AI-polished draft strictly worse than the offline fallback, breaching the coverage rule D-156 settled. The route is the event log: a fetch that finds a change appends an `externalUpdate`, which `ReportGatherer` already collects for the window and hands to both report paths. Nothing about caching, degradation, or the offline guarantee changes — only where the requirement says the data appears. Implementing this also revealed that M2-02's renderer *dropped* `externalUpdate` events while the prompt already sent them, so the offline path was silently unable to honour §5.2 at all; both paths now read one shared predicate. Found while designing and building M4-01; the implementation choices are `DECISIONS.md` D-168 and D-180, which point here.
 - *v1.21* — §12's **Q(M3) is resolved: no report history.** Past reports are not browsable: no product surface displays, lists, or compares them. The rows are read by FR-4.1's undo and by §10's export (`ExportEncoder` fetches every `StandupReport`) and by import's merge — all of which move or reverse a report rather than presenting one. The question was posed as "cheap to add now, awkward to retrofit", and the answer is that cheapness was never the test — §2.1 is. A browsable archive of past stand-ups is a record of *what was reported*, which is a different product from a record of *what was done*: it invites comparing weeks against each other, and from there the performance-tracking and self-review tooling §2.1 exists to refuse. The rows stay — FR-4.1 needs them and §10's export carries them — so this is a decision about surfaces, not storage, and it stays reversible from the data if the user ever asks. Answered by the user 2026-09-23 during M3-03's review; see `DECISIONS.md` D-155.
 - *v1.20* — §6 no longer requires `kSecAttrAccessibleAfterFirstUnlock`, and now names the login keychain with `kSecAttrSynchronizable` off. The old wording was not implementable on this project's terms: the attribute means something only to the data-protection keychain, which needs the restricted `keychain-access-groups` entitlement and therefore a provisioning profile — and adding it makes CI's ad-hoc signing shape fail to build outright ("Steno requires a provisioning profile"), takes `make build` offline behind `-allowProvisioningUpdates` and a live Apple ID session, and buys a profile that expires every seven days on the free Personal Team §6.1 commits to. Probed five ways before any code was written; the login keychain passes ad-hoc signed. Nothing §6 or §8 actually guarantees changes — secrets stay in the Keychain and out of SwiftData, `UserDefaults`, plists and logs — and the attribute is now *omitted* rather than passed, because the login keychain accepts it while ignoring it and a call that looks like it enforces a rule it does not is worse than no call. §6's iCloud-sync line flips from "optionally, user-controlled" to off, which is what D1/§14's cancellation of sync already implied. Found while implementing M3-01; the implementation choices are `DECISIONS.md` D-134 and D-135, which point here.
@@ -395,8 +396,15 @@ This is the one real simplification the macOS-only decision buys: M5 drops from 
 
 ### 5.3 Confluence Connector (v1, P0)
 
+**Deployment: Atlassian Cloud (D19). REST API v2** — the v1 content API is past the removal date
+Atlassian announced for it. Do not write Data Center compatibility code.
+
 - Same Atlassian credential — one config, two APIs. (Jira and Confluence are distinct REST APIs; do not conflate them.)
 - Fetch page title, last-modified timestamp, last editor, and version delta since `since`.
+- **Editor display names are not available from v2 content endpoints** — a version identifies its
+  author by account id — so naming the last editor requires a separate lookup. The endpoint that
+  resolves an id in v2 is a `POST`, which D5 forbids; see `DECISIONS.md` D-201 for the read-only
+  route taken instead.
 
 ### 5.4 MCP Support (v1, P1)
 
