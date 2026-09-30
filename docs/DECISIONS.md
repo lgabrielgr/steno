@@ -6135,3 +6135,43 @@ condition rather than quoting the link, on §8's habit of not putting response c
 absent `next` is still the end of the walk` — both halves, so the distinction cannot quietly
 collapse in either direction. Mutating either branch turns its test red; collapsing the absent case
 also turns D-209's test red, which is the overlap working as intended.
+
+---
+
+### D-213 — The walk carries why it stopped, because one Bool meant three things
+
+**2026-09-30** · M4-03 · **Status:** accepted · found by Copilot in review of PR #44
+
+`ConfluenceClient.versions` tracks a `WalkStop` — `windowEnd`, `pageCap`, `repeatedCursor`,
+`unusableNext` — instead of a `reachedWindowEnd` Bool, and `isWindowCapped` is derived from it.
+
+**Why.** D-208 and D-212 widened what a "capped" walk means: it started as "hit the page cap" and
+became "ended before the end of the window, for any of three reasons". The Bool absorbed that
+quietly, and two pieces of prose did not:
+
+- the log said `hit the 10-page cap` on every short walk, so two thirds of its occurrences named a
+  cause that was not the one;
+- `make verify-confluence` printed `capped yes — the page cap was reached`, in the one output whose
+  entire purpose is to be trusted by a human comparing it against their browser;
+- and `ConfluenceChangeSet.make`'s own parameter doc still described only the page cap, and still
+  promised the continuation D-208 had already disproved.
+
+A reader following any of the three would have gone looking for a long page history that was not
+the problem. **This is the same defect class the log keeps producing in this repo — a comment
+asserting a property the code does not have — and it arrived here by the ordinary route: the
+behaviour was widened twice and the sentences describing it were not re-read.**
+
+**What changed, precisely.** The enum names the cause; the log line is built from it, so each
+message is true; the harness prints the *common* fact ("the version walk ended early") rather than
+guessing at a cause it cannot see, since `SourceUpdate` carries the Bool and not the reason; and
+the parameter doc says what `isCapped` means now and states that it implies no continuation.
+
+**The reason is deliberately not plumbed into `SourceUpdate`.** That type is the connector
+boundary, shared with Jira, and a per-connector stop reason there would be a field only one
+implementation could fill — for the benefit of one line of harness output. The log is where the
+cause belongs, and the harness says the thing that is true whatever it was.
+
+**Falsified by** `a capped walk says so, so a short delta is not read as the whole truth`, which
+now asserts the harness says "the version walk ended early" **and does not say "page cap"**, plus
+the existing D-208/D-209/D-212 tests, which pin each stop reason to the right verdict. Restoring
+the old harness wording turns the first red.

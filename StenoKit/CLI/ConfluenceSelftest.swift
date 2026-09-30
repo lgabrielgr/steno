@@ -120,11 +120,19 @@ public enum ConfluenceSelftest {
         }
         out("  url       \(update.url?.absoluteString ?? "none")")
         out("  watermark \(update.watermark.map(String.init(describing:)) ?? "none")")
-        // Printed because a capped walk means the oldest versions in the window went
+        // Printed because a short walk means the oldest versions in the window went
         // unread, and a human comparing this against their browser needs to know that
         // before concluding the delta is wrong.
+        //
+        // **It does not name the page cap**, because `isWindowCapped` is equally true for
+        // a cursor that did not advance and for a `next` with no usable cursor (D-213).
+        // Naming one cause in a verification harness would send a reader looking for a
+        // long page history that may not be the problem; the log carries the specific
+        // reason. Raised by Copilot in review of PR #44.
         if update.isWindowCapped {
-            out("  capped    yes — the page cap was reached; the watermark is held at the floor")
+            out(
+                "  partial   yes — the version walk ended early; the watermark is held at the floor"
+            )
         }
     }
 

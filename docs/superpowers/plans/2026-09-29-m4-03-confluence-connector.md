@@ -1733,9 +1733,16 @@ struct ConfluenceChangeSet: Equatable {
     ///     the fetch.
     ///   - since: `nil` means "no anchor yet", which reports everything the client
     ///     chose to read and lets the service keep it out of the event body (D-188).
-    ///   - isCapped: the walk stopped at the page cap. The watermark is then the oldest
-    ///     point from which coverage *is* complete, so the gap stays inside the next
-    ///     pass's window instead of being closed over.
+    ///   - isCapped: **the walk ended before the end of the window, for any reason** — the
+    ///     page cap, a cursor that did not advance, or a `next` with no usable cursor
+    ///     (D-208, D-212, D-213). The parameter is not only about the page cap, and reading
+    ///     it that way is how two log lines came to say so wrongly.
+    ///
+    ///     The watermark is then the oldest point from which coverage *is* complete, which
+    ///     keeps the fetch from claiming coverage it did not achieve. **That is all it
+    ///     does.** It does not keep the unread gap reachable: the next pass walks from the
+    ///     newest end and stops in the same place, and closing that needs a persisted
+    ///     cursor (D-208). A caller inferring continuation from this flag would be wrong.
     ///   - pageID: **the id that was requested**, not the one the response carried.
     ///     `ConfluencePage.id` is optional like every other wire field, and a change id
     ///     keyed on it would be `#v9` for a response that omitted it and `12345#v9` for
@@ -2413,6 +2420,43 @@ struct ConfluenceClient: Sendable {
 
     // MARK: - Paging
 
+    /// Why a version walk stopped.
+    ///
+    /// **A reason rather than a Bool, because one Bool was being asked to mean three
+    /// things** (D-213). `isWindowCapped` is true for the page cap, for a cursor that did
+    /// not advance, and for a `next` with no usable cursor — so a log line and a
+    /// verification message that both said "hit the page cap" were wrong two thirds of the
+    /// time, and a human reading either would have gone looking for a long page history
+    /// that was not the problem. Raised by Copilot in review of PR #44.
+    private enum WalkStop {
+        /// The window ended: a page older than `since`, or no `next` to follow.
+        case windowEnd
+        case pageCap
+        case repeatedCursor
+        case unusableNext
+
+        /// Whether the walk covered everything it set out to. Only `windowEnd` does.
+        var isComplete: Bool { self == .windowEnd }
+
+        /// What the log says. Each ends the same way, because the consequence is the same
+        /// whatever the cause: the oldest versions in the window were not read, and the
+        /// watermark is held so the fetch does not claim they were.
+        var logLine: String {
+            let held = "the watermark is held at the oldest version read"
+            switch self {
+            case .windowEnd: return ""
+            case .pageCap:
+                return
+                    "confluence version paging hit the \(ConfluenceClient.maxPages)-page cap for one ref; \(held)"
+            case .repeatedCursor:
+                return "confluence version paging stopped: the cursor did not advance; \(held)"
+            case .unusableNext:
+                return
+                    "confluence version paging stopped: `_links.next` carried no usable cursor; \(held)"
+            }
+        }
+    }
+
     /// Every version that could be inside the window, newest first.
     ///
     /// Walked by cursor — v2 has no `startAt` and no `isLast`, only `_links.next` — and
@@ -2425,7 +2469,9 @@ struct ConfluenceClient: Sendable {
         var seenNumbers: Set<Int> = []
         var cursor: String?
         var pages = 0
-        var reachedWindowEnd = false
+        // Falling out of the `while` is the only exit that sets nothing, so this is what
+        // that exit means.
+        var stop: WalkStop = .pageCap
 
         while pages < Self.maxPages {
             // **Cancellation fails the ref; it does not produce a short answer**
@@ -2451,7 +2497,7 @@ struct ConfluenceClient: Sendable {
             // ends the walk by itself** (D-209). An empty batch says nothing about
             // whether more history exists — only `_links.next` does — so this falls
             // through to the cursor check below rather than short-circuiting. The
-            // earlier version broke out and set `reachedWindowEnd`, which turned a page
+            // earlier version broke out and claimed the window's end, which turned a page
             // carrying `next` into a *complete* walk: the same defect as the repeated
             // cursor, reached from the other side.
             //
@@ -2481,14 +2527,14 @@ struct ConfluenceClient: Sendable {
             // No anchor yet: one page is all that is needed to establish one, and
             // nothing from it will be reported anyway (D-188).
             guard let since else {
-                reachedWindowEnd = true
+                stop = .windowEnd
                 break
             }
 
             // A page whose oldest item predates the window is the end of the window. An
             // empty batch has no oldest item, so this cannot fire for one.
             if let oldest = batch.compactMap(\.stamp).min(), oldest < since {
-                reachedWindowEnd = true
+                stop = .windowEnd
                 break
             }
 
@@ -2496,20 +2542,16 @@ struct ConfluenceClient: Sendable {
             // Absent is the API saying there is nothing further, and is the only shape
             // that may end the walk here. A `next` that is present but carries no cursor
             // this app can use is the API saying there *is* more and failing to say how:
-            // the walk cannot continue, and it may not claim the end either, so
-            // `reachedWindowEnd` stays false and the watermark is held at the floor.
+            // the walk cannot continue, and it may not claim the end either, so the stop
+            // reason is `.unusableNext` and the watermark is held at the floor.
             // Same distinction as the repeated cursor, on the other branch. Raised by
             // Copilot in review of PR #44.
             guard let link = page.links?.next, !link.isEmpty else {
-                reachedWindowEnd = true
+                stop = .windowEnd
                 break
             }
             guard let next = ConfluenceEndpoint.cursor(inNext: link) else {
-                // The link is named rather than logged: it is a URL from the API, not
-                // user content, and a malformed one is a fact about Atlassian a human
-                // would want to see.
-                Log.sources.error(
-                    "confluence paging stopped: `_links.next` carried no usable cursor")
+                stop = .unusableNext
                 break
             }
 
@@ -2517,22 +2559,27 @@ struct ConfluenceClient: Sendable {
             // that repeated one would otherwise be paged until `maxPages`, re-reading the
             // same versions. But `next` is still present, so older versions may well
             // remain unread: this is a walk that could not continue, not one that reached
-            // the end of the window, and `reachedWindowEnd` stays false so the watermark
-            // is held at the floor rather than claiming coverage it does not have.
-            // Raised by Copilot in review of PR #44.
-            if next == cursor { break }
+            // the end of the window, so the stop reason is `.repeatedCursor` and the
+            // watermark is held at the floor rather than claiming coverage it does not
+            // have. Raised by Copilot in review of PR #44.
+            if next == cursor {
+                stop = .repeatedCursor
+                break
+            }
             cursor = next
         }
 
-        if !reachedWindowEnd {
+        if !stop.isComplete {
             // `error`, not `info`: this is a gap in what the user was told rather than a
-            // slow pass — and the watermark is held back so the gap stays inside the
-            // next window.
-            Log.sources.error(
-                "confluence version paging hit the \(Self.maxPages, privacy: .public)-page cap for one ref; the watermark is held at the oldest version read"
-            )
+            // slow pass. Holding the watermark keeps the fetch from claiming coverage it
+            // did not achieve — which is all it does; it does not make the gap reachable
+            // on a later pass (D-208).
+            //
+            // `.public` because every one of these is a fixed sentence about this app's
+            // own paging: no page id, no link, no response content (§8).
+            Log.sources.error("\(stop.logLine, privacy: .public)")
         }
-        return (collected, !reachedWindowEnd)
+        return (collected, !stop.isComplete)
     }
 
     // MARK: - Names
@@ -3448,7 +3495,11 @@ func theConfluenceHarnessReportsACappedWalk() async {
         routes: ["page": [.ok(ConfluenceFixture.page())], "versions": pages])
 
     #expect(run.code == 0)
-    #expect(run.text.contains("capped"))
+    #expect(run.text.contains("the version walk ended early"))
+    // Not "the page cap": the same flag is true for a cursor that did not advance and
+    // for a `next` with no usable cursor, so a harness naming one cause would mislead
+    // two thirds of the time (D-213).
+    #expect(run.text.contains("page cap") == false)
 }
 
 @Test("with no credential it says what to run, and verifies nothing")
@@ -3718,11 +3769,19 @@ public enum ConfluenceSelftest {
         }
         out("  url       \(update.url?.absoluteString ?? "none")")
         out("  watermark \(update.watermark.map(String.init(describing:)) ?? "none")")
-        // Printed because a capped walk means the oldest versions in the window went
+        // Printed because a short walk means the oldest versions in the window went
         // unread, and a human comparing this against their browser needs to know that
         // before concluding the delta is wrong.
+        //
+        // **It does not name the page cap**, because `isWindowCapped` is equally true for
+        // a cursor that did not advance and for a `next` with no usable cursor (D-213).
+        // Naming one cause in a verification harness would send a reader looking for a
+        // long page history that may not be the problem; the log carries the specific
+        // reason. Raised by Copilot in review of PR #44.
         if update.isWindowCapped {
-            out("  capped    yes — the page cap was reached; the watermark is held at the floor")
+            out(
+                "  partial   yes — the version walk ended early; the watermark is held at the floor"
+            )
         }
     }
 

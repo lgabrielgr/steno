@@ -99,7 +99,11 @@ func theConfluenceHarnessReportsACappedWalk() async {
         routes: ["page": [.ok(ConfluenceFixture.page())], "versions": pages])
 
     #expect(run.code == 0)
-    #expect(run.text.contains("capped"))
+    #expect(run.text.contains("the version walk ended early"))
+    // Not "the page cap": the same flag is true for a cursor that did not advance and
+    // for a `next` with no usable cursor, so a harness naming one cause would mislead
+    // two thirds of the time (D-213).
+    #expect(run.text.contains("page cap") == false)
 }
 
 @Test("with no credential it says what to run, and verifies nothing")

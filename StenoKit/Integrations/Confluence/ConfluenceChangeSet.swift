@@ -45,9 +45,16 @@ struct ConfluenceChangeSet: Equatable {
     ///     the fetch.
     ///   - since: `nil` means "no anchor yet", which reports everything the client
     ///     chose to read and lets the service keep it out of the event body (D-188).
-    ///   - isCapped: the walk stopped at the page cap. The watermark is then the oldest
-    ///     point from which coverage *is* complete, so the gap stays inside the next
-    ///     pass's window instead of being closed over.
+    ///   - isCapped: **the walk ended before the end of the window, for any reason** — the
+    ///     page cap, a cursor that did not advance, or a `next` with no usable cursor
+    ///     (D-208, D-212, D-213). The parameter is not only about the page cap, and reading
+    ///     it that way is how two log lines came to say so wrongly.
+    ///
+    ///     The watermark is then the oldest point from which coverage *is* complete, which
+    ///     keeps the fetch from claiming coverage it did not achieve. **That is all it
+    ///     does.** It does not keep the unread gap reachable: the next pass walks from the
+    ///     newest end and stops in the same place, and closing that needs a persisted
+    ///     cursor (D-208). A caller inferring continuation from this flag would be wrong.
     ///   - pageID: **the id that was requested**, not the one the response carried.
     ///     `ConfluencePage.id` is optional like every other wire field, and a change id
     ///     keyed on it would be `#v9` for a response that omitted it and `12345#v9` for
