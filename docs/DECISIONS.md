@@ -5965,3 +5965,41 @@ true — and the first version of this test passed for that wrong reason before 
 **Also corrected here:** a repeated cursor now reports a *capped* walk rather than a complete one.
 `_links.next` is still present in that case, so older versions may remain unread; treating it as
 the end of the window let the watermark advance over history nothing had read.
+
+---
+
+### D-209 — Only evidence ends a walk: an empty page is not the end, `next` decides
+
+**2026-09-30** · M4-03 · **Status:** accepted · found by Copilot in review of PR #44
+
+`ConfluenceClient.versions` no longer special-cases an empty batch. `results` absent and
+`results: []` are treated alike — neither ends the walk by itself — and the decision is made by
+`_links.next`: present means there is more, absent means there is not.
+
+**Why the special case was wrong.** It set `reachedWindowEnd` and broke out, so a page carrying a
+`next` became a *complete* walk with an advancing watermark. That is the same defect as the
+repeated cursor (D-208), reached from the other side: coverage claimed on evidence that did not
+support it. The server had just said more history existed, and the connector recorded that it had
+read to the end of the window.
+
+**Why not `.invalidResponse` for a missing `results`**, which is what the review suggested.
+`MultiEntityResult<Version>` declares no `required` list in Atlassian's OpenAPI document
+(re-read 2026-09-30), so a body without the key is schema-valid; hard-failing it would refuse a
+shape the API is permitted to send, and §5.5 would then degrade a ref to cache over a response
+that was merely sparse. The defect is not the missing key — it is claiming coverage on it, and
+that is what this fixes. An explicitly empty array and an absent one now behave identically, which
+is also one fewer distinction for a future reader to hold.
+
+**What still ends the walk**, in order: a page whose oldest item predates the window; no `next`; a
+`next` whose cursor does not move (capped, D-208); and the page cap (capped). An empty batch
+reaches the `next` check like any other.
+
+**Falsified by** `D-209: an empty page with a `next` is not the end of the walk` — which asserts
+the walk follows the cursor to a second page — and `D-209: an empty page with no `next` is the end
+of the walk`. Reinstating the `batch.isEmpty` short-circuit turns the first red.
+
+**Also fixed here, from the same review:** `ConfluenceSelftest` built its ref's URL by
+interpolating `AtlassianCredential.site`, which deliberately preserves what the user typed and
+accepts a pasted URL with a path — producing `https://https://acme.atlassian.net/…/wiki/pages/123`
+and printing it as the page's URL whenever `_links.webui` was absent. It now uses the validated,
+normalized `baseURL`, which the function already refused to run without.

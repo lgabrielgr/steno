@@ -137,14 +137,21 @@ struct ConfluenceClient: Sendable {
                 from: .versions(pageID: pageID, cursor: cursor, limit: Self.versionPageSize),
                 base: base, authorization: authorization)
 
+            // **`results` absent and `results: []` are treated alike here, and neither
+            // ends the walk by itself** (D-209). An empty batch says nothing about
+            // whether more history exists — only `_links.next` does — so this falls
+            // through to the cursor check below rather than short-circuiting. The
+            // earlier version broke out and set `reachedWindowEnd`, which turned a page
+            // carrying `next` into a *complete* walk: the same defect as the repeated
+            // cursor, reached from the other side.
+            //
+            // Not `.invalidResponse` for a missing `results`, though it was suggested:
+            // `MultiEntityResult<Version>` declares no `required`, so a body without the
+            // key is schema-valid and hard-failing it would refuse a shape the API is
+            // permitted to send. What must not happen is *claiming coverage* on it.
             let batch = page.results ?? []
             collected.append(contentsOf: batch)
             pages += 1
-
-            if batch.isEmpty {
-                reachedWindowEnd = true
-                break
-            }
 
             // No anchor yet: one page is all that is needed to establish one, and
             // nothing from it will be reported anyway (D-188).
@@ -153,6 +160,8 @@ struct ConfluenceClient: Sendable {
                 break
             }
 
+            // A page whose oldest item predates the window is the end of the window. An
+            // empty batch has no oldest item, so this cannot fire for one.
             if let oldest = batch.compactMap(\.stamp).min(), oldest < since {
                 reachedWindowEnd = true
                 break

@@ -156,14 +156,39 @@ func confluenceFirstObservationReadsOnePage() async throws {
     #expect(set.watermark != nil)
 }
 
-@Test("a versions response with no results at all ends the walk")
-func confluenceVersionsWithoutResultsEndsTheWalk() async throws {
-    // `{"results": …}` absent is not the same shape as `[]`, and a walk that treated
-    // "no key" as "keep going" would page to the cap against a server saying nothing.
+@Test("D-209: an empty page with a `next` is not the end of the walk")
+func confluenceEmptyPageWithNextKeepsPaging() async throws {
+    // `results` absent and `results: []` say nothing about whether more history exists —
+    // only `_links.next` does. Stopping here and calling the walk complete was the same
+    // defect as the repeated cursor, reached from the other side: it let the watermark
+    // advance over history the server had just said was there.
     let transport = StubConfluenceTransport(
         routes: [
             "page": [.ok(ConfluenceFixture.page())],
-            "versions": [.ok(#"{"_links":{"next":"/wiki/api/v2/pages/12345/versions?cursor=X"}}"#)],
+            "versions": [
+                .ok(#"{"_links":{"next":"/wiki/api/v2/pages/12345/versions?cursor=X"}}"#),
+                .ok(
+                    ConfluenceFixture.versions([
+                        ConfluenceFixture.version(
+                            number: 8, createdAt: ConfluenceFixture.outOfWindow)
+                    ])),
+            ],
+        ], users: knownUsers)
+
+    let set = try await changeSet(transport)
+
+    let versionRequests = await transport.urls.filter { $0.contains("/versions") }
+    #expect(versionRequests.count == 2)
+    #expect(versionRequests.last?.contains("cursor=X") == true)
+    #expect(set.isWindowCapped == false)
+}
+
+@Test("D-209: an empty page with no `next` is the end of the walk")
+func confluenceEmptyPageWithoutNextEndsTheWalk() async throws {
+    let transport = StubConfluenceTransport(
+        routes: [
+            "page": [.ok(ConfluenceFixture.page())],
+            "versions": [.ok(#"{"results":[],"_links":{}}"#)],
         ], users: knownUsers)
 
     let set = try await changeSet(transport)

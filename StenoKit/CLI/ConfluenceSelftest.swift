@@ -47,7 +47,7 @@ public enum ConfluenceSelftest {
             )
             return 1
         }
-        guard credential.baseURL != nil else {
+        guard let base = credential.baseURL else {
             out("confluence-selftest: FAIL — the stored site is not an *.atlassian.net host (D19).")
             return 1
         }
@@ -62,9 +62,15 @@ public enum ConfluenceSelftest {
         let counter = CountingTransport(wrapping: transport)
         let connector = ConfluenceConnector(
             credentials: credentials, transport: counter, now: now)
+        // **Built from `baseURL`, not from `site`.** `AtlassianCredential.site` keeps what
+        // the user typed and accepts a pasted URL with a path, so interpolating it
+        // produced values like `https://https://acme.atlassian.net/jira/…/wiki/pages/123`
+        // — which the harness would then print as the page's URL whenever `_links.webui`
+        // was absent. `baseURL` is the validated, normalized form, and this function
+        // already refused to continue without it. Raised by Copilot in review of PR #44.
         let ref = SourceRefSnapshot(
             refID: UUID(), kind: .confluencePage, identifier: pageID,
-            url: "https://\(credential.site)/wiki/pages/\(pageID)")
+            url: "\(base.absoluteString)/wiki/pages/\(pageID)")
 
         let update: SourceUpdate
         do {

@@ -171,3 +171,25 @@ func countingTransportReadOnlyRule(methods: [String], expected: Bool) {
     // visible to the human running it.
     #expect(CountingTransport.isReadOnly(methods) == expected)
 }
+
+@Test("the harness's fallback URL is built from the validated site, not the typed one")
+func theConfluenceHarnessBuildsAWellFormedFallbackURL() async {
+    // `AtlassianCredential.site` keeps what the user typed and accepts a pasted URL with
+    // a path, so interpolating it produced `https://https://acme.atlassian.net/…`. The
+    // harness prints that as the page's URL whenever `_links.webui` is absent, which is
+    // exactly when a human is squinting at the output to decide whether the connector
+    // works. Raised by Copilot in review of PR #44.
+    let pasted = AtlassianCredential(
+        site: "https://acme.atlassian.net/wiki/spaces/ENG/overview",
+        email: "leo@example.com", apiToken: "token-value")
+    let run = await runHarness(
+        credential: pasted,
+        routes: [
+            "page": [.ok(ConfluenceFixture.page(webui: nil))],
+            "versions": [.ok(ConfluenceFixture.versions([]))],
+        ])
+
+    #expect(run.code == 0)
+    #expect(run.text.contains("https://https://") == false)
+    #expect(run.text.contains("url       https://acme.atlassian.net/wiki/pages/12345"))
+}

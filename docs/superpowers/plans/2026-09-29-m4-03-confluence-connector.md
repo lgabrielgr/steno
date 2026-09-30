@@ -2359,14 +2359,21 @@ struct ConfluenceClient: Sendable {
                 from: .versions(pageID: pageID, cursor: cursor, limit: Self.versionPageSize),
                 base: base, authorization: authorization)
 
+            // **`results` absent and `results: []` are treated alike here, and neither
+            // ends the walk by itself** (D-209). An empty batch says nothing about
+            // whether more history exists — only `_links.next` does — so this falls
+            // through to the cursor check below rather than short-circuiting. The
+            // earlier version broke out and set `reachedWindowEnd`, which turned a page
+            // carrying `next` into a *complete* walk: the same defect as the repeated
+            // cursor, reached from the other side.
+            //
+            // Not `.invalidResponse` for a missing `results`, though it was suggested:
+            // `MultiEntityResult<Version>` declares no `required`, so a body without the
+            // key is schema-valid and hard-failing it would refuse a shape the API is
+            // permitted to send. What must not happen is *claiming coverage* on it.
             let batch = page.results ?? []
             collected.append(contentsOf: batch)
             pages += 1
-
-            if batch.isEmpty {
-                reachedWindowEnd = true
-                break
-            }
 
             // No anchor yet: one page is all that is needed to establish one, and
             // nothing from it will be reported anyway (D-188).
@@ -2375,6 +2382,8 @@ struct ConfluenceClient: Sendable {
                 break
             }
 
+            // A page whose oldest item predates the window is the end of the window. An
+            // empty batch has no oldest item, so this cannot fire for one.
             if let oldest = batch.compactMap(\.stamp).min(), oldest < since {
                 reachedWindowEnd = true
                 break
@@ -3383,6 +3392,28 @@ func countingTransportReadOnlyRule(methods: [String], expected: Bool) {
     // visible to the human running it.
     #expect(CountingTransport.isReadOnly(methods) == expected)
 }
+
+@Test("the harness's fallback URL is built from the validated site, not the typed one")
+func theConfluenceHarnessBuildsAWellFormedFallbackURL() async {
+    // `AtlassianCredential.site` keeps what the user typed and accepts a pasted URL with
+    // a path, so interpolating it produced `https://https://acme.atlassian.net/…`. The
+    // harness prints that as the page's URL whenever `_links.webui` is absent, which is
+    // exactly when a human is squinting at the output to decide whether the connector
+    // works. Raised by Copilot in review of PR #44.
+    let pasted = AtlassianCredential(
+        site: "https://acme.atlassian.net/wiki/spaces/ENG/overview",
+        email: "leo@example.com", apiToken: "token-value")
+    let run = await runHarness(
+        credential: pasted,
+        routes: [
+            "page": [.ok(ConfluenceFixture.page(webui: nil))],
+            "versions": [.ok(ConfluenceFixture.versions([]))],
+        ])
+
+    #expect(run.code == 0)
+    #expect(run.text.contains("https://https://") == false)
+    #expect(run.text.contains("url       https://acme.atlassian.net/wiki/pages/12345"))
+}
 ```
 
 - [ ] **Step 3: Add the parser cases to `StenoTests/CLI/CLIParserTests.swift`**
@@ -3486,7 +3517,7 @@ public enum ConfluenceSelftest {
             )
             return 1
         }
-        guard credential.baseURL != nil else {
+        guard let base = credential.baseURL else {
             out("confluence-selftest: FAIL — the stored site is not an *.atlassian.net host (D19).")
             return 1
         }
@@ -3501,9 +3532,15 @@ public enum ConfluenceSelftest {
         let counter = CountingTransport(wrapping: transport)
         let connector = ConfluenceConnector(
             credentials: credentials, transport: counter, now: now)
+        // **Built from `baseURL`, not from `site`.** `AtlassianCredential.site` keeps what
+        // the user typed and accepts a pasted URL with a path, so interpolating it
+        // produced values like `https://https://acme.atlassian.net/jira/…/wiki/pages/123`
+        // — which the harness would then print as the page's URL whenever `_links.webui`
+        // was absent. `baseURL` is the validated, normalized form, and this function
+        // already refused to continue without it. Raised by Copilot in review of PR #44.
         let ref = SourceRefSnapshot(
             refID: UUID(), kind: .confluencePage, identifier: pageID,
-            url: "https://\(credential.site)/wiki/pages/\(pageID)")
+            url: "\(base.absoluteString)/wiki/pages/\(pageID)")
 
         let update: SourceUpdate
         do {
