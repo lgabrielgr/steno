@@ -222,3 +222,46 @@ func confluenceVerifyDistinguishesARefusedCredential() async throws {
         try await client(transport).verify(credential: ConfluenceFixture.credential())
     }
 }
+
+@Test("D-211: the current editor is named even when the window is full of other editors")
+func confluenceCurrentEditorSurvivesTheLookupCap() async throws {
+    // §5.3 asks for the last editor by name — it is the one attribution the section
+    // actually specifies, and the summary is built from it. Appended after the version
+    // authors, it was the first name dropped once ten other editors filled the cap.
+    let currentEditor = "557058:current"
+    let editors = (0..<12).map { "557058:editor-\($0)" }
+
+    var users: [String: Answer] = [
+        currentEditor: .ok(ConfluenceFixture.user(displayName: "Priya Anand"))
+    ]
+    for id in editors {
+        users[id] = .ok(ConfluenceFixture.user(displayName: "Editor \(id.suffix(1))"))
+    }
+
+    let transport = StubConfluenceTransport(
+        routes: [
+            "page": [
+                .ok(
+                    ConfluenceFixture.page(
+                        currentVersion: ConfluenceFixture.version(
+                            number: 101, createdAt: ConfluenceFixture.inWindow,
+                            authorID: currentEditor)))
+            ],
+            "versions": [
+                .ok(
+                    ConfluenceFixture.versions(
+                        editors.enumerated().map { index, id in
+                            ConfluenceFixture.version(
+                                number: 100 - index, createdAt: ConfluenceFixture.inWindow,
+                                authorID: id)
+                        }))
+            ],
+        ], users: users)
+
+    let set = try await changeSet(transport)
+
+    #expect(set.summary == "Payments Migration Plan — v101, edited by Priya Anand")
+    // The cap still bites — it just no longer bites the one name §5.3 requires.
+    let counts = await transport.callCounts
+    #expect(counts["user"] == ConfluenceClient.maxNameLookups)
+}

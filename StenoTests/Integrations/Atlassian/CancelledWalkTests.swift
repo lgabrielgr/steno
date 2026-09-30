@@ -12,39 +12,9 @@ import Testing
 /// complete fetch — into a log that cannot be edited afterwards. Fixing only the
 /// connector that happened to be in the diff is the failure mode this repo keeps
 /// meeting, so the two assertions sit where the next reader sees them together.
-
-/// Holds a task at its first line until the test says otherwise.
 ///
-/// **The first version of these tests had no gate**, and claimed in its own comment that
-/// `Task { … }` followed by `cancel()` was deterministic "because a Task cancelled before
-/// it runs still reports `isCancelled`". The premise is false: the body is scheduled on
-/// the global executor and may begin on another thread *concurrently* with the next line
-/// of the test, so the walk could read its one stubbed page and return successfully
-/// before the cancellation landed — a test that passes or fails on scheduling, which is
-/// worse than no test because it teaches people to re-run. Raised by Copilot in review of
-/// PR #44.
-///
-/// With the gate the ordering is a property of the code rather than of the machine: the
-/// body cannot reach the fetch until `open()` is called, and `open()` is called after
-/// `cancel()`.
-private actor Gate {
-    private var isOpen = false
-    private var waiters: [CheckedContinuation<Void, Never>] = []
-
-    /// Let everything through, now and later.
-    func open() {
-        isOpen = true
-        for waiter in waiters { waiter.resume() }
-        waiters.removeAll()
-    }
-
-    /// Suspend until `open()`. Returns immediately once it has been called, so the test
-    /// cannot deadlock by opening the gate before anything waits on it.
-    func wait() async {
-        guard !isOpen else { return }
-        await withCheckedContinuation { waiters.append($0) }
-    }
-}
+/// Every test here holds its task at a `TaskGate` until after `cancel()`, which is what
+/// makes the ordering a property of the code rather than of the scheduler.
 
 @Test("D-207: a cancelled Confluence walk fails the ref rather than filing a short answer")
 func confluenceCancelledWalkThrowsRatherThanReturningPartialData() async throws {
@@ -52,7 +22,7 @@ func confluenceCancelledWalkThrowsRatherThanReturningPartialData() async throws 
         routes: ConfluenceFixture.quietRoutes(),
         users: [ConfluenceFixture.leo: .ok(ConfluenceFixture.user())])
     let subject = ConfluenceClient(transport: transport)
-    let gate = Gate()
+    let gate = TaskGate()
 
     let task = Task {
         await gate.wait()
@@ -72,7 +42,7 @@ func confluenceCancelledWalkThrowsRatherThanReturningPartialData() async throws 
 func jiraCancelledWalkThrowsRatherThanReturningPartialData() async throws {
     let transport = StubJiraTransport(routes: JiraFixture.quietRoutes())
     let subject = JiraClient(transport: transport)
-    let gate = Gate()
+    let gate = TaskGate()
 
     let task = Task {
         await gate.wait()
@@ -82,6 +52,43 @@ func jiraCancelledWalkThrowsRatherThanReturningPartialData() async throws {
     }
     task.cancel()
     await gate.open()
+
+    await #expect(throws: SourceError.timedOut) {
+        _ = try await task.value
+    }
+}
+
+@Test("D-211: cancellation during the name lookups fails the ref, rather than \"someone\"")
+func confluenceCancellationDuringNameLookupsThrows() async throws {
+    // The second place D-207's failure mode lives. Each lookup's `try?` turns a cancelled
+    // request into an unresolved name, so a budget expiring here produced an ordinary
+    // *success* in which every editor read "someone" — and `SourceRefreshService` keeps a
+    // success after the budget, writing that attribution into a log that cannot be edited.
+    //
+    // Staged with two gates so the cancellation lands exactly where it matters: the walk
+    // is held at its first name lookup, cancelled while held, then released. Nothing here
+    // depends on which thread wins a race.
+    let reachedLookup = TaskGate()
+    let releaseLookup = TaskGate()
+
+    let transport = StubConfluenceTransport(
+        routes: ConfluenceFixture.quietRoutes(),
+        users: [ConfluenceFixture.leo: .ok(ConfluenceFixture.user())],
+        onUserRequest: {
+            await reachedLookup.open()
+            await releaseLookup.wait()
+        })
+    let subject = ConfluenceClient(transport: transport)
+
+    let task = Task {
+        try await subject.changeSet(
+            pageID: ConfluenceFixture.pageID, since: ConfluenceFixture.windowStart,
+            credential: ConfluenceFixture.credential())
+    }
+
+    await reachedLookup.wait()  // the page and the versions are already read
+    task.cancel()
+    await releaseLookup.open()
 
     await #expect(throws: SourceError.timedOut) {
         _ = try await task.value

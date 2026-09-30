@@ -167,6 +167,10 @@ actor StubConfluenceTransport: HTTPTransport {
     /// feature.
     private let versionsByCursor: [String: Answer]
 
+    /// Runs before a name lookup is answered, so a test can suspend the walk exactly
+    /// where it wants to and act while it is held.
+    private let onUserRequest: (@Sendable () async -> Void)?
+
     private let fallback: Answer
     private(set) var received: [HTTPRequest] = []
 
@@ -182,11 +186,13 @@ actor StubConfluenceTransport: HTTPTransport {
     init(
         routes: [String: [Answer]], users: [String: Answer] = [:],
         versionsByCursor: [String: Answer] = [:],
+        onUserRequest: (@Sendable () async -> Void)? = nil,
         fallback: Answer = .status(500)
     ) {
         self.routes = routes
         self.users = users
         self.versionsByCursor = versionsByCursor
+        self.onUserRequest = onUserRequest
         self.fallback = fallback
     }
 
@@ -215,6 +221,7 @@ actor StubConfluenceTransport: HTTPTransport {
             case .fail(let error): throw error
             }
         }
+        if key == "user", let onUserRequest { await onUserRequest() }
         if key == "user", let id = Self.accountID(in: request), let answer = users[id] {
             switch answer {
             case .respond(let response): return response

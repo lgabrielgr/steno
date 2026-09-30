@@ -6056,3 +6056,48 @@ review — "duplicate versions can be reported twice" — while the review liste
 and detailed only two other items in a collapsed section. The finding was never opened as a
 thread. Three items were named in prose; two were shown; one was real and invisible. Read the
 whole body, not the verdict.
+
+---
+
+### D-211 — Cancellation is not an unresolved name, and the current editor is named first
+
+**2026-09-30** · M4-03 · **Status:** accepted · found by Copilot in review of PR #44 ·
+**extends D-207, D-201**
+
+Two changes to `ConfluenceClient.changeSet`, from one review round, both about the name lookups.
+
+**1. Cancellation around the lookups throws `.timedOut`.** `changeSet` now checks
+`Task.isCancelled` before starting the lookups and after awaiting them.
+
+D-201 makes a failed lookup absorbable by construction: the children run in a non-throwing
+`withTaskGroup`, so a lookup *cannot* fail the fetch. That is still right — and it is exactly what
+made this wrong. A cancelled request throws `CancellationError`, each child's `try?` turned it into
+an unresolved name, and a pass budget expiring mid-group produced an ordinary **success** in which
+every editor read "someone". `SourceRefreshService.fetchAll` keeps a success once the budget has
+expired, so that attribution was written into an append-only log — permanently wrong, and wrong in
+a way that looks like Confluence's fault rather than the clock's.
+
+**The checks live on the parent, deliberately.** Making a child throw would have removed D-201's
+compile-time guarantee to fix a problem that is not the child's: the lookup did not fail, the pass
+ended. This is D-207's rule — cancellation fails the ref, it does not produce a short answer — in
+the second place it needed to be.
+
+**2. The page's current editor is resolved first.** `authorIDs(in:versions:)` now yields the page's
+current-version author ahead of the version authors.
+
+§5.3 asks for the last editor **by name**: it is the one attribution the section specifies, and
+`summary` — which becomes `SourceRef.cachedSummary`, the thing shown when the data is stale — is
+built from it. Appended last, it was the first name dropped when ten other editors filled
+`maxNameLookups`, so the busiest pages, the ones a stand-up is most likely to care about, were
+exactly the ones whose summary lost its editor. It is also reachable without a busy page at all:
+the page read and the version walk run concurrently, so the page can carry a version newer than
+anything the walk saw, whose author appears in no other list.
+
+The cap is unchanged, and still bites — it just no longer bites the one name the requirement names.
+
+**Falsified by** `D-211: cancellation during the name lookups fails the ref, rather than "someone"`,
+which holds the walk at its first lookup with a `TaskGate`, cancels it while held, and releases it —
+so the cancellation lands where it matters without depending on which thread wins a race — and
+`D-211: the current editor is named even when the window is full of other editors`, which gives the
+page an editor no version author shares and twelve competing editors. Reverting either change turns
+its test red.

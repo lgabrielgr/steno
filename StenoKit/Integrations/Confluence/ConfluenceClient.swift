@@ -79,9 +79,22 @@ struct ConfluenceClient: Sendable {
         let walked = try await walk
 
         // Names last, because they depend on what the walk found — and unlike the two
-        // reads above, a failure here is absorbed (D-201).
+        // reads above, a *failed lookup* is absorbed (D-201).
+        //
+        // **Cancellation is not a failed lookup, and absorbing it here was D-207's defect
+        // in a second place** (D-211). Each child's `try?` turns a cancelled request into
+        // an unresolved name, so a budget expiring during this group produced a perfectly
+        // ordinary success in which every editor read "someone" — and
+        // `SourceRefreshService` keeps a success after the budget, writing that
+        // attribution into a log that cannot be edited. The checks are on the parent
+        // rather than in the children, which keeps D-201's compile-time guarantee that a
+        // lookup *cannot* fail the fetch. Raised by Copilot in review of PR #44.
+        if Task.isCancelled { throw SourceError.timedOut }
+
         let ids = authorIDs(in: page, versions: walked.versions)
         let names = await names(for: ids, base: base, authorization: authorization)
+
+        if Task.isCancelled { throw SourceError.timedOut }
 
         return ConfluenceChangeSet.make(
             page: page, pageID: pageID, versions: walked.versions, names: names, since: since,
@@ -213,15 +226,25 @@ struct ConfluenceClient: Sendable {
 
     // MARK: - Names
 
-    /// Every account id this fetch will need a name for, page's own editor included.
+    /// Every account id this fetch will need a name for, **the page's current editor
+    /// first**.
     ///
-    /// Deduplicated and **stably ordered** — newest version first, page last — so the
-    /// ids that survive `maxNameLookups` are the ones on the most recent edits rather
-    /// than whichever the hasher happened to favour.
+    /// Deduplicated and stably ordered, so the ids that survive `maxNameLookups` are
+    /// chosen by a rule rather than by whichever the hasher happened to favour.
+    ///
+    /// **The current editor leads, and that ordering is a requirement rather than a
+    /// preference** (D-211). §5.3 asks for the last editor by name — it is the one
+    /// attribution the section actually specifies, and it is what the summary and the
+    /// cached last-known state are built from. Appending it after the version authors
+    /// meant ten distinct editors in the window exhausted the cap before it was reached,
+    /// and the summary then omitted the very thing §5.3 requires. It is also reachable
+    /// without a busy page at all: the page read and the version walk run concurrently,
+    /// so the page can carry a version newer than anything the walk saw, whose author is
+    /// in no other list. Raised by Copilot in review of PR #44.
     private func authorIDs(in page: ConfluencePage, versions: [ConfluenceVersion]) -> [String] {
         var seen: Set<String> = []
         var ordered: [String] = []
-        for id in versions.compactMap(\.authorId) + [page.version?.authorId].compactMap({ $0 })
+        for id in [page.version?.authorId].compactMap({ $0 }) + versions.compactMap(\.authorId)
         where seen.insert(id).inserted {
             ordered.append(id)
         }
