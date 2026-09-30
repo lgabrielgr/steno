@@ -1866,6 +1866,8 @@ git commit -m "feat: turn Confluence versions into a delta, a summary and a wate
 **Files:**
 - Create: `StenoKit/Integrations/Confluence/ConfluenceClient.swift`
 - Test: `StenoTests/Integrations/Confluence/ConfluenceClientTests.swift`
+- Test: `StenoTests/Integrations/Atlassian/CancelledWalkTests.swift` — D-207, for **both**
+  connectors, in one file because the rule and the defect are shared
 
 **Interfaces:**
 - Consumes: `ConfluenceEndpoint` (Task 2), the wire types (Task 3),
@@ -2249,6 +2251,67 @@ func confluenceVersionsWithoutResultsEndsTheWalk() async throws {
 }
 ```
 
+Then create `StenoTests/Integrations/Atlassian/CancelledWalkTests.swift`, which owns D-207 for
+both connectors. It is a separate file on purpose: the rule is shared, the defect was shared, and
+a fix that lands only on the connector in the diff is the failure mode this repo keeps meeting.
+
+```swift
+import Foundation
+import Testing
+
+@testable import StenoKit
+
+/// D-207: what a cancelled page walk does, for **both** Atlassian connectors.
+///
+/// **One file rather than a test beside each client**, deliberately. The rule is shared
+/// and the defect was shared: `SourceRefreshService.fetchAll` discards a *failed* fetch
+/// once the pass budget has expired and keeps a *successful* one, so a walk that
+/// answered cancellation by returning what it had read filed a truncated delta as a
+/// complete fetch — into a log that cannot be edited afterwards. Fixing only the
+/// connector that happened to be in the diff is the failure mode this repo keeps
+/// meeting, so the two assertions sit where the next reader sees them together.
+///
+/// Both tests cancel the task **before its body starts**, which is deterministic: a
+/// `Task` cancelled before it runs still reports `isCancelled` at the loop's first
+/// check. No sleeping, no racing the scheduler, nothing to flake.
+
+@Test("D-207: a cancelled Confluence walk fails the ref rather than filing a short answer")
+func confluenceCancelledWalkThrowsRatherThanReturningPartialData() async throws {
+    let transport = StubConfluenceTransport(
+        routes: ConfluenceFixture.quietRoutes(),
+        users: [ConfluenceFixture.leo: .ok(ConfluenceFixture.user())])
+    let subject = ConfluenceClient(transport: transport)
+
+    let task = Task {
+        try await subject.changeSet(
+            pageID: ConfluenceFixture.pageID, since: ConfluenceFixture.windowStart,
+            credential: ConfluenceFixture.credential())
+    }
+    task.cancel()
+
+    await #expect(throws: SourceError.timedOut) {
+        _ = try await task.value
+    }
+}
+
+@Test("D-207: a cancelled Jira walk fails the ref rather than filing a short answer")
+func jiraCancelledWalkThrowsRatherThanReturningPartialData() async throws {
+    let transport = StubJiraTransport(routes: JiraFixture.quietRoutes())
+    let subject = JiraClient(transport: transport)
+
+    let task = Task {
+        try await subject.changeSet(
+            key: JiraFixture.key, since: JiraFixture.windowStart,
+            credential: JiraFixture.credential())
+    }
+    task.cancel()
+
+    await #expect(throws: SourceError.timedOut) {
+        _ = try await task.value
+    }
+}
+```
+
 - [ ] **Step 2: Run them to verify they fail**
 
 Run: `make test`
@@ -2265,6 +2328,10 @@ Three things here are load-bearing and easy to write differently by accident:
    throw, which makes "a name lookup never fails the fetch" a compile error rather than a rule.
 3. **Three things end the walk besides the window:** no `next`, an empty page, and a cursor equal
    to the one just used.
+4. **Cancellation throws `.timedOut`; it does not `break`** (D-207). Breaking returns a truncated
+   delta as an ordinary success, and `SourceRefreshService.fetchAll` keeps successful results
+   after the pass budget expires while discarding failed ones — so the short answer reaches the
+   append-only log after the budget ran out.
 
 
 ```swift
@@ -2281,7 +2348,8 @@ import OSLog
 /// `URLSession`-backed, which honours cancellation, and the paging loop checks
 /// `Task.isCancelled` — without that, a page with a long history could hold the whole
 /// pass past both the per-fetch deadline and the pass budget, which are cooperative
-/// only.
+/// only. A cancelled walk **throws `.timedOut`** rather than returning what it had
+/// managed to read (D-207).
 struct ConfluenceClient: Sendable {
     /// `limit` defaults to 25 and caps at 250. Fifty is the same order as
     /// `JiraClient.commentPageSize`, and a page's whole recent history usually fits one
@@ -2376,7 +2444,19 @@ struct ConfluenceClient: Sendable {
         var reachedWindowEnd = false
 
         while pages < Self.maxPages {
-            if Task.isCancelled { break }
+            // **Cancellation fails the ref; it does not produce a short answer**
+            // (D-207). `SourceRefreshService.fetchAll` discards a *failed* fetch once the
+            // pass budget has expired and keeps a *successful* one — on the reasoning that
+            // a fetch which beat the cancellation still carries data. A walk that broke out
+            // here did not beat the cancellation, it answered one, so returning normally
+            // would file a truncated delta as a complete fetch and append it to a log that
+            // cannot be edited. Raised by Copilot in review of PR #44.
+            //
+            // `.timedOut` rather than a new case, because that is already what a
+            // cancellation landing *inside* a request maps to
+            // (`AtlassianErrors.error(forTransport:)`) — the same budget expiring must not
+            // mean two different things depending on which microsecond it lands in.
+            if Task.isCancelled { throw SourceError.timedOut }
 
             let page = try await fetch(
                 ConfluenceVersionPage.self,
@@ -2556,6 +2636,7 @@ Expected: PASS.
 | `ids.prefix(Int.max)` | `D-201: the lookups are bounded…` |
 | `return (collected, false)` | `hitting the page cap is reported as a capped window…` |
 | `resolved[id] = name ?? id` | `D-201: a name lookup that fails costs a name, not the fetch` |
+| cancellation `break`s instead of throwing | `D-207: a cancelled Confluence walk fails the ref…`, and its Jira twin |
 
 **One mutation is expected not to compile**, and that is the point: replacing `try?` with `try`
 inside the task group fails the build with *"invalid conversion from throwing function … to
