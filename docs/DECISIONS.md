@@ -5528,7 +5528,10 @@ were not true** (Copilot, PR #43):
   entry read on any capped stream, so the gap stays *inside* the next window and fills itself once
   the ticket quiets enough for the walk to reach past it. Both streams do this, because a fix landing
   only on the one named in the review comment would leave the other closing over its own gap. Hitting
-  the cap is still logged at `error` with the ref named.
+  the cap is still logged at `error`. *(Corrected in PR #44: the log does **not** name the ref — it
+  says "for one ref" — and that is deliberate, for D-191's reason: these lines reach a crash log and
+  an issue key or page id is the kind of identifier §8 keeps out of them. The claim was wrong when
+  written.)*
 
   Round three corrected the two-stream case: the floors were combined with `max`, which reads as
   "the point above which every stream is covered" — true, and useless, because it advances the window
@@ -5918,11 +5921,12 @@ the same budget expiry meant two different things depending on which microsecond
 discarded failure if a request was in flight, a recorded partial success if one had just returned.
 
 **Why not lean on the capped-window path instead.** A cancelled walk did set `isWindowCapped`, so
-the watermark was held at the floor and nothing was permanently lost — the next pass would re-read
-the gap. That is why this is medium rather than severe. But `isWindowCapped` means "the page cap
-stopped me", a property of the *source's* size that D-196 reasons about; overloading it with "the
-clock stopped me" puts two unrelated causes behind one flag, and the event written in the second
-case is a report the user never needed.
+the watermark was held at the floor and the fetch did not claim coverage it lacked. That is why
+this is medium rather than severe. But `isWindowCapped` says *the source walk ended before full
+coverage* — a fact about the source and how far the walk got, which D-196 and later D-213 reason
+about. "The clock stopped me" is a fact about this app's budget, and putting it behind the same
+flag would file an event the user never needed and could not act on. *(Wording corrected after
+D-213 widened the flag beyond the page cap; the distinction this decision rests on is unchanged.)*
 
 **`.timedOut` rather than a new case**, so the taxonomy stays the size §5.5 can act on, and so the
 two cancellation paths agree.
@@ -5966,8 +5970,10 @@ stopping.
 **So the cap is a bound on a shape that does not occur, not a pause.** Reaching it needs more than
 five hundred versions of one page, or a thousand changelog entries on one ticket, inside thirty
 days. If it is reached, the oldest items in the window are not reported and will not be — which is
-why it is logged at `error` with the ref named, so a real occurrence is visible rather than
-inferred.
+why it is logged at `error` — **without naming the ref**, which is deliberate: these lines reach a
+crash log, and a page id or issue key is the kind of identifier §8 keeps out of one (D-191 withholds
+a URL for the same reason). The log says "for one ref", which is enough to know it happened and to
+go looking, and nothing that identifies whose page it was.
 
 **Reaching past the cap needs a persisted cursor**, and that is out of scope here for the reason
 M4-02 already recorded: a cursor on the row means §10's export, import and merge rules all have to
@@ -6175,3 +6181,10 @@ cause belongs, and the harness says the thing that is true whatever it was.
 now asserts the harness says "the version walk ended early" **and does not say "page cap"**, plus
 the existing D-208/D-209/D-212 tests, which pin each stop reason to the right verdict. Restoring
 the old harness wording turns the first red.
+
+**And by `WalkStopTests`, which asserts the log lines themselves** — that each reason produces its
+own, that a complete walk produces none, and that none carries a page id. Three rounds of this
+review found prose describing behaviour the code no longer had; a sentence cannot be made to fail,
+so the claims about these messages are now tests instead. The first run of that file failed
+immediately, on a claim written minutes earlier: the correction to D-208 said the log says "for one
+ref", which was true of one line in three. The other two now say it too.

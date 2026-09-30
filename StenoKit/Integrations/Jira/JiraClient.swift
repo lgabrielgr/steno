@@ -32,8 +32,10 @@ struct JiraClient: Sendable {
     ///
     /// It is a bound on a shape that does not occur rather than a silent loss: reaching it
     /// needs more than a thousand changelog entries inside `ResumePoint.maxLookback`'s
-    /// thirty days, on one ticket. Hitting it is logged with the ref named, so a real
-    /// occurrence is visible rather than inferred.
+    /// thirty days, on one ticket. Hitting it is logged at `error` — **without naming the
+    /// ticket**, deliberately: these lines reach a crash log, and an issue key is the kind
+    /// of identifier §8 keeps out of one, which is why `ReadOnlyTransport` withholds a URL
+    /// too. The log says "for one ref", which is enough to know it happened.
     static let maxPages = 10
 
     private let transport: any HTTPTransport

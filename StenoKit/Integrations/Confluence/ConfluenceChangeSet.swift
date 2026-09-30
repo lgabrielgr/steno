@@ -18,9 +18,14 @@ struct ConfluenceChangeSet: Equatable {
     /// or, when the walk was capped, the oldest point from which coverage is complete.
     let watermark: Date?
 
-    /// Whether the version walk stopped at the page cap rather than at the end of the
-    /// window. Carried to the payload because the watermark alone cannot say it
-    /// (D-196's reasoning, and `ResumePoint` resolves several watermarks with `max`).
+    /// Whether the version walk ended **before the end of the window**, for any reason:
+    /// the page cap, a cursor that did not advance, or a `next` with no usable cursor
+    /// (D-213 names all three).
+    ///
+    /// Carried to the payload because the watermark alone cannot say it (D-196's
+    /// reasoning, and `ResumePoint` resolves several watermarks with `max`). It implies
+    /// nothing about continuation: the unread region is not reachable on a later pass
+    /// (D-208).
     let isWindowCapped: Bool
 
     /// The page's `_links.webui`, exactly as it arrived: relative, and rooted at the

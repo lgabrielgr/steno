@@ -1706,9 +1706,14 @@ struct ConfluenceChangeSet: Equatable {
     /// or, when the walk was capped, the oldest point from which coverage is complete.
     let watermark: Date?
 
-    /// Whether the version walk stopped at the page cap rather than at the end of the
-    /// window. Carried to the payload because the watermark alone cannot say it
-    /// (D-196's reasoning, and `ResumePoint` resolves several watermarks with `max`).
+    /// Whether the version walk ended **before the end of the window**, for any reason:
+    /// the page cap, a cursor that did not advance, or a `next` with no usable cursor
+    /// (D-213 names all three).
+    ///
+    /// Carried to the payload because the watermark alone cannot say it (D-196's
+    /// reasoning, and `ResumePoint` resolves several watermarks with `max`). It implies
+    /// nothing about continuation: the unread region is not reachable on a later pass
+    /// (D-208).
     let isWindowCapped: Bool
 
     /// The page's `_links.webui`, exactly as it arrived: relative, and rooted at the
@@ -2419,43 +2424,6 @@ struct ConfluenceClient: Sendable {
     }
 
     // MARK: - Paging
-
-    /// Why a version walk stopped.
-    ///
-    /// **A reason rather than a Bool, because one Bool was being asked to mean three
-    /// things** (D-213). `isWindowCapped` is true for the page cap, for a cursor that did
-    /// not advance, and for a `next` with no usable cursor — so a log line and a
-    /// verification message that both said "hit the page cap" were wrong two thirds of the
-    /// time, and a human reading either would have gone looking for a long page history
-    /// that was not the problem. Raised by Copilot in review of PR #44.
-    private enum WalkStop {
-        /// The window ended: a page older than `since`, or no `next` to follow.
-        case windowEnd
-        case pageCap
-        case repeatedCursor
-        case unusableNext
-
-        /// Whether the walk covered everything it set out to. Only `windowEnd` does.
-        var isComplete: Bool { self == .windowEnd }
-
-        /// What the log says. Each ends the same way, because the consequence is the same
-        /// whatever the cause: the oldest versions in the window were not read, and the
-        /// watermark is held so the fetch does not claim they were.
-        var logLine: String {
-            let held = "the watermark is held at the oldest version read"
-            switch self {
-            case .windowEnd: return ""
-            case .pageCap:
-                return
-                    "confluence version paging hit the \(ConfluenceClient.maxPages)-page cap for one ref; \(held)"
-            case .repeatedCursor:
-                return "confluence version paging stopped: the cursor did not advance; \(held)"
-            case .unusableNext:
-                return
-                    "confluence version paging stopped: `_links.next` carried no usable cursor; \(held)"
-            }
-        }
-    }
 
     /// Every version that could be inside the window, newest first.
     ///
