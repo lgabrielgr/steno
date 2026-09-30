@@ -48,14 +48,21 @@ struct ConfluenceChangeSet: Equatable {
     ///   - isCapped: the walk stopped at the page cap. The watermark is then the oldest
     ///     point from which coverage *is* complete, so the gap stays inside the next
     ///     pass's window instead of being closed over.
+    ///   - pageID: **the id that was requested**, not the one the response carried.
+    ///     `ConfluencePage.id` is optional like every other wire field, and a change id
+    ///     keyed on it would be `#v9` for a response that omitted it and `12345#v9` for
+    ///     one that did not — two ids for one version, which walks straight past the
+    ///     event log's de-duplication and reports the edit again. The requested id is
+    ///     authoritative and always present, so it is what the key is built from.
+    ///     Raised by Copilot in review of PR #44.
     static func make(
         page: ConfluencePage,
+        pageID: String,
         versions: [ConfluenceVersion],
         names: [String: String],
         since: Date?,
         isCapped: Bool = false
     ) -> ConfluenceChangeSet {
-        let pageID = page.id ?? ""
         let window = since ?? .distantPast
 
         return ConfluenceChangeSet(

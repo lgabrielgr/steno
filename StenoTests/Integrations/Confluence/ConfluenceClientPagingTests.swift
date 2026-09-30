@@ -107,6 +107,11 @@ func confluenceRepeatedCursorEndsTheWalk() async throws {
     // window, and claiming the latter would let the watermark advance over history
     // nothing ever read (Copilot, review of PR #44).
     #expect(set.isWindowCapped)
+
+    // **And the batch that arrived twice is reported once** (D-210). The repeat is
+    // appended before the loop can notice the cursor did not move, so this path is the
+    // one that would duplicate if the walk's own guard were removed.
+    #expect(set.changes.map(\.id) == ["12345#v9"])
 }
 
 @Test("hitting the page cap is reported as a capped window, not as a complete one")

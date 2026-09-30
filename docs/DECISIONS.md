@@ -5848,9 +5848,18 @@ exists for the same question asked about redirects. It also keeps D-191's proper
 connector never writes" follows from there being one place a request can come from — which a code
 path constructing requests from response strings would break.
 
-**Three things end the walk besides the window:** no `next`, an empty page, and a cursor equal to
-the one just used. The last matters because a server repeating a cursor would otherwise be paged
-to `maxPages`, re-reading the same versions and reporting a capped window that never happened.
+**What ends the walk besides the window** — *amended by D-208 and D-209; the original wording is
+kept below so the change is legible rather than silent.* As first written this said "three things:
+no `next`, an empty page, and a cursor equal to the one just used". Two of those are now wrong:
+
+- **An empty page does not end the walk** (D-209). `results` absent or `[]` says nothing about
+  whether more history exists; only `_links.next` does.
+- **A repeated cursor ends it as *capped*, not complete** (D-208). `next` is still present, so
+  older versions may remain unread.
+
+The reason the repeated-cursor case exists at all is unchanged: a server repeating a cursor would
+otherwise be paged to `maxPages`, re-reading the same versions. Raised by Copilot in review of
+PR #44, which noticed this record still described the behaviour the same PR had fixed.
 
 **Falsified by** `D-205: only the cursor is taken out of `_links.next``, `D-205: a `next` pointing
 somewhere else cannot redirect the token`, `a `next` with nothing to resume on ends the walk`, and
@@ -5918,10 +5927,18 @@ case is a report the user never needed.
 **`.timedOut` rather than a new case**, so the taxonomy stays the size §5.5 can act on, and so the
 two cancellation paths agree.
 
-**Falsified by** `D-207: a cancelled walk fails the ref rather than filing a short answer` and
-`D-207: a cancelled Jira walk fails the ref rather than filing a short answer`. Both cancel the
-task *before its body starts*, which is deterministic — a `Task` cancelled before it runs still
-reports `isCancelled` at the first check, so neither test races the scheduler.
+**Falsified by** `D-207: a cancelled Confluence walk fails the ref rather than filing a short
+answer` and its Jira twin, in `StenoTests/Integrations/Atlassian/CancelledWalkTests.swift`.
+
+**Both hold the task at a gate, and the first version of them did not.** That version cancelled the
+task on the line after creating it and claimed in its own comment that this was deterministic
+"because a `Task` cancelled before it runs still reports `isCancelled`". The premise is false: the
+body is scheduled on the global executor and may begin on another thread *concurrently* with the
+next line of the test, so the walk could read its one stubbed page and return successfully before
+the cancellation landed. The tests now suspend the body on an actor gate that the test opens only
+after `cancel()`, which makes the ordering a property of the code rather than of the machine.
+Raised by Copilot in review of PR #44 — a claim of determinism in a decision record is exactly the
+kind this repo has been wrong about before.
 
 ---
 

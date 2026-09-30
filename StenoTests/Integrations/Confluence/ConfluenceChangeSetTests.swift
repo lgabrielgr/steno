@@ -39,7 +39,8 @@ private func make(
     isCapped: Bool = false
 ) -> ConfluenceChangeSet {
     ConfluenceChangeSet.make(
-        page: page, versions: versions, names: names, since: since, isCapped: isCapped)
+        page: page, pageID: ConfluenceFixture.pageID, versions: versions, names: names,
+        since: since, isCapped: isCapped)
 }
 
 // MARK: - Summary
@@ -138,7 +139,8 @@ func confluenceBlankDisplayNameReadsAsSomeone() {
     // Confluence answers a deactivated account with an empty `displayName`, and
     // "edited by " is not a sentence.
     let set = ConfluenceChangeSet.make(
-        page: aPage(), versions: [aVersion(9, at: ConfluenceFixture.inWindow)],
+        page: aPage(), pageID: ConfluenceFixture.pageID,
+        versions: [aVersion(9, at: ConfluenceFixture.inWindow)],
         names: [ConfluenceFixture.leo: "   "], since: ConfluenceFixture.windowStart)
 
     #expect(set.changes.first?.text == "v9 by someone")
@@ -305,4 +307,20 @@ func confluenceWhitespaceOnlyMessageIsOmitted() {
     let set = make(versions: [aVersion(9, at: ConfluenceFixture.inWindow, message: "  \n\t ")])
 
     #expect(set.changes.first?.text == "v9 by Leo Gutierrez")
+}
+
+@Test("the change id uses the requested page id, not the one the response carried")
+func confluenceChangeIDIsStableWhenTheResponseOmitsItsID() {
+    // `ConfluencePage.id` is optional like every wire field. Keyed on it, one response
+    // gives `#v9` and the next gives `12345#v9` — two ids for one version, which walks
+    // straight past the event log's de-duplication and reports the edit a second time.
+    let withoutID = ConfluencePage(
+        id: nil, title: "Payments Migration Plan", version: nil, links: nil)
+
+    let set = ConfluenceChangeSet.make(
+        page: withoutID, pageID: ConfluenceFixture.pageID,
+        versions: [aVersion(9, at: ConfluenceFixture.inWindow)], names: names,
+        since: ConfluenceFixture.windowStart)
+
+    #expect(set.changes.map(\.id) == ["12345#v9"])
 }

@@ -84,7 +84,7 @@ struct ConfluenceClient: Sendable {
         let names = await names(for: ids, base: base, authorization: authorization)
 
         return ConfluenceChangeSet.make(
-            page: page, versions: walked.versions, names: names, since: since,
+            page: page, pageID: pageID, versions: walked.versions, names: names, since: since,
             isCapped: walked.capped)
     }
 

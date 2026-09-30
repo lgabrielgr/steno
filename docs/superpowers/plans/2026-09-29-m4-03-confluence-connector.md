@@ -1383,7 +1383,8 @@ private func make(
     isCapped: Bool = false
 ) -> ConfluenceChangeSet {
     ConfluenceChangeSet.make(
-        page: page, versions: versions, names: names, since: since, isCapped: isCapped)
+        page: page, pageID: ConfluenceFixture.pageID, versions: versions, names: names,
+        since: since, isCapped: isCapped)
 }
 
 // MARK: - Summary
@@ -1482,7 +1483,8 @@ func confluenceBlankDisplayNameReadsAsSomeone() {
     // Confluence answers a deactivated account with an empty `displayName`, and
     // "edited by " is not a sentence.
     let set = ConfluenceChangeSet.make(
-        page: aPage(), versions: [aVersion(9, at: ConfluenceFixture.inWindow)],
+        page: aPage(), pageID: ConfluenceFixture.pageID,
+        versions: [aVersion(9, at: ConfluenceFixture.inWindow)],
         names: [ConfluenceFixture.leo: "   "], since: ConfluenceFixture.windowStart)
 
     #expect(set.changes.first?.text == "v9 by someone")
@@ -1650,6 +1652,22 @@ func confluenceWhitespaceOnlyMessageIsOmitted() {
 
     #expect(set.changes.first?.text == "v9 by Leo Gutierrez")
 }
+
+@Test("the change id uses the requested page id, not the one the response carried")
+func confluenceChangeIDIsStableWhenTheResponseOmitsItsID() {
+    // `ConfluencePage.id` is optional like every wire field. Keyed on it, one response
+    // gives `#v9` and the next gives `12345#v9` — two ids for one version, which walks
+    // straight past the event log's de-duplication and reports the edit a second time.
+    let withoutID = ConfluencePage(
+        id: nil, title: "Payments Migration Plan", version: nil, links: nil)
+
+    let set = ConfluenceChangeSet.make(
+        page: withoutID, pageID: ConfluenceFixture.pageID,
+        versions: [aVersion(9, at: ConfluenceFixture.inWindow)], names: names,
+        since: ConfluenceFixture.windowStart)
+
+    #expect(set.changes.map(\.id) == ["12345#v9"])
+}
 ```
 
 - [ ] **Step 2: Run them to verify they fail**
@@ -1711,14 +1729,21 @@ struct ConfluenceChangeSet: Equatable {
     ///   - isCapped: the walk stopped at the page cap. The watermark is then the oldest
     ///     point from which coverage *is* complete, so the gap stays inside the next
     ///     pass's window instead of being closed over.
+    ///   - pageID: **the id that was requested**, not the one the response carried.
+    ///     `ConfluencePage.id` is optional like every other wire field, and a change id
+    ///     keyed on it would be `#v9` for a response that omitted it and `12345#v9` for
+    ///     one that did not — two ids for one version, which walks straight past the
+    ///     event log's de-duplication and reports the edit again. The requested id is
+    ///     authoritative and always present, so it is what the key is built from.
+    ///     Raised by Copilot in review of PR #44.
     static func make(
         page: ConfluencePage,
+        pageID: String,
         versions: [ConfluenceVersion],
         names: [String: String],
         since: Date?,
         isCapped: Bool = false
     ) -> ConfluenceChangeSet {
-        let pageID = page.id ?? ""
         let window = since ?? .distantPast
 
         return ConfluenceChangeSet(
@@ -2155,10 +2180,39 @@ import Testing
 /// complete fetch — into a log that cannot be edited afterwards. Fixing only the
 /// connector that happened to be in the diff is the failure mode this repo keeps
 /// meeting, so the two assertions sit where the next reader sees them together.
+
+/// Holds a task at its first line until the test says otherwise.
 ///
-/// Both tests cancel the task **before its body starts**, which is deterministic: a
-/// `Task` cancelled before it runs still reports `isCancelled` at the loop's first
-/// check. No sleeping, no racing the scheduler, nothing to flake.
+/// **The first version of these tests had no gate**, and claimed in its own comment that
+/// `Task { … }` followed by `cancel()` was deterministic "because a Task cancelled before
+/// it runs still reports `isCancelled`". The premise is false: the body is scheduled on
+/// the global executor and may begin on another thread *concurrently* with the next line
+/// of the test, so the walk could read its one stubbed page and return successfully
+/// before the cancellation landed — a test that passes or fails on scheduling, which is
+/// worse than no test because it teaches people to re-run. Raised by Copilot in review of
+/// PR #44.
+///
+/// With the gate the ordering is a property of the code rather than of the machine: the
+/// body cannot reach the fetch until `open()` is called, and `open()` is called after
+/// `cancel()`.
+private actor Gate {
+    private var isOpen = false
+    private var waiters: [CheckedContinuation<Void, Never>] = []
+
+    /// Let everything through, now and later.
+    func open() {
+        isOpen = true
+        for waiter in waiters { waiter.resume() }
+        waiters.removeAll()
+    }
+
+    /// Suspend until `open()`. Returns immediately once it has been called, so the test
+    /// cannot deadlock by opening the gate before anything waits on it.
+    func wait() async {
+        guard !isOpen else { return }
+        await withCheckedContinuation { waiters.append($0) }
+    }
+}
 
 @Test("D-207: a cancelled Confluence walk fails the ref rather than filing a short answer")
 func confluenceCancelledWalkThrowsRatherThanReturningPartialData() async throws {
@@ -2166,13 +2220,16 @@ func confluenceCancelledWalkThrowsRatherThanReturningPartialData() async throws 
         routes: ConfluenceFixture.quietRoutes(),
         users: [ConfluenceFixture.leo: .ok(ConfluenceFixture.user())])
     let subject = ConfluenceClient(transport: transport)
+    let gate = Gate()
 
     let task = Task {
-        try await subject.changeSet(
+        await gate.wait()
+        return try await subject.changeSet(
             pageID: ConfluenceFixture.pageID, since: ConfluenceFixture.windowStart,
             credential: ConfluenceFixture.credential())
     }
     task.cancel()
+    await gate.open()
 
     await #expect(throws: SourceError.timedOut) {
         _ = try await task.value
@@ -2183,13 +2240,16 @@ func confluenceCancelledWalkThrowsRatherThanReturningPartialData() async throws 
 func jiraCancelledWalkThrowsRatherThanReturningPartialData() async throws {
     let transport = StubJiraTransport(routes: JiraFixture.quietRoutes())
     let subject = JiraClient(transport: transport)
+    let gate = Gate()
 
     let task = Task {
-        try await subject.changeSet(
+        await gate.wait()
+        return try await subject.changeSet(
             key: JiraFixture.key, since: JiraFixture.windowStart,
             credential: JiraFixture.credential())
     }
     task.cancel()
+    await gate.open()
 
     await #expect(throws: SourceError.timedOut) {
         _ = try await task.value
@@ -2306,7 +2366,7 @@ struct ConfluenceClient: Sendable {
         let names = await names(for: ids, base: base, authorization: authorization)
 
         return ConfluenceChangeSet.make(
-            page: page, versions: walked.versions, names: names, since: since,
+            page: page, pageID: pageID, versions: walked.versions, names: names, since: since,
             isCapped: walked.capped)
     }
 
