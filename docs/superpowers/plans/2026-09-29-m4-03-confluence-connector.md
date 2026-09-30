@@ -2647,7 +2647,8 @@ struct ConfluenceClient: Sendable {
         }
 
         if let failure = AtlassianErrors.error(
-            forStatus: response.status, headers: response.headers)
+            forStatus: response.status, headers: response.headers,
+            badRequest: .unavailable(status: 400))
         {
             throw failure
         }
@@ -3176,6 +3177,14 @@ public struct ConfluenceConnector: SourceConnector {
         guard let credential, let base = credential.baseURL else {
             throw SourceError.notConfigured
         }
+
+        // **Routing's host check, asked again against the credential this fetch will
+        // actually use** (D-214). `canHandle` ran during dispatch; the credential can have
+        // been replaced since, and a page id is numeric and exists on every site — so
+        // without this the fetch returns a real, plausible, wrong page and the service
+        // appends it permanently. `.notFound` is the honest case: its own definition is
+        // "the resource does not exist, or this credential cannot see it".
+        guard credential.serves(refURL: ref.url) else { throw SourceError.notFound }
 
         let changeSet = try await client.changeSet(
             pageID: ref.identifier, since: since, credential: credential)

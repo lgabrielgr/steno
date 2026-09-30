@@ -15,7 +15,20 @@ import Foundation
 enum AtlassianErrors {
     /// `nil` when the status is a success. Anything else is a `SourceError` the
     /// caller must throw.
-    static func error(forStatus status: Int, headers: [String: String]) -> SourceError? {
+    /// - Parameter badRequest: what a `400` means for the API being called (D-214).
+    ///
+    ///   **Not shared, though everything else here is.** Jira answers 400 for a malformed
+    ///   issue key, which is a mistyped reference and therefore `.notFound`. Confluence
+    ///   cannot: `ConfluenceEndpoint` rejects a non-numeric page id locally, so a 400 from
+    ///   Confluence means a bad cursor or another request-contract problem — and telling
+    ///   the user that a page which may have loaded a moment ago does not exist would be
+    ///   worse than saying the integration is having trouble. D-202 claimed this branch
+    ///   was "genuinely shared rather than conveniently shared"; that reasoning was wrong,
+    ///   because it assumed a malformed page id could reach the API. Raised by Copilot in
+    ///   review of PR #44.
+    static func error(
+        forStatus status: Int, headers: [String: String], badRequest: SourceError
+    ) -> SourceError? {
         switch status {
         case 200..<300:
             return nil
@@ -26,13 +39,10 @@ enum AtlassianErrors {
             // "the integration is unavailable" would send them to a status page over
             // a typo.
             //
-            // **The same reading holds for Confluence**, which is why this branch is
-            // shared rather than duplicated: a page id that is not a number is a
-            // mangled reference, and `.notFound` is the sentence that helps there too.
-            // Checked against both APIs when this moved, because a shared rule
-            // justified by one caller's behaviour is how the next reader concludes it
-            // does not apply to them.
-            return .notFound
+            // **Confluence disagrees, so the caller decides.** See `badRequest` above:
+            // a malformed page id never reaches the API, so a 400 from Confluence is a
+            // different fact and deserves a different sentence.
+            return badRequest
         case 401:
             // §5.2: never a generic network error. D-192 maps every 401 here without
             // consulting the stored expiry date, because that date is hand-entered

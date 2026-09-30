@@ -65,6 +65,28 @@ extension AtlassianCredential {
         return "Basic \(encoded)"
     }
 
+    /// Whether this credential's site is the one a ref's URL names (D-214).
+    ///
+    /// **Routing already asks this, and routing is not enough.** `canHandle` runs during
+    /// `SourceRegistry.dispatch`; `fetch` runs later, re-reads the credential, and the
+    /// credential can have changed in between — Settings replacing site A with site B
+    /// posts `.stenoCredentialsDidChange`, which drops the memo, so the fetch genuinely
+    /// uses the new one. A Confluence page id is numeric and exists on every site, so the
+    /// fetch would then return a real, plausible, wrong page, and `SourceRefreshService`
+    /// would append it to a log that cannot be edited. Raised by Copilot in review of
+    /// PR #44.
+    ///
+    /// - Returns: `true` when the ref carries no URL — a bare Jira key means the
+    ///   configured instance and nothing else (D-199) — and otherwise only when the URL's
+    ///   Cloud host is this credential's. A URL that is not an Atlassian Cloud host is
+    ///   refused, which matches what `canHandle` decided at routing time.
+    func serves(refURL: String?) -> Bool {
+        guard let refURL else { return true }
+        guard let host = Self.cloudHost(in: refURL), let configured = Self.cloudHost(in: site)
+        else { return false }
+        return host == configured
+    }
+
     /// The Atlassian Cloud host in `value`, or `nil`.
     ///
     /// Accepts a bare host or a full URL, because both are what a user pastes.

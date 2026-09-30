@@ -297,3 +297,41 @@ func anOrdinaryFetchIsNotCapped() async throws {
 
     #expect(update.isWindowCapped == false)
 }
+
+@Test("D-214: a ticket claimed under one site is not fetched from another")
+func jiraConnectorRefusesARefFromTheOldSiteAfterReconfiguration() async throws {
+    // The same guard as Confluence's, for the same reason: `canHandle` ran at dispatch,
+    // and the credential can be replaced before `fetch`. The same issue key exists on
+    // both sites, so answering from the new one would file a different company's ticket.
+    let store = InMemoryAtlassianStore(JiraFixture.credential())
+    let transport = StubJiraTransport(routes: fullRoutes())
+    let jira = JiraConnector(credentials: store, transport: transport, now: { now })
+
+    let onSiteA = SourceRefSnapshot(
+        refID: UUID(), kind: .jiraIssue, identifier: JiraFixture.key,
+        url: "https://acme.atlassian.net/browse/\(JiraFixture.key)")
+    #expect(jira.canHandle(onSiteA))
+
+    try store.store(
+        AtlassianCredential(
+            site: "other.atlassian.net", email: "leo@example.com", apiToken: "token-value"))
+
+    await #expect(throws: SourceError.notFound) {
+        _ = try await jira.fetch(onSiteA, since: nil)
+    }
+    let received = await transport.received
+    #expect(received.isEmpty)
+}
+
+@Test("D-214: a bare ticket key still means the configured instance")
+func jiraConnectorStillFetchesAURLlessRef() async throws {
+    // D-199 claims a key with no URL, and D-214 must not quietly withdraw that: there is
+    // no host to contradict, so the guard passes it through.
+    let store = InMemoryAtlassianStore(JiraFixture.credential())
+    let transport = StubJiraTransport(routes: fullRoutes())
+    let jira = JiraConnector(credentials: store, transport: transport, now: { now })
+
+    let update = try await jira.fetch(ref(), since: nil)
+
+    #expect(update.summary.isEmpty == false)
+}

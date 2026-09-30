@@ -274,7 +274,10 @@ func confluenceConnectorTestBypassesTheCredentialMemo() async throws {
     // D-198's memo exists so routing does not read the Keychain once per ref — but
     // FR-6's button asks whether what is stored *right now* works, and answering it
     // from a memo makes a freshly pasted token look broken for half a minute.
-    let store = InMemoryAtlassianStore(ConfluenceFixture.credential())
+    // `announcesChanges: false` on purpose: this is the *stale memo* case. A notification
+    // can be missed, and FR-6's button must answer from what is stored rather than from
+    // whatever the memo last saw.
+    let store = InMemoryAtlassianStore(ConfluenceFixture.credential(), announcesChanges: false)
     let transport = StubConfluenceTransport(
         routes: ["spaces": [.ok(ConfluenceFixture.spaces()), .ok(ConfluenceFixture.spaces())]])
     let confluence = ConfluenceConnector(
@@ -330,4 +333,31 @@ func confluenceConnectorEncodesAnUnencodedWebui() async throws {
     #expect(
         update.url?.absoluteString
             == "https://acme.atlassian.net/wiki/spaces/ENG/pages/12345/Caf%C3%A9%20Plan")
+}
+
+@Test("D-214: a page claimed under one site is not fetched from another")
+func confluenceConnectorRefusesARefFromTheOldSiteAfterReconfiguration() async throws {
+    // The scenario, exactly: routing claimed this ref while site A was configured, then
+    // Settings replaced it with site B — which posts `.stenoCredentialsDidChange` and
+    // drops the memo, so `fetch` genuinely uses B. A page id is numeric and exists on
+    // every Confluence site, so without the re-check this returns a real, plausible,
+    // *wrong* page, and the service appends it to a log that cannot be edited.
+    let store = InMemoryAtlassianStore(ConfluenceFixture.credential())
+    let transport = StubConfluenceTransport(
+        routes: ConfluenceFixture.quietRoutes(), users: knownUsers)
+    let confluence = ConfluenceConnector(
+        credentials: store, transport: transport, now: { now })
+
+    let ref = pageRef()  // https://acme.atlassian.net/...
+    #expect(confluence.canHandle(ref))  // claimed under site A
+
+    try store.store(
+        AtlassianCredential(
+            site: "other.atlassian.net", email: "leo@example.com", apiToken: "token-value"))
+
+    await #expect(throws: SourceError.notFound) {
+        _ = try await confluence.fetch(ref, since: nil)
+    }
+    let received = await transport.received
+    #expect(received.isEmpty)
 }

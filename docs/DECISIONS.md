@@ -5874,9 +5874,15 @@ somewhere else cannot redirect the token`, `a `next` with nothing to resume on e
 
 **2026-09-29** · M4-03 · **Status:** accepted
 
-Three requests make up a Confluence fetch, and they fail differently. The page read and the
-version walk each fail the whole ref. A name lookup does not: the editor reads "someone" and the
-fetch continues (D-201).
+Three *kinds* of request make up a Confluence fetch, and they fail differently. The page read and
+the version walk each fail the whole ref. A name lookup does not: the editor reads "someone" and
+the fetch continues (D-201).
+
+**"Three kinds", not three requests** — the fan-out is `2 + N`, and the distinction matters when
+someone is diagnosing latency: one page read, one version request *per page walked* (up to
+`maxPages`, ten), and one name lookup per distinct author (up to `maxNameLookups`, ten). A quiet
+page costs three; a busy one can cost twenty-one. The earlier wording said "three requests" and
+hid that. Raised by Copilot in review of PR #44.
 
 **Why the version walk cannot degrade to "no changes":** the watermark advances on every fetch
 that writes an event, including one that reports nothing (D-188). A fetch that treated a failed
@@ -6188,3 +6194,52 @@ review found prose describing behaviour the code no longer had; a sentence canno
 so the claims about these messages are now tests instead. The first run of that file failed
 immediately, on a claim written minutes earlier: the correction to D-208 said the log says "for one
 ref", which was true of one line in three. The other two now say it too.
+
+---
+
+### D-214 — The ref's host is checked again at fetch, and a 400 means what its API says
+
+**2026-09-30** · M4-03 · **Status:** accepted · found by Copilot in review of PR #44 ·
+**extends D-204, corrects D-202**
+
+Two changes, both about a shared rule being applied where it does not fit or not applied where it
+does.
+
+**1. `fetch` re-checks the ref's host against the credential it is about to use.**
+`AtlassianCredential.serves(refURL:)` is the rule, and both connectors call it.
+
+D-204 put the host check in `canHandle`, which runs during `SourceRegistry.dispatch`. `fetch` runs
+later and re-reads the credential — and the credential can have changed in between: Settings
+replacing site A with site B posts `.stenoCredentialsDidChange`, which drops the thirty-second memo
+(D-198), so the fetch genuinely uses B. A Confluence page id is numeric and exists on every site,
+and the same issue key exists on every Jira instance, so the fetch would return a real, plausible,
+**wrong** document — and `SourceRefreshService` would append it to a log that cannot be edited.
+A window of one refresh pass is small; a permanently recorded stand-up line about another company's
+page is not.
+
+`.notFound` is the case, because its own definition already covers this: *"the resource does not
+exist, or this credential cannot see it."* A ref with no URL passes the guard, because a bare
+ticket key means the configured instance and nothing else (D-199).
+
+**2. A `400` is mapped per API rather than shared.** `AtlassianErrors.error(forStatus:headers:)`
+takes a `badRequest:` parameter: Jira passes `.notFound`, Confluence passes
+`.unavailable(status: 400)`.
+
+**D-202 got this wrong, and said so confidently.** It claimed the branch was "genuinely shared
+rather than conveniently shared" because "a page id that is not a number is a mangled reference".
+That reasoning assumed a malformed page id could reach the API — it cannot: `ConfluenceEndpoint`
+rejects a non-numeric id locally and the client turns that into `.notFound` before a request is
+built. So a 400 that actually arrives from Confluence is a bad cursor or another request-contract
+problem, and answering it with "that page does not exist" would tell the user a page they may have
+been reading a moment ago is gone. Every other status stays shared, and a test asserts that they do.
+
+**Falsified by** `D-214: a page claimed under one site is not fetched from another`, its Jira twin,
+`D-214: a bare ticket key still means the configured instance`, and `D-214: a 400 means what the
+calling API says it means, not one shared guess`.
+
+**Finding the first of those required fixing a test double.** `InMemoryAtlassianStore.store` did
+not post `.stenoCredentialsDidChange`, though `AtlassianKeychainStore` does and D-198 puts that post
+inside the write precisely so it cannot be forgotten. The double stayed quiet, so the memo never
+dropped, so the reconfiguration test passed while the connector went on using the old site — the
+test could not fail for the thing it was written to catch. The double announces writes now; the one
+test that needs a stale memo opts out explicitly and says why.

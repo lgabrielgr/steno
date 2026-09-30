@@ -339,7 +339,8 @@ struct ConfluenceClient: Sendable {
         }
 
         if let failure = AtlassianErrors.error(
-            forStatus: response.status, headers: response.headers)
+            forStatus: response.status, headers: response.headers,
+            badRequest: .unavailable(status: 400))
         {
             throw failure
         }

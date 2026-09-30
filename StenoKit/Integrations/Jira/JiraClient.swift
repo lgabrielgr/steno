@@ -297,7 +297,7 @@ struct JiraClient: Sendable {
         }
 
         if let failure = AtlassianErrors.error(
-            forStatus: response.status, headers: response.headers)
+            forStatus: response.status, headers: response.headers, badRequest: .notFound)
         {
             throw failure
         }

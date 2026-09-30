@@ -115,6 +115,11 @@ public struct JiraConnector: SourceConnector {
             throw SourceError.notConfigured
         }
 
+        // The same re-check Confluence makes, for the same reason (D-214): `canHandle` ran
+        // at dispatch, and the credential can have been replaced before this line. A ref
+        // with no URL passes — a bare ticket key means the configured instance (D-199).
+        guard credential.serves(refURL: ref.url) else { throw SourceError.notFound }
+
         let changeSet = try await client.changeSet(
             key: ref.identifier, since: since, credential: credential)
 
