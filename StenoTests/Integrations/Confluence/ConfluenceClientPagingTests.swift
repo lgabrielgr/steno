@@ -254,3 +254,43 @@ func confluenceCappedWalkDoesNotContinueNextPass() async throws {
     #expect(reported.contains("12345#v90") == false)
     #expect(reported.contains("12345#v89") == false)
 }
+
+@Test("D-210: a version that straddles a shifted page boundary is reported once")
+func confluenceOverlappingPagesReportEachVersionOnce() async throws {
+    // Cursor paging is not a snapshot: publishing a version mid-walk shifts every
+    // boundary below it, so the same version can arrive on two consecutive pages.
+    // `SourceRefreshService` de-duplicates a change against the ids the *log* has
+    // already reported — it does not de-duplicate within one update — so a repeat here
+    // reaches the stand-up as the same edit said twice.
+    //
+    // `JiraClient` keys its walk by id for exactly this reason. Raised in the summary
+    // line of Copilot's third review, which listed it without opening a finding for it.
+    let transport = StubConfluenceTransport(
+        routes: [
+            "page": [.ok(ConfluenceFixture.page())],
+            "versions": [
+                .ok(
+                    ConfluenceFixture.versions(
+                        [
+                            ConfluenceFixture.version(
+                                number: 10, createdAt: ConfluenceFixture.inWindow),
+                            ConfluenceFixture.version(
+                                number: 9, createdAt: ConfluenceFixture.inWindow),
+                        ],
+                        next: ConfluenceFixture.next(cursor: "PAGE2"))),
+                .ok(
+                    ConfluenceFixture.versions([
+                        // v9 again: the boundary moved under the walk.
+                        ConfluenceFixture.version(
+                            number: 9, createdAt: ConfluenceFixture.inWindow),
+                        ConfluenceFixture.version(
+                            number: 8, createdAt: ConfluenceFixture.outOfWindow),
+                    ])),
+            ],
+        ], users: knownUsers)
+
+    let set = try await changeSet(transport)
+
+    #expect(set.changes.map(\.id) == ["12345#v10", "12345#v9"])
+    #expect(Set(set.changes.map(\.id)).count == set.changes.count)
+}

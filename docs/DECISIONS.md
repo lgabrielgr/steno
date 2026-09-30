@@ -6003,3 +6003,39 @@ interpolating `AtlassianCredential.site`, which deliberately preserves what the 
 accepts a pasted URL with a path — producing `https://https://acme.atlassian.net/…/wiki/pages/123`
 and printing it as the page's URL whenever `_links.webui` was absent. It now uses the validated,
 normalized `baseURL`, which the function already refused to run without.
+
+---
+
+### D-210 — The version walk de-duplicates by number, because cursor paging is not a snapshot
+
+**2026-09-30** · M4-03 · **Status:** accepted · found by Copilot in review of PR #44
+
+`ConfluenceClient.versions` keeps a set of the version numbers it has collected and skips a repeat.
+
+**Why a repeat happens.** Publishing a version mid-walk shifts every page boundary below it, so
+the same version can arrive on two consecutive cursor pages. This is not a hypothetical: the walk
+is up to ten round trips against a page somebody is actively editing, which is exactly the page a
+stand-up cares about.
+
+**Why nothing downstream catches it.** `SourceRefreshService` de-duplicates a change against
+`ResumePoint.reportedIDs` — the ids the *log* has already reported — which is a filter against
+history, not within one update. Two copies inside a single `SourceUpdate.changes` both survive it
+and both reach the event body, so the stand-up says the same edit twice.
+
+`JiraClient` has always keyed its changelog walk by `history.id` for precisely this reason, with
+the comment "a page boundary that moved because someone commented mid-walk costs a duplicate read
+rather than a duplicate entry". This is the same guard on the key Confluence has.
+
+**A version with no `number` is kept, not dropped.** It cannot collide on a key it does not have,
+`ConfluenceChangeSet` is the layer that declines to report it (D-203), and its timestamp still
+belongs in the watermark.
+
+**Falsified by** `D-210: a version that straddles a shifted page boundary is reported once`, which
+serves v9 on two consecutive pages and asserts one change comes back. Removing the guard turns it
+red; so does the subtler mutation of inserting into the set without skipping on it.
+
+**How it was found is worth recording.** It was named in the *summary line* of Copilot's third
+review — "duplicate versions can be reported twice" — while the review listed **Findings: None**
+and detailed only two other items in a collapsed section. The finding was never opened as a
+thread. Three items were named in prose; two were shown; one was real and invisible. Read the
+whole body, not the verdict.

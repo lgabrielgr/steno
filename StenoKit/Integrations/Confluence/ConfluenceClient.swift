@@ -113,6 +113,7 @@ struct ConfluenceClient: Sendable {
         pageID: String, since: Date?, base: URL, authorization: String
     ) async throws -> (versions: [ConfluenceVersion], capped: Bool) {
         var collected: [ConfluenceVersion] = []
+        var seenNumbers: Set<Int> = []
         var cursor: String?
         var pages = 0
         var reachedWindowEnd = false
@@ -150,7 +151,22 @@ struct ConfluenceClient: Sendable {
             // key is schema-valid and hard-failing it would refuse a shape the API is
             // permitted to send. What must not happen is *claiming coverage* on it.
             let batch = page.results ?? []
-            collected.append(contentsOf: batch)
+
+            // **De-duplicated by version number, because cursor paging is not a
+            // snapshot** (D-210). Publishing a version mid-walk shifts every boundary
+            // below it, so the same version can arrive on two consecutive pages — and
+            // `SourceRefreshService` de-duplicates a change against the ids the *log* has
+            // already reported, not within one update, so a repeat here reaches the
+            // stand-up as the same edit said twice. `JiraClient` keys its walk for this
+            // reason; this is the same guard, on the key Confluence has.
+            //
+            // A version with no `number` is kept rather than dropped: it cannot collide
+            // on a key it does not have, `ConfluenceChangeSet` is what declines to report
+            // it, and its timestamp still belongs to the watermark.
+            for version in batch {
+                if let number = version.number, !seenNumbers.insert(number).inserted { continue }
+                collected.append(version)
+            }
             pages += 1
 
             // No anchor yet: one page is all that is needed to establish one, and
