@@ -928,6 +928,18 @@ actor StubConfluenceTransport: HTTPTransport {
 
     private var routes: [String: [Answer]]
     private let users: [String: Answer]
+
+    /// Versions answers keyed by the cursor that asks for them, `""` being the first
+    /// page.
+    ///
+    /// **A real server answers a cursor, not a position in a queue**, and the
+    /// difference is not cosmetic: a test that walks the same page twice gets the
+    /// *first* page again on the second walk, which is exactly the behaviour the cap's
+    /// continuation claim turns on. The FIFO `routes` queue silently modelled a server
+    /// that remembered where the last walk stopped, which made a limitation look like a
+    /// feature.
+    private let versionsByCursor: [String: Answer]
+
     private let fallback: Answer
     private(set) var received: [HTTPRequest] = []
 
@@ -942,10 +954,12 @@ actor StubConfluenceTransport: HTTPTransport {
     ///     Leo's name" a fact rather than a race.
     init(
         routes: [String: [Answer]], users: [String: Answer] = [:],
+        versionsByCursor: [String: Answer] = [:],
         fallback: Answer = .status(500)
     ) {
         self.routes = routes
         self.users = users
+        self.versionsByCursor = versionsByCursor
         self.fallback = fallback
     }
 
@@ -967,6 +981,13 @@ actor StubConfluenceTransport: HTTPTransport {
         received.append(request)
 
         let key = Self.endpointKey(request)
+        if key == "versions", !versionsByCursor.isEmpty {
+            let cursor = Self.cursor(in: request) ?? ""
+            switch versionsByCursor[cursor] ?? fallback {
+            case .respond(let response): return response
+            case .fail(let error): throw error
+            }
+        }
         if key == "user", let id = Self.accountID(in: request), let answer = users[id] {
             switch answer {
             case .respond(let response): return response
@@ -988,6 +1009,12 @@ actor StubConfluenceTransport: HTTPTransport {
         case .fail(let error):
             throw error
         }
+    }
+
+    /// The `cursor` a versions request resumed on, or `nil` for the first page.
+    static func cursor(in request: HTTPRequest) -> String? {
+        URLComponents(url: request.url, resolvingAgainstBaseURL: false)?
+            .queryItems?.first { $0.name == "cursor" }?.value
     }
 
     /// The `accountId` a name lookup asked about.
@@ -1868,6 +1895,8 @@ git commit -m "feat: turn Confluence versions into a delta, a summary and a wate
 - Test: `StenoTests/Integrations/Confluence/ConfluenceClientTests.swift`
 - Test: `StenoTests/Integrations/Atlassian/CancelledWalkTests.swift` — D-207, for **both**
   connectors, in one file because the rule and the defect are shared
+- Test: `StenoTests/Integrations/Confluence/ConfluenceClientPagingTests.swift` — the walk's own
+  file, split for the reason `JiraClientPagingTests` is: `make lint` caps a file at 400 lines
 
 **Interfaces:**
 - Consumes: `ConfluenceEndpoint` (Task 2), the wire types (Task 3),
@@ -1919,132 +1948,6 @@ func confluenceFetchIssuesOnlyGets() async throws {
     let methods = await transport.methods
     #expect(methods.isEmpty == false)
     #expect(methods.allSatisfy { $0 == .get })
-}
-
-// MARK: - Paging
-
-@Test("D-205: the walk resumes on the cursor the response carried")
-func confluenceWalkResumesOnTheCursor() async throws {
-    let transport = StubConfluenceTransport(
-        routes: [
-            "page": [.ok(ConfluenceFixture.page())],
-            "versions": [
-                .ok(
-                    ConfluenceFixture.versions(
-                        [
-                            ConfluenceFixture.version(
-                                number: 9, createdAt: ConfluenceFixture.inWindow)
-                        ],
-                        next: ConfluenceFixture.next(cursor: "PAGE2"))),
-                .ok(
-                    ConfluenceFixture.versions([
-                        ConfluenceFixture.version(
-                            number: 8, createdAt: ConfluenceFixture.outOfWindow)
-                    ])),
-            ],
-        ], users: knownUsers)
-
-    let set = try await changeSet(transport)
-
-    let urls = await transport.urls.filter { $0.contains("/versions") }
-    #expect(urls.count == 2)
-    #expect(urls.first?.contains("cursor=") == false)
-    #expect(urls.last?.contains("cursor=PAGE2") == true)
-    // Both pages' versions are collected; only the one in the window is reported.
-    #expect(set.changes.map(\.id) == ["12345#v9"])
-    #expect(set.isWindowCapped == false)
-}
-
-@Test("the walk stops at the first page that predates the window")
-func confluenceWalkStopsBelowTheWindow() async throws {
-    let transport = StubConfluenceTransport(
-        routes: [
-            "page": [.ok(ConfluenceFixture.page())],
-            "versions": [
-                .ok(
-                    ConfluenceFixture.versions(
-                        [
-                            ConfluenceFixture.version(
-                                number: 8, createdAt: ConfluenceFixture.outOfWindow)
-                        ],
-                        next: ConfluenceFixture.next(cursor: "PAGE2")))
-            ],
-        ], users: knownUsers)
-
-    let set = try await changeSet(transport)
-
-    // A `next` was offered and deliberately not taken: everything below this page is
-    // older still, and reading it would cost a request per pass forever.
-    let versionRequests = await transport.urls.filter { $0.contains("/versions") }
-    #expect(versionRequests.count == 1)
-    #expect(set.isWindowCapped == false)
-}
-
-@Test("a cursor that does not move ends the walk rather than looping")
-func confluenceRepeatedCursorEndsTheWalk() async throws {
-    // A server that repeats a cursor would otherwise be paged until the cap, re-reading
-    // the same versions and reporting a cap that never happened.
-    let repeating = ConfluenceFixture.versions(
-        [ConfluenceFixture.version(number: 9, createdAt: ConfluenceFixture.inWindow)],
-        next: ConfluenceFixture.next(cursor: "SAME"))
-    let transport = StubConfluenceTransport(
-        routes: [
-            "page": [.ok(ConfluenceFixture.page())],
-            "versions": Array(repeating: Answer.ok(repeating), count: 12),
-        ], users: knownUsers)
-
-    let set = try await changeSet(transport)
-
-    let versionRequests = await transport.urls.filter { $0.contains("/versions") }
-    #expect(versionRequests.count == 2)
-    #expect(set.isWindowCapped == false)
-}
-
-@Test("hitting the page cap is reported as a capped window, not as a complete one")
-func confluenceWalkReportsItsCap() async throws {
-    // Every page is inside the window and offers a new cursor, so the only thing that
-    // stops this walk is the cap.
-    let pages = (0..<12).map { index in
-        Answer.ok(
-            ConfluenceFixture.versions(
-                [
-                    ConfluenceFixture.version(
-                        number: 100 - index, createdAt: ConfluenceFixture.inWindow)
-                ],
-                next: ConfluenceFixture.next(cursor: "PAGE\(index)")))
-    }
-    let transport = StubConfluenceTransport(
-        routes: ["page": [.ok(ConfluenceFixture.page())], "versions": pages], users: knownUsers)
-
-    let set = try await changeSet(transport)
-
-    let versionRequests = await transport.urls.filter { $0.contains("/versions") }
-    #expect(versionRequests.count == ConfluenceClient.maxPages)
-    #expect(set.isWindowCapped)
-}
-
-@Test("D-188: with no anchor, one page is enough to establish one")
-func confluenceFirstObservationReadsOnePage() async throws {
-    let transport = StubConfluenceTransport(
-        routes: [
-            "page": [.ok(ConfluenceFixture.page())],
-            "versions": [
-                .ok(
-                    ConfluenceFixture.versions(
-                        [
-                            ConfluenceFixture.version(
-                                number: 9, createdAt: ConfluenceFixture.inWindow)
-                        ],
-                        next: ConfluenceFixture.next(cursor: "PAGE2")))
-            ],
-        ], users: knownUsers)
-
-    let set = try await changeSet(transport, since: nil)
-
-    let versionRequests = await transport.urls.filter { $0.contains("/versions") }
-    #expect(versionRequests.count == 1)
-    #expect(set.isWindowCapped == false)
-    #expect(set.watermark != nil)
 }
 
 // MARK: - Names
@@ -2231,24 +2134,6 @@ func confluenceVerifyDistinguishesARefusedCredential() async throws {
         try await client(transport).verify(credential: ConfluenceFixture.credential())
     }
 }
-
-@Test("a versions response with no results at all ends the walk")
-func confluenceVersionsWithoutResultsEndsTheWalk() async throws {
-    // `{"results": …}` absent is not the same shape as `[]`, and a walk that treated
-    // "no key" as "keep going" would page to the cap against a server saying nothing.
-    let transport = StubConfluenceTransport(
-        routes: [
-            "page": [.ok(ConfluenceFixture.page())],
-            "versions": [.ok(#"{"_links":{"next":"/wiki/api/v2/pages/12345/versions?cursor=X"}}"#)],
-        ], users: knownUsers)
-
-    let set = try await changeSet(transport)
-
-    let versionRequests = await transport.urls.filter { $0.contains("/versions") }
-    #expect(versionRequests.count == 1)
-    #expect(set.isWindowCapped == false)
-    #expect(set.changes.isEmpty)
-}
 ```
 
 Then create `StenoTests/Integrations/Atlassian/CancelledWalkTests.swift`, which owns D-207 for
@@ -2358,11 +2243,22 @@ struct ConfluenceClient: Sendable {
 
     /// A hard cap on the walk, matching `JiraClient.maxPages`.
     ///
-    /// **What hitting it costs, stated honestly.** The versions beyond it are not read,
-    /// and because the watermark would otherwise advance to the newest version seen,
-    /// they would never be read on any later pass either. That is why hitting the cap
-    /// lowers the watermark to the walk's floor instead (D-196's shape, applied here) —
-    /// the gap stays inside the next window and fills itself once the page quiets down.
+    /// **What hitting it costs, stated honestly — and the first version of this comment
+    /// was not honest enough.** The versions beyond the cap are not read, and they are
+    /// **not read on any later pass either**: every walk restarts at `cursor == nil` and
+    /// pages newest-first, while `since` is only a client-side stopping condition, so the
+    /// next pass re-reads the same ten pages and stops in the same place. Lowering the
+    /// watermark to the floor (D-196's shape) keeps the fetch from *claiming* coverage it
+    /// did not achieve; it does not fill the gap, and the earlier claim that it "fills
+    /// itself once the page quiets down" was false. Reaching page eleven needs a
+    /// persisted cursor, which §10's export, import and merge rules would all have to
+    /// learn about — see D-208.
+    ///
+    /// So this is a bound on a shape that does not occur rather than a routine loss:
+    /// reaching it needs more than five hundred versions of one page inside
+    /// `ResumePoint.maxLookback`'s thirty days. Hitting it is logged, so a real
+    /// occurrence is visible rather than inferred, and
+    /// `a capped walk does not continue on the next pass` pins the limitation.
     static let maxPages = 10
 
     /// How many distinct accounts one fetch will resolve to names (D-201).
@@ -2490,13 +2386,14 @@ struct ConfluenceClient: Sendable {
                 break
             }
 
-            // **A cursor that does not move ends the walk.** A server that repeated one
-            // would otherwise be paged until `maxPages`, re-reading the same versions
-            // and reporting a cap that never happened.
-            if next == cursor {
-                reachedWindowEnd = true
-                break
-            }
+            // **A cursor that does not move ends the walk — as a capped one.** A server
+            // that repeated one would otherwise be paged until `maxPages`, re-reading the
+            // same versions. But `next` is still present, so older versions may well
+            // remain unread: this is a walk that could not continue, not one that reached
+            // the end of the window, and `reachedWindowEnd` stays false so the watermark
+            // is held at the floor rather than claiming coverage it does not have.
+            // Raised by Copilot in review of PR #44.
+            if next == cursor { break }
             cursor = next
         }
 

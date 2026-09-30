@@ -177,7 +177,9 @@ struct JiraClient: Sendable {
 
         if !reachedWindowEnd {
             // `error`, not `info`: this is a gap in what the user was told rather than a slow
-            // pass — and the watermark is held back so the gap stays inside the next window.
+            // pass — and the watermark is held back so the fetch does not claim coverage it
+            // did not achieve. It does **not** make the gap reachable later: the next pass
+            // walks from the same end and stops in the same place (D-208).
             Log.sources.error(
                 "jira changelog paging hit the \(Self.maxPages, privacy: .public)-page cap for one ref; the watermark is held at the oldest entry read"
             )

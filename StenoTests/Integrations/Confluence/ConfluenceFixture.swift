@@ -155,6 +155,18 @@ actor StubConfluenceTransport: HTTPTransport {
 
     private var routes: [String: [Answer]]
     private let users: [String: Answer]
+
+    /// Versions answers keyed by the cursor that asks for them, `""` being the first
+    /// page.
+    ///
+    /// **A real server answers a cursor, not a position in a queue**, and the
+    /// difference is not cosmetic: a test that walks the same page twice gets the
+    /// *first* page again on the second walk, which is exactly the behaviour the cap's
+    /// continuation claim turns on. The FIFO `routes` queue silently modelled a server
+    /// that remembered where the last walk stopped, which made a limitation look like a
+    /// feature.
+    private let versionsByCursor: [String: Answer]
+
     private let fallback: Answer
     private(set) var received: [HTTPRequest] = []
 
@@ -169,10 +181,12 @@ actor StubConfluenceTransport: HTTPTransport {
     ///     Leo's name" a fact rather than a race.
     init(
         routes: [String: [Answer]], users: [String: Answer] = [:],
+        versionsByCursor: [String: Answer] = [:],
         fallback: Answer = .status(500)
     ) {
         self.routes = routes
         self.users = users
+        self.versionsByCursor = versionsByCursor
         self.fallback = fallback
     }
 
@@ -194,6 +208,13 @@ actor StubConfluenceTransport: HTTPTransport {
         received.append(request)
 
         let key = Self.endpointKey(request)
+        if key == "versions", !versionsByCursor.isEmpty {
+            let cursor = Self.cursor(in: request) ?? ""
+            switch versionsByCursor[cursor] ?? fallback {
+            case .respond(let response): return response
+            case .fail(let error): throw error
+            }
+        }
         if key == "user", let id = Self.accountID(in: request), let answer = users[id] {
             switch answer {
             case .respond(let response): return response
@@ -215,6 +236,12 @@ actor StubConfluenceTransport: HTTPTransport {
         case .fail(let error):
             throw error
         }
+    }
+
+    /// The `cursor` a versions request resumed on, or `nil` for the first page.
+    static func cursor(in request: HTTPRequest) -> String? {
+        URLComponents(url: request.url, resolvingAgainstBaseURL: false)?
+            .queryItems?.first { $0.name == "cursor" }?.value
     }
 
     /// The `accountId` a name lookup asked about.

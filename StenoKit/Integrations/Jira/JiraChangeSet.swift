@@ -58,9 +58,10 @@ struct JiraChangeSet: Equatable {
     /// news. A connector says what it saw; the service says what is new.
     ///
     /// - Parameter incomplete: streams whose walk hit the page cap. The watermark is then
-    ///   the oldest point from which coverage *is* complete, so the gap stays inside the
-    ///   next pass's window instead of being closed over — and fills itself once the ticket
-    ///   quiets down enough for the walk to reach past it.
+    ///   the oldest point from which coverage *is* complete, so the fetch does not claim
+    ///   coverage it did not achieve. **It does not fill itself** — the next pass walks from
+    ///   the same end and stops in the same place, and reaching past the cap needs a
+    ///   persisted cursor (D-208). The earlier wording here promised otherwise.
     static func make(
         issue: JiraIssue,
         history: [JiraChangelogEntry],

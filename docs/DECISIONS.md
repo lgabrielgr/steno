@@ -5922,3 +5922,46 @@ two cancellation paths agree.
 `D-207: a cancelled Jira walk fails the ref rather than filing a short answer`. Both cancel the
 task *before its body starts*, which is deterministic — a `Task` cancelled before it runs still
 reports `isCancelled` at the first check, so neither test races the scheduler.
+
+---
+
+### D-208 — A capped walk does not resume; the floor stops it lying, it does not fill the gap
+
+**2026-09-30** · M4-03 · **Status:** accepted · found by Copilot in review of PR #44 ·
+**amends D-196**
+
+When a page walk stops at `maxPages`, the watermark is held at the walk's floor (D-196). D-196 and
+four comments in the code said the effect was that "the gap stays inside the next window and fills
+itself once the ticket quiets down". **That is false, and it is false for both connectors.**
+
+**Why.** Every walk restarts at the newest end — `cursor == nil` for Confluence, `total` for Jira's
+changelog — and `since` is only a *client-side stopping condition*: it decides when to stop paging,
+never where to start. So the next pass reads the same ten pages, stops in the same place, and page
+eleven stays unread however quiet the ticket becomes. Lowering the watermark to the floor does not
+change any of that; it only changes how many pages get re-read before the cap bites again.
+
+**What the floor is actually worth, stated precisely.** It keeps the fetch from *claiming* coverage
+it did not achieve — the watermark stays a boundary the data supports. That is worth having, and it
+is all it is worth. The cost is that a capped ref re-reads the whole cap's worth of pages on every
+pass until `ResumePoint.maxLookback` moves `since` past the floor, rather than reading one page and
+stopping.
+
+**So the cap is a bound on a shape that does not occur, not a pause.** Reaching it needs more than
+five hundred versions of one page, or a thousand changelog entries on one ticket, inside thirty
+days. If it is reached, the oldest items in the window are not reported and will not be — which is
+why it is logged at `error` with the ref named, so a real occurrence is visible rather than
+inferred.
+
+**Reaching past the cap needs a persisted cursor**, and that is out of scope here for the reason
+M4-02 already recorded: a cursor on the row means §10's export, import and merge rules all have to
+learn about it, to serve a shape nobody has produced.
+
+**Falsified by** `a capped walk does not continue on the next pass — the cap is a bound, not a
+pause`, which walks a twelve-page fixture twice and asserts that versions 90 and 89 are reported by
+neither pass. **Its stub answers by cursor rather than from a queue**, deliberately: a FIFO queue
+models a server that remembers where the last walk stopped, which is exactly the thing that is not
+true — and the first version of this test passed for that wrong reason before the stub was fixed.
+
+**Also corrected here:** a repeated cursor now reports a *capped* walk rather than a complete one.
+`_links.next` is still present in that case, so older versions may remain unread; treating it as
+the end of the window let the watermark advance over history nothing had read.

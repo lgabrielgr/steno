@@ -21,11 +21,22 @@ struct ConfluenceClient: Sendable {
 
     /// A hard cap on the walk, matching `JiraClient.maxPages`.
     ///
-    /// **What hitting it costs, stated honestly.** The versions beyond it are not read,
-    /// and because the watermark would otherwise advance to the newest version seen,
-    /// they would never be read on any later pass either. That is why hitting the cap
-    /// lowers the watermark to the walk's floor instead (D-196's shape, applied here) —
-    /// the gap stays inside the next window and fills itself once the page quiets down.
+    /// **What hitting it costs, stated honestly — and the first version of this comment
+    /// was not honest enough.** The versions beyond the cap are not read, and they are
+    /// **not read on any later pass either**: every walk restarts at `cursor == nil` and
+    /// pages newest-first, while `since` is only a client-side stopping condition, so the
+    /// next pass re-reads the same ten pages and stops in the same place. Lowering the
+    /// watermark to the floor (D-196's shape) keeps the fetch from *claiming* coverage it
+    /// did not achieve; it does not fill the gap, and the earlier claim that it "fills
+    /// itself once the page quiets down" was false. Reaching page eleven needs a
+    /// persisted cursor, which §10's export, import and merge rules would all have to
+    /// learn about — see D-208.
+    ///
+    /// So this is a bound on a shape that does not occur rather than a routine loss:
+    /// reaching it needs more than five hundred versions of one page inside
+    /// `ResumePoint.maxLookback`'s thirty days. Hitting it is logged, so a real
+    /// occurrence is visible rather than inferred, and
+    /// `a capped walk does not continue on the next pass` pins the limitation.
     static let maxPages = 10
 
     /// How many distinct accounts one fetch will resolve to names (D-201).
@@ -153,13 +164,14 @@ struct ConfluenceClient: Sendable {
                 break
             }
 
-            // **A cursor that does not move ends the walk.** A server that repeated one
-            // would otherwise be paged until `maxPages`, re-reading the same versions
-            // and reporting a cap that never happened.
-            if next == cursor {
-                reachedWindowEnd = true
-                break
-            }
+            // **A cursor that does not move ends the walk — as a capped one.** A server
+            // that repeated one would otherwise be paged until `maxPages`, re-reading the
+            // same versions. But `next` is still present, so older versions may well
+            // remain unread: this is a walk that could not continue, not one that reached
+            // the end of the window, and `reachedWindowEnd` stays false so the watermark
+            // is held at the floor rather than claiming coverage it does not have.
+            // Raised by Copilot in review of PR #44.
+            if next == cursor { break }
             cursor = next
         }
 
