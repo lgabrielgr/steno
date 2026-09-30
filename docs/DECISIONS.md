@@ -6101,3 +6101,37 @@ so the cancellation lands where it matters without depending on which thread win
 `D-211: the current editor is named even when the window is full of other editors`, which gives the
 page an editor no version author shares and twelve competing editors. Reverting either change turns
 its test red.
+
+---
+
+### D-212 — An absent `_links.next` ends the walk; an unusable one caps it
+
+**2026-09-30** · M4-03 · **Status:** accepted · found by Copilot in review of PR #44 ·
+**completes D-208, D-209**
+
+`ConfluenceClient.versions` now distinguishes three answers from a page's `_links.next`, where it
+previously collapsed two of them:
+
+| `_links.next` | Meaning | Result |
+|---|---|---|
+| absent or empty | the API says there is nothing further | walk complete; watermark advances |
+| present, no usable cursor | the API says there is more and fails to say how | **capped**; watermark held at the floor |
+| present with a cursor | there is more, and here is where | continue |
+
+**Why the middle row is not the first.** `ConfluenceEndpoint.cursor(inNext:)` returns `nil` both
+for a `next` that does not exist and for one this app cannot use — a link with no `cursor` item, or
+one that will not parse. Routing both through the same `guard` meant a malformed link was read as
+"nothing further", and the watermark then advanced past versions the server had explicitly said
+still existed. That is the third time in this review that coverage was claimed on evidence which did
+not support it: a repeated cursor (D-208), an empty page (D-209), and now an unreadable link. They
+are one rule, stated three times because it was broken three ways: **only the absence of more work
+ends a walk; being unable to do the work does not.**
+
+**The failure is logged, and the link is not.** A `next` this app cannot parse is a fact about the
+API worth a human seeing, but the value itself is a URL from a response — so the message names the
+condition rather than quoting the link, on §8's habit of not putting response content in logs.
+
+**Falsified by** `D-212: a `next` with no usable cursor is capped, not complete` and `D-212: an
+absent `next` is still the end of the walk` — both halves, so the distinction cannot quietly
+collapse in either direction. Mutating either branch turns its test red; collapsing the absent case
+also turns D-209's test red, which is the overlap working as intended.

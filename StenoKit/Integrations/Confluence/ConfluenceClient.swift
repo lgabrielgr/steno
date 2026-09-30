@@ -196,9 +196,24 @@ struct ConfluenceClient: Sendable {
                 break
             }
 
-            guard let next = ConfluenceEndpoint.cursor(inNext: page.links?.next) else {
-                // No `next` is how the API says there is nothing further.
+            // **An absent `next` and an unusable one are different answers** (D-212).
+            // Absent is the API saying there is nothing further, and is the only shape
+            // that may end the walk here. A `next` that is present but carries no cursor
+            // this app can use is the API saying there *is* more and failing to say how:
+            // the walk cannot continue, and it may not claim the end either, so
+            // `reachedWindowEnd` stays false and the watermark is held at the floor.
+            // Same distinction as the repeated cursor, on the other branch. Raised by
+            // Copilot in review of PR #44.
+            guard let link = page.links?.next, !link.isEmpty else {
                 reachedWindowEnd = true
+                break
+            }
+            guard let next = ConfluenceEndpoint.cursor(inNext: link) else {
+                // The link is named rather than logged: it is a URL from the API, not
+                // user content, and a malformed one is a fact about Atlassian a human
+                // would want to see.
+                Log.sources.error(
+                    "confluence paging stopped: `_links.next` carried no usable cursor")
                 break
             }
 

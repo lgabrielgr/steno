@@ -299,3 +299,51 @@ func confluenceOverlappingPagesReportEachVersionOnce() async throws {
     #expect(set.changes.map(\.id) == ["12345#v10", "12345#v9"])
     #expect(Set(set.changes.map(\.id)).count == set.changes.count)
 }
+
+@Test("D-212: a `next` with no usable cursor is capped, not complete")
+func confluenceUnusableNextIsCappedNotComplete() async throws {
+    // A present `next` is the API saying there is more. Failing to parse a cursor out of
+    // it is this app's problem, not evidence of the end — claiming the end would let the
+    // watermark advance past versions the server explicitly said still exist.
+    let transport = StubConfluenceTransport(
+        routes: [
+            "page": [.ok(ConfluenceFixture.page())],
+            "versions": [
+                .ok(
+                    ConfluenceFixture.versions(
+                        [
+                            ConfluenceFixture.version(
+                                number: 9, createdAt: ConfluenceFixture.inWindow)
+                        ],
+                        // Present, and unusable: no cursor in it.
+                        next: "/wiki/api/v2/pages/12345/versions?limit=50"))
+            ],
+        ], users: knownUsers)
+
+    let set = try await changeSet(transport)
+
+    let versionRequests = await transport.urls.filter { $0.contains("/versions") }
+    #expect(versionRequests.count == 1)
+    #expect(set.isWindowCapped)
+}
+
+@Test("D-212: an absent `next` is still the end of the walk")
+func confluenceAbsentNextIsStillComplete() async throws {
+    // The other half, so the distinction cannot collapse in either direction.
+    let transport = StubConfluenceTransport(
+        routes: [
+            "page": [.ok(ConfluenceFixture.page())],
+            "versions": [
+                .ok(
+                    ConfluenceFixture.versions([
+                        ConfluenceFixture.version(
+                            number: 9, createdAt: ConfluenceFixture.inWindow)
+                    ]))
+            ],
+        ], users: knownUsers)
+
+    let set = try await changeSet(transport)
+
+    #expect(set.isWindowCapped == false)
+    #expect(set.changes.map(\.id) == ["12345#v9"])
+}
