@@ -22,10 +22,12 @@ actor TaskGate {
         waiters.removeAll()
     }
 
-    /// Suspend until `open()`.
+    /// Suspend until `open()` has been called.
     ///
-    /// Returns immediately once it has been called, so a test cannot deadlock by opening
-    /// the gate before anything waits on it.
+    /// **It returns immediately only if `open()` came first**, and suspends otherwise —
+    /// which is the whole point, and worth stating plainly in a helper whose job is
+    /// deterministic ordering. The early return exists so a test cannot deadlock by
+    /// opening the gate before anything waits on it.
     func wait() async {
         guard !isOpen else { return }
         await withCheckedContinuation { waiters.append($0) }

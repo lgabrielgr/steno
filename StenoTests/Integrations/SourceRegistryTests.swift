@@ -108,31 +108,56 @@ extension SourceDispatch: @retroactive Equatable {
 
 // MARK: - The production shape (D-179)
 
-@Test("D-179: the registry is no longer empty — a Jira ref routes to the Jira connector")
-func ajiraRefRoutesToJira() throws {
+@Test("§5.3: one credential, two APIs — a Jira ref and a Confluence ref each reach their own")
+func theProductionRegistryRoutesBothAtlassianKinds() throws {
     // **This stands in for `StenoApp`'s array**, which no test can reach: the test bundle
     // links `StenoKit`, not the application (D-010). What it asserts is the shape that
-    // array has — a configured `JiraConnector` claiming `jiraIssue` — so the wiring is
-    // checked even though the composition root is not.
+    // array has, so the wiring is checked even though the composition root is not.
+    //
+    // **It said the opposite until PR #44's review.** Written for M4-01 and updated for
+    // M4-02, it registered Jira alone and asserted that a Confluence ref was `.unhandled`
+    // — so the test that claims to mirror the composition root encoded the behaviour
+    // M4-03 exists to change, and stayed green while doing it. A proxy that is not updated
+    // with the thing it proxies is worse than no proxy: it reports on a shape nobody has.
+    //
+    // **What this still cannot do, stated so nobody relies on it.** Deleting a connector
+    // from `StenoApp`'s array breaks nothing here — verified by doing it, and the suite
+    // stayed green. The array is in the app target, which this bundle does not link, so
+    // this test asserts the *shape* the array is supposed to have and nothing about the
+    // array. A reviewer comparing the two is the check; `make run` (D-179) is the only
+    // end-to-end one.
+    //
+    // **One store instance, deliberately**, because that is §5.3's whole claim: both
+    // connectors read the same Keychain item, so configuring Atlassian once enables both.
+    let credentials = InMemoryAtlassianStore(JiraFixture.credential())
     let registry = SourceRegistry(connectors: [
-        JiraConnector(
-            credentials: InMemoryAtlassianStore(JiraFixture.credential()),
-            transport: StubJiraTransport(routes: [:]))
+        JiraConnector(credentials: credentials, transport: StubJiraTransport(routes: [:])),
+        ConfluenceConnector(
+            credentials: credentials, transport: StubConfluenceTransport(routes: [:])),
     ])
 
     let jiraRef = SourceRefSnapshot(refID: UUID(), kind: .jiraIssue, identifier: "PAY-421")
-    guard case .ready(let connector) = registry.dispatch(jiraRef) else {
+    guard case .ready(let jira) = registry.dispatch(jiraRef) else {
         Issue.record("a Jira issue ref did not reach a ready connector")
         return
     }
-    #expect(connector.id == "jira")
+    #expect(jira.id == "jira")
 
-    // A Confluence page is M4-03's, and until then it is unhandled rather than broken.
-    let pageRef = SourceRefSnapshot(refID: UUID(), kind: .confluencePage, identifier: "12345")
-    guard case .unhandled = registry.dispatch(pageRef) else {
-        Issue.record("a Confluence ref was claimed by something")
+    // A page on the configured site (D-204 requires the URL, and requires the host to
+    // match — the same fixture site the credential above names).
+    let pageRef = SourceRefSnapshot(
+        refID: UUID(), kind: .confluencePage, identifier: "12345",
+        url: "https://acme.atlassian.net/wiki/spaces/ENG/pages/12345/Plan")
+    guard case .ready(let confluence) = registry.dispatch(pageRef) else {
+        Issue.record("a Confluence page ref did not reach a ready connector")
         return
     }
+    #expect(confluence.id == "confluence")
+
+    // And neither claims what the other handles, so one credential does not become one
+    // connector answering for both APIs (§5.3: "do not conflate them").
+    #expect(jira.canHandle(pageRef) == false)
+    #expect(confluence.canHandle(jiraRef) == false)
 }
 
 @Test("an unconfigured Jira connector reports the ref as awaiting setup")
