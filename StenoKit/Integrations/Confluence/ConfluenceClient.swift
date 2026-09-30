@@ -11,7 +11,8 @@ import OSLog
 /// `URLSession`-backed, which honours cancellation, and the paging loop checks
 /// `Task.isCancelled` — without that, a page with a long history could hold the whole
 /// pass past both the per-fetch deadline and the pass budget, which are cooperative
-/// only.
+/// only. A cancelled walk **throws `.timedOut`** rather than returning what it had
+/// managed to read (D-207).
 struct ConfluenceClient: Sendable {
     /// `limit` defaults to 25 and caps at 250. Fifty is the same order as
     /// `JiraClient.commentPageSize`, and a page's whole recent history usually fits one
@@ -106,7 +107,19 @@ struct ConfluenceClient: Sendable {
         var reachedWindowEnd = false
 
         while pages < Self.maxPages {
-            if Task.isCancelled { break }
+            // **Cancellation fails the ref; it does not produce a short answer**
+            // (D-207). `SourceRefreshService.fetchAll` discards a *failed* fetch once the
+            // pass budget has expired and keeps a *successful* one — on the reasoning that
+            // a fetch which beat the cancellation still carries data. A walk that broke out
+            // here did not beat the cancellation, it answered one, so returning normally
+            // would file a truncated delta as a complete fetch and append it to a log that
+            // cannot be edited. Raised by Copilot in review of PR #44.
+            //
+            // `.timedOut` rather than a new case, because that is already what a
+            // cancellation landing *inside* a request maps to
+            // (`AtlassianErrors.error(forTransport:)`) — the same budget expiring must not
+            // mean two different things depending on which microsecond it lands in.
+            if Task.isCancelled { throw SourceError.timedOut }
 
             let page = try await fetch(
                 ConfluenceVersionPage.self,

@@ -5883,3 +5883,42 @@ what the user is told *happened*.
 
 **Falsified by** `D-206: a failed version walk fails the ref rather than reporting no changes` and
 `a failed page read fails the ref, and its error is the one that escapes`.
+
+---
+
+### D-207 — A cancelled page walk throws `.timedOut`; it never files a short answer
+
+**2026-09-30** · M4-03 · **Status:** accepted · found by Copilot in review of PR #44
+
+`JiraClient` and `ConfluenceClient` check `Task.isCancelled` at the top of each paging loop.
+That check now **throws `SourceError.timedOut`** rather than breaking out and returning what the
+walk had managed to read.
+
+**Why it matters, and it is not obvious.** `SourceRefreshService.fetchAll` treats the pass budget
+by cancelling what is in flight and then, as each result lands, discarding a *failed* one and
+keeping a *successful* one — on the stated reasoning that "a fetch that beat the cancellation
+still carries data, and discarding it would waste a completed request". That reasoning is sound
+for a fetch which finished before cancellation took effect. It is false for a walk that **answered**
+the cancellation by stopping early: breaking out produced an ordinary success carrying a truncated
+delta, which the service then wrote to the append-only event log after the budget had expired.
+
+**The asymmetry is what makes it a defect rather than a trade.** A cancellation landing *inside* a
+request already surfaces as `.timedOut` — `AtlassianErrors.error(forTransport:)` maps both
+`CancellationError` and `URLError.cancelled` there, and D-192 explains why. So before this change
+the same budget expiry meant two different things depending on which microsecond it landed in: a
+discarded failure if a request was in flight, a recorded partial success if one had just returned.
+
+**Why not lean on the capped-window path instead.** A cancelled walk did set `isWindowCapped`, so
+the watermark was held at the floor and nothing was permanently lost — the next pass would re-read
+the gap. That is why this is medium rather than severe. But `isWindowCapped` means "the page cap
+stopped me", a property of the *source's* size that D-196 reasons about; overloading it with "the
+clock stopped me" puts two unrelated causes behind one flag, and the event written in the second
+case is a report the user never needed.
+
+**`.timedOut` rather than a new case**, so the taxonomy stays the size §5.5 can act on, and so the
+two cancellation paths agree.
+
+**Falsified by** `D-207: a cancelled walk fails the ref rather than filing a short answer` and
+`D-207: a cancelled Jira walk fails the ref rather than filing a short answer`. Both cancel the
+task *before its body starts*, which is deterministic — a `Task` cancelled before it runs still
+reports `isCancelled` at the first check, so neither test races the scheduler.
