@@ -19,7 +19,7 @@ XCCONFIG := Local.xcconfig
 TOOLS    := xcodegen xcbeautify swiftlint
 
 .DEFAULT_GOAL := help
-.PHONY: help bootstrap preflight clean generate build run release test lint format export import atlassian-login verify-jira
+.PHONY: help bootstrap preflight clean generate build run release test lint format export import atlassian-login verify-jira verify-confluence
 
 help: ## Show this help
 	@echo "Steno — make targets:"
@@ -284,6 +284,13 @@ atlassian-login: build ## Store the Atlassian credential (signed build; §5.2, �
 verify-jira: build ## Fetch one real ticket with the stored credential (signed build; §5.2, D-197)
 	@test -n "$$ISSUE" || { echo "usage: make verify-jira ISSUE=PAY-421"; exit 2; }
 	@"$(BIN)" jira-selftest --issue "$$ISSUE"
+
+# The Confluence half of D-197. Same credential, different API (§5.3) — so this also
+# answers whether "one config, two APIs" is true on a real site rather than in a test
+# double.
+verify-confluence: build ## Fetch one real page with the stored credential (signed build; §5.3, D-197)
+	@test -n "$$PAGE" || { echo "usage: make verify-confluence PAGE=12345"; exit 2; }
+	@"$(BIN)" confluence-selftest --page "$$PAGE"
 
 # The swiftlint check lives here rather than in `preflight`, which gates
 # build/run/release — none of which should start requiring a linter.

@@ -11,7 +11,8 @@ import OSLog
 /// `URLSession`-backed, which honours cancellation, and each paging loop checks
 /// `Task.isCancelled` — without that, a ticket with a long changelog could hold the
 /// whole pass past both the per-fetch deadline and the pass budget, which are
-/// cooperative only.
+/// cooperative only. A cancelled walk **throws `.timedOut`** rather than returning what
+/// it had managed to read (D-207).
 struct JiraClient: Sendable {
     /// `PageBeanChangelog` serves 100 at a time happily, and a ticket's whole
     /// recent history usually fits one page.
@@ -31,8 +32,10 @@ struct JiraClient: Sendable {
     ///
     /// It is a bound on a shape that does not occur rather than a silent loss: reaching it
     /// needs more than a thousand changelog entries inside `ResumePoint.maxLookback`'s
-    /// thirty days, on one ticket. Hitting it is logged with the ref named, so a real
-    /// occurrence is visible rather than inferred.
+    /// thirty days, on one ticket. Hitting it is logged at `error` — **without naming the
+    /// ticket**, deliberately: these lines reach a crash log, and an issue key is the kind
+    /// of identifier §8 keeps out of one, which is why `ReadOnlyTransport` withholds a URL
+    /// too. The log says "for one ref", which is enough to know it happened.
     static let maxPages = 10
 
     private let transport: any HTTPTransport
@@ -131,7 +134,19 @@ struct JiraClient: Sendable {
         var reachedWindowEnd = since == nil
 
         while pages < Self.maxPages {
-            if Task.isCancelled { break }
+            // **Cancellation fails the ref; it does not produce a short answer**
+            // (D-207). `SourceRefreshService.fetchAll` discards a *failed* fetch once the
+            // pass budget has expired and keeps a *successful* one — on the reasoning that
+            // a fetch which beat the cancellation still carries data. A walk that broke out
+            // here did not beat the cancellation, it answered one, so returning normally
+            // would file a truncated delta as a complete fetch and append it to a log that
+            // cannot be edited. Raised by Copilot in review of PR #44.
+            //
+            // `.timedOut` rather than a new case, because that is already what a
+            // cancellation landing *inside* a request maps to
+            // (`AtlassianErrors.error(forTransport:)`) — the same budget expiring must not
+            // mean two different things depending on which microsecond it lands in.
+            if Task.isCancelled { throw SourceError.timedOut }
 
             let page = try await fetch(
                 JiraChangelogPage.self,
@@ -150,7 +165,7 @@ struct JiraClient: Sendable {
             // and no changes will be reported from it anyway (D-188).
             guard let since else { break }
 
-            let oldest = (page.values ?? []).compactMap { JiraDate.parse($0.created) }.min()
+            let oldest = (page.values ?? []).compactMap { AtlassianDate.parse($0.created) }.min()
             if let oldest, oldest < since {
                 reachedWindowEnd = true
                 break
@@ -164,7 +179,9 @@ struct JiraClient: Sendable {
 
         if !reachedWindowEnd {
             // `error`, not `info`: this is a gap in what the user was told rather than a slow
-            // pass — and the watermark is held back so the gap stays inside the next window.
+            // pass — and the watermark is held back so the fetch does not claim coverage it
+            // did not achieve. It does **not** make the gap reachable later: the next pass
+            // walks from the same end and stops in the same place (D-208).
             Log.sources.error(
                 "jira changelog paging hit the \(Self.maxPages, privacy: .public)-page cap for one ref; the watermark is held at the oldest entry read"
             )
@@ -195,7 +212,19 @@ struct JiraClient: Sendable {
         var reachedWindowEnd = false
 
         while pages < Self.maxPages {
-            if Task.isCancelled { break }
+            // **Cancellation fails the ref; it does not produce a short answer**
+            // (D-207). `SourceRefreshService.fetchAll` discards a *failed* fetch once the
+            // pass budget has expired and keeps a *successful* one — on the reasoning that
+            // a fetch which beat the cancellation still carries data. A walk that broke out
+            // here did not beat the cancellation, it answered one, so returning normally
+            // would file a truncated delta as a complete fetch and append it to a log that
+            // cannot be edited. Raised by Copilot in review of PR #44.
+            //
+            // `.timedOut` rather than a new case, because that is already what a
+            // cancellation landing *inside* a request maps to
+            // (`AtlassianErrors.error(forTransport:)`) — the same budget expiring must not
+            // mean two different things depending on which microsecond it lands in.
+            if Task.isCancelled { throw SourceError.timedOut }
 
             let page = try await fetch(
                 JiraCommentPage.self,
@@ -264,10 +293,12 @@ struct JiraClient: Sendable {
         do {
             response = try await transport.send(request)
         } catch {
-            throw JiraErrors.error(forTransport: error)
+            throw AtlassianErrors.error(forTransport: error)
         }
 
-        if let failure = JiraErrors.error(forStatus: response.status, headers: response.headers) {
+        if let failure = AtlassianErrors.error(
+            forStatus: response.status, headers: response.headers, badRequest: .notFound)
+        {
             throw failure
         }
 

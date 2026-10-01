@@ -5528,7 +5528,10 @@ were not true** (Copilot, PR #43):
   entry read on any capped stream, so the gap stays *inside* the next window and fills itself once
   the ticket quiets enough for the walk to reach past it. Both streams do this, because a fix landing
   only on the one named in the review comment would leave the other closing over its own gap. Hitting
-  the cap is still logged at `error` with the ref named.
+  the cap is still logged at `error`. *(Corrected in PR #44: the log does **not** name the ref — it
+  says "for one ref" — and that is deliberate, for D-191's reason: these lines reach a crash log and
+  an issue key or page id is the kind of identifier §8 keeps out of them. The claim was wrong when
+  written.)*
 
   Round three corrected the two-stream case: the floors were combined with `max`, which reads as
   "the point above which every stream is covered" — true, and useless, because it advances the window
@@ -5683,3 +5686,560 @@ claimed — there is no site to compare against yet, and the setup nudge is the 
 **Falsified by** `D19: a self-hosted Jira URL is not this connector's, however Jira-shaped it is`,
 `another Atlassian Cloud site is refused too, because the same key exists on both`,
 `a bare ticket key with no URL is claimed`, and the two unconfigured cases.
+
+---
+
+### D-200 — Confluence is REST v2, because v1 is past its announced removal date
+
+**2026-09-29** · M4-03 · **Status:** accepted
+
+Every Confluence content request is REST v2, under `/wiki/api/v2/`. The v1 content API —
+`/wiki/rest/api/content/{id}?expand=version,history` — is not used, although it answers three of
+§5.3's four fields in one request and names the editor without a second lookup.
+
+**Why:** Atlassian announced the removal of the deprecated v1 set for 2025-03-31, eighteen months
+before this was written. Building on an API whose removal has already been announced and
+scheduled is shipping a feature with a known expiry date, which is the failure mode §5.2's whole
+token-expiry section exists to refuse. The cost is one extra request per fetch (D-201).
+
+**The corollary that is not obvious:** "v1 is deprecated" is not the same claim as "every path
+under `/wiki/rest/api/` is deprecated". The deprecation applies to a published set, and
+`GET /wiki/rest/api/user` is not in it — which is what makes D-201 possible. Recorded because a
+reader who remembers only "v1 is gone" would delete the one v1 call in this connector and break
+every editor's name.
+
+**Contract facts were read out of Atlassian's own OpenAPI document**
+(`dac-static.atlassian.com/cloud/confluence/openapi-v2.v3.json`, `info.version` 2.0.0, HTTP 200,
+2026-09-29) rather than from memory — including `VersionSortOrder`, whose two cases
+(`modified-date`, `-modified-date`) the reference page names without listing. An unverified sort
+value would not have failed loudly; it would have left the version walk ascending.
+
+---
+
+### D-201 — Editor names come from the v1 user GET, memoized per fetch
+
+**2026-09-29** · M4-03 · **Status:** accepted
+
+A v2 version object carries `authorId` — an account id — and no display name. §5.3 requires the
+last editor, so each distinct id is resolved through `GET /wiki/rest/api/user?accountId=…`,
+memoized for the duration of one fetch and bounded at ten accounts. An id that cannot be resolved
+reads as "someone".
+
+**Why not the v2 answer:** the only v2 account-id-to-name endpoint is `POST
+/wiki/api/v2/users-bulk`. It is a POST, and `ReadOnlyTransport` allows GET and nothing else — with
+a `preconditionFailure` rather than a thrown error, precisely so D5 cannot decay into a fallback a
+caching path papers over. Permitting one POST would turn "read-only by construction" into
+"read-only by allow-list", which is a materially weaker property. Reporting the raw account id
+instead was rejected as satisfying the letter of "last editor" and none of its purpose: a stand-up
+line reading `v7 by 557058:aa1b…` is worse than no attribution.
+
+**A failed lookup never fails the fetch**, and that is enforced by the type system rather than by
+care: the lookups run in a `withTaskGroup`, whose children cannot throw, so a name lookup that
+could fail a fetch does not compile. Verified by mutation — replacing `try?` with `try` produces a
+build error, not a red test.
+
+**Per fetch, not per pass**, deliberately under-engineered: a shared cache would need a second
+locked class alongside `AtlassianCredentialCache` with its own invalidation question, and §5.3's
+own note says to keep Confluence proportionate to how rare its refs are (D7).
+
+**Falsified by** `D-201: one lookup per distinct account, however many versions they wrote`,
+`D-201: a name lookup that fails costs a name, not the fetch`, `D-201: the lookups are bounded,
+and the newest editors are the ones named`, and `a deactivated account's blank name is not a
+name`.
+
+---
+
+### D-202 — The neutral Atlassian plumbing moves to `Integrations/Atlassian/`
+
+**2026-09-29** · M4-03 · **Status:** accepted
+
+`ReadOnlyTransport`, `JiraErrors` (now `AtlassianErrors`), `JiraDate` (now `AtlassianDate`) and
+`AtlassianCredentialCache` move out of `Integrations/Jira/` into `Integrations/Atlassian/`, joined
+by `AtlassianCredential` and `AtlassianTokenExpiry`. `CountingTransport` leaves `JiraSelftest.swift`
+for the same reason. Endpoints, wire mirrors, change sets and clients stay per-API.
+
+**Why:** two copies of a guard is how a review fix lands on the type in the diff and not on the
+other four. `ReadOnlyTransport` is the sharpest case — Confluence's only name endpoint is a POST
+that reads, which is exactly the request a connector-local allow-list talks itself into permitting.
+
+**What did not move, and why that is not inconsistency:** §5.3 says "Jira and Confluence are
+distinct REST APIs; do not conflate them". They page differently (Jira `startAt`/`total`,
+Confluence `cursor`), shape their responses differently, and describe change differently. A common
+client would leak both APIs through one interface within a milestone.
+
+**One branch needed an argument rather than a move.** `AtlassianErrors` maps `400` to `.notFound`,
+justified by "Jira answers 400 for a malformed issue key". The same reading holds for Confluence —
+a page id that is not a number is a mangled reference — so the mapping is genuinely shared rather
+than conveniently shared, and the comment now names both APIs. A shared rule justified by one
+caller's behaviour is how the next reader concludes it does not apply to them.
+
+---
+
+### D-203 — One `SourceChange` per version, keyed `<pageID>#v<number>`
+
+**2026-09-29** · M4-03 · **Status:** accepted
+
+Every version created at or after `since` becomes one change: `v7 by Leo Gutierrez: tightened the
+migration steps`. Minor edits are labelled `(minor)`, not dropped. A version with no `number` is
+skipped.
+
+**Why not a collapsed line:** "edited 3 times since Monday" has no stable identity.
+`SourceRefreshService` de-duplicates on `SourceChange.id` against the ids the event log records
+(D-186), so a collapsed line either repeats on every pass or carries a key that changes with the
+count — which re-reports the same edits under a new id the moment a fourth arrives. Per-version
+ids are what make D-185's deliberate overlap safe.
+
+**Why minor edits are labelled rather than filtered:** `minorEdit` is Confluence's "don't notify
+watchers" checkbox. It describes a notification preference, not whether work happened, and a user
+who ticks it out of habit would find their afternoon's editing invisible in the morning's
+stand-up.
+
+**The page id in the key is for legibility, not collisions.** `ResumePoint.from(payloads:)` takes
+payloads already filtered to one `refID`, so a bare `v7` could not collide with another page's
+version — the prefix is so a payload read in an export or a log line says which page it belongs
+to, the same reason a Jira transition's key is `<historyID>#<field>`.
+
+**Falsified by** `D-203: one line per version, keyed by page and version number`, `D-203: a minor
+edit is labelled, never dropped`, and `a version with no number has no stable key, so it is not
+reported`.
+
+---
+
+### D-204 — A Confluence ref is claimed only when its URL is on the configured site
+
+**2026-09-29** · M4-03 · **Status:** accepted
+
+`ConfluenceConnector.canHandle` claims a `.confluencePage` ref when its URL's host is the
+configured Atlassian Cloud site, or — while nothing is configured — when it is any Cloud host.
+A ref with no URL, or a URL on any other host, is refused, which `SourceRegistry` reports as
+`.unhandled`.
+
+**Why this is not D-199's rule.** D-199 lets `JiraConnector` claim a bare ticket key with no URL,
+because a key in a task title is D7's common case and the only instance it could mean is the
+configured one. A Confluence page id is a number nobody types: `SourceURLClassifier` is the only
+producer of `.confluencePage` refs in this codebase and always sets a URL, so a URL-less one
+arrived from a hand-edited import — and claiming it would mean fetching page 12 from the user's
+own wiki for a reference that came from somewhere else. The classifier also claims page ids
+**without a host check**, deliberately, and documents the consequence
+(`https://example.com/pages/12/34` is `.confluencePage "12"`); this is where that stops being
+harmless.
+
+**The unconfigured case is not a softening**, and leaving it out was a real hole in the first
+draft of this design. With no credential there is no host to compare against, and a strict rule
+would refuse every Confluence ref on a fresh install — so an unconfigured machine would say
+"Atlassian is not set up" for a Jira ref and stay silent about a Confluence one on the same task,
+which is the opposite of the sentence §5.3's "one config, two APIs" exists to produce.
+
+**Falsified by** `D-204: a page on another site is not answered from ours`, `D-204: the
+classifier's host-free page ids are refused here`, `D-204: a ref with no URL is refused, because a
+page id means nothing alone`, and `D-204: with nothing configured, a Cloud page is claimed so the
+user is told`.
+
+---
+
+### D-205 — Cursor paging rebuilds the request; `_links.next` is never followed
+
+**2026-09-29** · M4-03 · **Status:** accepted
+
+v2 paginates by opaque cursor and returns `_links.next`, a ready-made relative URL. The walk
+parses it, takes the `cursor` query item, and discards everything else — host, scheme, path and
+all other parameters — then rebuilds the next request through `ConfluenceEndpoint`.
+
+**Why:** every request carries the user's API token in an `Authorization` header, so following a
+URL chosen by a response body lets the response choose where that token goes. `RedirectBlocker`
+exists for the same question asked about redirects. It also keeps D-191's property — that "the
+connector never writes" follows from there being one place a request can come from — which a code
+path constructing requests from response strings would break.
+
+**What ends the walk besides the window** — *amended by D-208 and D-209; the original wording is
+kept below so the change is legible rather than silent.* As first written this said "three things:
+no `next`, an empty page, and a cursor equal to the one just used". Two of those are now wrong:
+
+- **An empty page does not end the walk** (D-209). `results` absent or `[]` says nothing about
+  whether more history exists; only `_links.next` does.
+- **A repeated cursor ends it as *capped*, not complete** (D-208). `next` is still present, so
+  older versions may remain unread.
+
+The reason the repeated-cursor case exists at all is unchanged: a server repeating a cursor would
+otherwise be paged to `maxPages`, re-reading the same versions. Raised by Copilot in review of
+PR #44, which noticed this record still described the behaviour the same PR had fixed.
+
+**Falsified by** `D-205: only the cursor is taken out of `_links.next``, `D-205: a `next` pointing
+somewhere else cannot redirect the token`, `a `next` with nothing to resume on ends the walk`, and
+`a cursor that does not move ends the walk rather than looping`.
+
+---
+
+### D-206 — A failed version walk fails the ref; an empty delta is never reported
+
+**2026-09-29** · M4-03 · **Status:** accepted
+
+Three *kinds* of request make up a Confluence fetch, and they fail differently. The page read and
+the version walk each fail the whole ref. A name lookup does not: the editor reads "someone" and
+the fetch continues (D-201).
+
+**"Three kinds", not three requests** — the fan-out is `2 + N`, and the distinction matters when
+someone is diagnosing latency: one page read, one version request *per page walked* (up to
+`maxPages`, ten), and one name lookup per distinct author (up to `maxNameLookups`, ten). A quiet
+page costs three; a busy one can cost twenty-one. The earlier wording said "three requests" and
+hid that. Raised by Copilot in review of PR #44.
+
+**Why the version walk cannot degrade to "no changes":** the watermark advances on every fetch
+that writes an event, including one that reports nothing (D-188). A fetch that treated a failed
+version request as an empty delta would tell the user nothing changed *and* move the window past
+the changes it failed to read. The news would not be delayed; it would be gone. §5.5 prefers one
+degraded ref — cached summary, visible staleness, same window retried next pass — to a false
+silence.
+
+This is the same trap D-187 avoided for Jira's remote links, where an empty set on failure would
+have made every existing link look new. Here the direction is reversed and the outcome is worse: a
+silent loss rather than a false positive.
+
+**The asymmetry with the name lookup is the point.** A name is cosmetic — the version happened
+either way — so the two rules differ on exactly one question: whether the missing data changes
+what the user is told *happened*.
+
+**Falsified by** `D-206: a failed version walk fails the ref rather than reporting no changes` and
+`a failed page read fails the ref, and its error is the one that escapes`.
+
+---
+
+### D-207 — A cancelled page walk throws `.timedOut`; it never files a short answer
+
+**2026-09-30** · M4-03 · **Status:** accepted · found by Copilot in review of PR #44
+
+`JiraClient` and `ConfluenceClient` check `Task.isCancelled` at the top of each paging loop.
+That check now **throws `SourceError.timedOut`** rather than breaking out and returning what the
+walk had managed to read.
+
+**Why it matters, and it is not obvious.** `SourceRefreshService.fetchAll` treats the pass budget
+by cancelling what is in flight and then, as each result lands, discarding a *failed* one and
+keeping a *successful* one — on the stated reasoning that "a fetch that beat the cancellation
+still carries data, and discarding it would waste a completed request". That reasoning is sound
+for a fetch which finished before cancellation took effect. It is false for a walk that **answered**
+the cancellation by stopping early: breaking out produced an ordinary success carrying a truncated
+delta, which the service then wrote to the append-only event log after the budget had expired.
+
+**The asymmetry is what makes it a defect rather than a trade.** A cancellation landing *inside* a
+request already surfaces as `.timedOut` — `AtlassianErrors.error(forTransport:)` maps both
+`CancellationError` and `URLError.cancelled` there, and D-192 explains why. So before this change
+the same budget expiry meant two different things depending on which microsecond it landed in: a
+discarded failure if a request was in flight, a recorded partial success if one had just returned.
+
+**Why not lean on the capped-window path instead.** A cancelled walk did set `isWindowCapped`, so
+the watermark was held at the floor and the fetch did not claim coverage it lacked. That is why
+this is medium rather than severe. But `isWindowCapped` says *the source walk ended before full
+coverage* — a fact about the source and how far the walk got, which D-196 and later D-213 reason
+about. "The clock stopped me" is a fact about this app's budget, and putting it behind the same
+flag would file an event the user never needed and could not act on. *(Wording corrected after
+D-213 widened the flag beyond the page cap; the distinction this decision rests on is unchanged.)*
+
+**`.timedOut` rather than a new case**, so the taxonomy stays the size §5.5 can act on, and so the
+two cancellation paths agree.
+
+**Falsified by** `D-207: a cancelled Confluence walk fails the ref rather than filing a short
+answer` and its Jira twin, in `StenoTests/Integrations/Atlassian/CancelledWalkTests.swift`.
+
+**Both hold the task at a gate, and the first version of them did not.** That version cancelled the
+task on the line after creating it and claimed in its own comment that this was deterministic
+"because a `Task` cancelled before it runs still reports `isCancelled`". The premise is false: the
+body is scheduled on the global executor and may begin on another thread *concurrently* with the
+next line of the test, so the walk could read its one stubbed page and return successfully before
+the cancellation landed. The tests now suspend the body on an actor gate that the test opens only
+after `cancel()`, which makes the ordering a property of the code rather than of the machine.
+Raised by Copilot in review of PR #44 — a claim of determinism in a decision record is exactly the
+kind this repo has been wrong about before.
+
+---
+
+### D-208 — A capped walk does not resume; the floor stops it lying, it does not fill the gap
+
+**2026-09-30** · M4-03 · **Status:** accepted · found by Copilot in review of PR #44 ·
+**amends D-196**
+
+When a page walk stops at `maxPages`, the watermark is held at the walk's floor (D-196). D-196 and
+four comments in the code said the effect was that "the gap stays inside the next window and fills
+itself once the ticket quiets down". **That is false, and it is false for both connectors.**
+
+**Why.** Every walk restarts at the newest end — `cursor == nil` for Confluence, `total` for Jira's
+changelog — and `since` is only a *client-side stopping condition*: it decides when to stop paging,
+never where to start. So the next pass reads the same ten pages, stops in the same place, and page
+eleven stays unread however quiet the ticket becomes. Lowering the watermark to the floor does not
+change any of that; it only changes how many pages get re-read before the cap bites again.
+
+**What the floor is actually worth, stated precisely.** It keeps the fetch from *claiming* coverage
+it did not achieve — the watermark stays a boundary the data supports. That is worth having, and it
+is all it is worth. The cost is that a capped ref re-reads the whole cap's worth of pages on every
+pass until `ResumePoint.maxLookback` moves `since` past the floor, rather than reading one page and
+stopping.
+
+**So the cap is a bound on a shape that does not occur, not a pause.** Reaching it needs more than
+five hundred versions of one page, or a thousand changelog entries on one ticket, inside thirty
+days. If it is reached, the oldest items in the window are not reported and will not be — which is
+why it is logged at `error` — **without naming the ref**, which is deliberate: these lines reach a
+crash log, and a page id or issue key is the kind of identifier §8 keeps out of one (D-191 withholds
+a URL for the same reason). The log says "for one ref", which is enough to know it happened and to
+go looking, and nothing that identifies whose page it was.
+
+**Reaching past the cap needs a persisted cursor**, and that is out of scope here for the reason
+M4-02 already recorded: a cursor on the row means §10's export, import and merge rules all have to
+learn about it, to serve a shape nobody has produced.
+
+**Falsified by** `a capped walk does not continue on the next pass — the cap is a bound, not a
+pause`, which walks a twelve-page fixture twice and asserts that versions 90 and 89 are reported by
+neither pass. **Its stub answers by cursor rather than from a queue**, deliberately: a FIFO queue
+models a server that remembers where the last walk stopped, which is exactly the thing that is not
+true — and the first version of this test passed for that wrong reason before the stub was fixed.
+
+**Also corrected here:** a repeated cursor now reports a *capped* walk rather than a complete one.
+`_links.next` is still present in that case, so older versions may remain unread; treating it as
+the end of the window let the watermark advance over history nothing had read.
+
+---
+
+### D-209 — Only evidence ends a walk: an empty page is not the end, `next` decides
+
+**2026-09-30** · M4-03 · **Status:** accepted · found by Copilot in review of PR #44
+
+`ConfluenceClient.versions` no longer special-cases an empty batch. `results` absent and
+`results: []` are treated alike — neither ends the walk by itself — and the decision is made by
+`_links.next`: present means there is more, absent means there is not.
+
+**Why the special case was wrong.** It set `reachedWindowEnd` and broke out, so a page carrying a
+`next` became a *complete* walk with an advancing watermark. That is the same defect as the
+repeated cursor (D-208), reached from the other side: coverage claimed on evidence that did not
+support it. The server had just said more history existed, and the connector recorded that it had
+read to the end of the window.
+
+**Why not `.invalidResponse` for a missing `results`**, which is what the review suggested.
+`MultiEntityResult<Version>` declares no `required` list in Atlassian's OpenAPI document
+(re-read 2026-09-30), so a body without the key is schema-valid; hard-failing it would refuse a
+shape the API is permitted to send, and §5.5 would then degrade a ref to cache over a response
+that was merely sparse. The defect is not the missing key — it is claiming coverage on it, and
+that is what this fixes. An explicitly empty array and an absent one now behave identically, which
+is also one fewer distinction for a future reader to hold.
+
+**What still ends the walk**, in order: a page whose oldest item predates the window; no `next`; a
+`next` whose cursor does not move (capped, D-208); and the page cap (capped). An empty batch
+reaches the `next` check like any other.
+
+**Falsified by** `D-209: an empty page with a `next` is not the end of the walk` — which asserts
+the walk follows the cursor to a second page — and `D-209: an empty page with no `next` is the end
+of the walk`. Reinstating the `batch.isEmpty` short-circuit turns the first red.
+
+**Also fixed here, from the same review:** `ConfluenceSelftest` built its ref's URL by
+interpolating `AtlassianCredential.site`, which deliberately preserves what the user typed and
+accepts a pasted URL with a path — producing `https://https://acme.atlassian.net/…/wiki/pages/123`
+and printing it as the page's URL whenever `_links.webui` was absent. It now uses the validated,
+normalized `baseURL`, which the function already refused to run without.
+
+---
+
+### D-210 — The version walk de-duplicates by number, because cursor paging is not a snapshot
+
+**2026-09-30** · M4-03 · **Status:** accepted · found by Copilot in review of PR #44
+
+`ConfluenceClient.versions` keeps a set of the version numbers it has collected and skips a repeat.
+
+**Why a repeat happens.** Publishing a version mid-walk shifts every page boundary below it, so
+the same version can arrive on two consecutive cursor pages. This is not a hypothetical: the walk
+is up to ten round trips against a page somebody is actively editing, which is exactly the page a
+stand-up cares about.
+
+**Why nothing downstream catches it.** `SourceRefreshService` de-duplicates a change against
+`ResumePoint.reportedIDs` — the ids the *log* has already reported — which is a filter against
+history, not within one update. Two copies inside a single `SourceUpdate.changes` both survive it
+and both reach the event body, so the stand-up says the same edit twice.
+
+`JiraClient` has always keyed its changelog walk by `history.id` for precisely this reason, with
+the comment "a page boundary that moved because someone commented mid-walk costs a duplicate read
+rather than a duplicate entry". This is the same guard on the key Confluence has.
+
+**A version with no `number` is kept, not dropped.** It cannot collide on a key it does not have,
+`ConfluenceChangeSet` is the layer that declines to report it (D-203), and its timestamp still
+belongs in the watermark.
+
+**Falsified by** `D-210: a version that straddles a shifted page boundary is reported once`, which
+serves v9 on two consecutive pages and asserts one change comes back. Removing the guard turns it
+red; so does the subtler mutation of inserting into the set without skipping on it.
+
+**How it was found is worth recording.** It was named in the *summary line* of Copilot's third
+review — "duplicate versions can be reported twice" — while the review listed **Findings: None**
+and detailed only two other items in a collapsed section. The finding was never opened as a
+thread. Three items were named in prose; two were shown; one was real and invisible. Read the
+whole body, not the verdict.
+
+---
+
+### D-211 — Cancellation is not an unresolved name, and the current editor is named first
+
+**2026-09-30** · M4-03 · **Status:** accepted · found by Copilot in review of PR #44 ·
+**extends D-207, D-201**
+
+Two changes to `ConfluenceClient.changeSet`, from one review round, both about the name lookups.
+
+**1. Cancellation around the lookups throws `.timedOut`.** `changeSet` now checks
+`Task.isCancelled` before starting the lookups and after awaiting them.
+
+D-201 makes a failed lookup absorbable by construction: the children run in a non-throwing
+`withTaskGroup`, so a lookup *cannot* fail the fetch. That is still right — and it is exactly what
+made this wrong. A cancelled request throws `CancellationError`, each child's `try?` turned it into
+an unresolved name, and a pass budget expiring mid-group produced an ordinary **success** in which
+every editor read "someone". `SourceRefreshService.fetchAll` keeps a success once the budget has
+expired, so that attribution was written into an append-only log — permanently wrong, and wrong in
+a way that looks like Confluence's fault rather than the clock's.
+
+**The checks live on the parent, deliberately.** Making a child throw would have removed D-201's
+compile-time guarantee to fix a problem that is not the child's: the lookup did not fail, the pass
+ended. This is D-207's rule — cancellation fails the ref, it does not produce a short answer — in
+the second place it needed to be.
+
+**2. The page's current editor is resolved first.** `authorIDs(in:versions:)` now yields the page's
+current-version author ahead of the version authors.
+
+§5.3 asks for the last editor **by name**: it is the one attribution the section specifies, and
+`summary` — which becomes `SourceRef.cachedSummary`, the thing shown when the data is stale — is
+built from it. Appended last, it was the first name dropped when ten other editors filled
+`maxNameLookups`, so the busiest pages, the ones a stand-up is most likely to care about, were
+exactly the ones whose summary lost its editor. It is also reachable without a busy page at all:
+the page read and the version walk run concurrently, so the page can carry a version newer than
+anything the walk saw, whose author appears in no other list.
+
+The cap is unchanged, and still bites — it just no longer bites the one name the requirement names.
+
+**Falsified by** `D-211: cancellation during the name lookups fails the ref, rather than "someone"`,
+which holds the walk at its first lookup with a `TaskGate`, cancels it while held, and releases it —
+so the cancellation lands where it matters without depending on which thread wins a race — and
+`D-211: the current editor is named even when the window is full of other editors`, which gives the
+page an editor no version author shares and twelve competing editors. Reverting either change turns
+its test red.
+
+---
+
+### D-212 — An absent `_links.next` ends the walk; an unusable one caps it
+
+**2026-09-30** · M4-03 · **Status:** accepted · found by Copilot in review of PR #44 ·
+**completes D-208, D-209**
+
+`ConfluenceClient.versions` now distinguishes three answers from a page's `_links.next`, where it
+previously collapsed two of them:
+
+| `_links.next` | Meaning | Result |
+|---|---|---|
+| absent or empty | the API says there is nothing further | walk complete; watermark advances |
+| present, no usable cursor | the API says there is more and fails to say how | **capped**; watermark held at the floor |
+| present with a cursor | there is more, and here is where | continue |
+
+**Why the middle row is not the first.** `ConfluenceEndpoint.cursor(inNext:)` returns `nil` both
+for a `next` that does not exist and for one this app cannot use — a link with no `cursor` item, or
+one that will not parse. Routing both through the same `guard` meant a malformed link was read as
+"nothing further", and the watermark then advanced past versions the server had explicitly said
+still existed. That is the third time in this review that coverage was claimed on evidence which did
+not support it: a repeated cursor (D-208), an empty page (D-209), and now an unreadable link. They
+are one rule, stated three times because it was broken three ways: **only the absence of more work
+ends a walk; being unable to do the work does not.**
+
+**The failure is logged, and the link is not.** A `next` this app cannot parse is a fact about the
+API worth a human seeing, but the value itself is a URL from a response — so the message names the
+condition rather than quoting the link, on §8's habit of not putting response content in logs.
+
+**Falsified by** `D-212: a `next` with no usable cursor is capped, not complete` and `D-212: an
+absent `next` is still the end of the walk` — both halves, so the distinction cannot quietly
+collapse in either direction. Mutating either branch turns its test red; collapsing the absent case
+also turns D-209's test red, which is the overlap working as intended.
+
+---
+
+### D-213 — The walk carries why it stopped, because one Bool meant three things
+
+**2026-09-30** · M4-03 · **Status:** accepted · found by Copilot in review of PR #44
+
+`ConfluenceClient.versions` tracks a `WalkStop` — `windowEnd`, `pageCap`, `repeatedCursor`,
+`unusableNext` — instead of a `reachedWindowEnd` Bool, and `isWindowCapped` is derived from it.
+
+**Why.** D-208 and D-212 widened what a "capped" walk means: it started as "hit the page cap" and
+became "ended before the end of the window, for any of three reasons". The Bool absorbed that
+quietly, and two pieces of prose did not:
+
+- the log said `hit the 10-page cap` on every short walk, so two thirds of its occurrences named a
+  cause that was not the one;
+- `make verify-confluence` printed `capped yes — the page cap was reached`, in the one output whose
+  entire purpose is to be trusted by a human comparing it against their browser;
+- and `ConfluenceChangeSet.make`'s own parameter doc still described only the page cap, and still
+  promised the continuation D-208 had already disproved.
+
+A reader following any of the three would have gone looking for a long page history that was not
+the problem. **This is the same defect class the log keeps producing in this repo — a comment
+asserting a property the code does not have — and it arrived here by the ordinary route: the
+behaviour was widened twice and the sentences describing it were not re-read.**
+
+**What changed, precisely.** The enum names the cause; the log line is built from it, so each
+message is true; the harness prints the *common* fact ("the version walk ended early") rather than
+guessing at a cause it cannot see, since `SourceUpdate` carries the Bool and not the reason; and
+the parameter doc says what `isCapped` means now and states that it implies no continuation.
+
+**The reason is deliberately not plumbed into `SourceUpdate`.** That type is the connector
+boundary, shared with Jira, and a per-connector stop reason there would be a field only one
+implementation could fill — for the benefit of one line of harness output. The log is where the
+cause belongs, and the harness says the thing that is true whatever it was.
+
+**Falsified by** `a capped walk says so, so a short delta is not read as the whole truth`, which
+now asserts the harness says "the version walk ended early" **and does not say "page cap"**, plus
+the existing D-208/D-209/D-212 tests, which pin each stop reason to the right verdict. Restoring
+the old harness wording turns the first red.
+
+**And by `WalkStopTests`, which asserts the log lines themselves** — that each reason produces its
+own, that a complete walk produces none, and that none carries a page id. Three rounds of this
+review found prose describing behaviour the code no longer had; a sentence cannot be made to fail,
+so the claims about these messages are now tests instead. The first run of that file failed
+immediately, on a claim written minutes earlier: the correction to D-208 said the log says "for one
+ref", which was true of one line in three. The other two now say it too.
+
+---
+
+### D-214 — The ref's host is checked again at fetch, and a 400 means what its API says
+
+**2026-09-30** · M4-03 · **Status:** accepted · found by Copilot in review of PR #44 ·
+**extends D-204, corrects D-202**
+
+Two changes, both about a shared rule being applied where it does not fit or not applied where it
+does.
+
+**1. `fetch` re-checks the ref's host against the credential it is about to use.**
+`AtlassianCredential.serves(refURL:)` is the rule, and both connectors call it.
+
+D-204 put the host check in `canHandle`, which runs during `SourceRegistry.dispatch`. `fetch` runs
+later and re-reads the credential — and the credential can have changed in between: Settings
+replacing site A with site B posts `.stenoCredentialsDidChange`, which drops the thirty-second memo
+(D-198), so the fetch genuinely uses B. A Confluence page id is numeric and exists on every site,
+and the same issue key exists on every Jira instance, so the fetch would return a real, plausible,
+**wrong** document — and `SourceRefreshService` would append it to a log that cannot be edited.
+A window of one refresh pass is small; a permanently recorded stand-up line about another company's
+page is not.
+
+`.notFound` is the case, because its own definition already covers this: *"the resource does not
+exist, or this credential cannot see it."* A ref with no URL passes the guard, because a bare
+ticket key means the configured instance and nothing else (D-199).
+
+**2. A `400` is mapped per API rather than shared.** `AtlassianErrors.error(forStatus:headers:)`
+takes a `badRequest:` parameter: Jira passes `.notFound`, Confluence passes
+`.unavailable(status: 400)`.
+
+**D-202 got this wrong, and said so confidently.** It claimed the branch was "genuinely shared
+rather than conveniently shared" because "a page id that is not a number is a mangled reference".
+That reasoning assumed a malformed page id could reach the API — it cannot: `ConfluenceEndpoint`
+rejects a non-numeric id locally and the client turns that into `.notFound` before a request is
+built. So a 400 that actually arrives from Confluence is a bad cursor or another request-contract
+problem, and answering it with "that page does not exist" would tell the user a page they may have
+been reading a moment ago is gone. Every other status stays shared, and a test asserts that they do.
+
+**Falsified by** `D-214: a page claimed under one site is not fetched from another`, its Jira twin,
+`D-214: a bare ticket key still means the configured instance`, and `D-214: a 400 means what the
+calling API says it means, not one shared guess`.
+
+**Finding the first of those required fixing a test double.** `InMemoryAtlassianStore.store` did
+not post `.stenoCredentialsDidChange`, though `AtlassianKeychainStore` does and D-198 puts that post
+inside the write precisely so it cannot be forgotten. The double stayed quiet, so the memo never
+dropped, so the reconfiguration test passed while the connector went on using the old site — the
+test could not fail for the thing it was written to catch. The double announces writes now; the one
+test that needs a stale memo opts out explicitly and says why.

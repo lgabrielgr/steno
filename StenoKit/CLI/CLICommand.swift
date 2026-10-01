@@ -54,6 +54,14 @@ public enum CLICommand: Equatable, Sendable {
     /// there is no sensible "any issue", and guessing one would spend a request on
     /// somebody else's ticket. See `JiraSelftest`.
     case jiraSelftest(issueKey: String)
+
+    /// `steno confluence-selftest --page 12345` — hidden, and absent from
+    /// `CLIUsage.text`.
+    ///
+    /// **Carries no store either**, and carries the one argument it cannot default,
+    /// for `jiraSelftest`'s reason: there is no sensible "any page", and guessing one
+    /// would spend a request on somebody else's document. See `ConfluenceSelftest`.
+    case confluenceSelftest(pageID: String)
 }
 
 /// A command line this build cannot act on.

@@ -1,16 +1,34 @@
 import Foundation
 
-/// Jira's failures, mapped onto `SourceError` and nothing else (D-192).
+/// Atlassian's failures, mapped onto `SourceError` and nothing else (D-192).
+///
+/// **One map for both APIs** (D-202). Every branch below is a statement about an HTTP
+/// status and a header, and neither API is named in the logic — see the `400` case for
+/// the one branch whose *justification* had to be checked against both rather than
+/// assumed.
 ///
 /// **Pure functions over a status code and a header dictionary**, for the reason
 /// `AnthropicErrors` is: no response body reaches this file, so §8's "never full
 /// payloads" is a property of the shape rather than a rule each branch has to
 /// remember. There is no parameter here that could carry a ticket title, a comment
 /// body or an assignee's name.
-enum JiraErrors {
+enum AtlassianErrors {
     /// `nil` when the status is a success. Anything else is a `SourceError` the
     /// caller must throw.
-    static func error(forStatus status: Int, headers: [String: String]) -> SourceError? {
+    /// - Parameter badRequest: what a `400` means for the API being called (D-214).
+    ///
+    ///   **Not shared, though everything else here is.** Jira answers 400 for a malformed
+    ///   issue key, which is a mistyped reference and therefore `.notFound`. Confluence
+    ///   cannot: `ConfluenceEndpoint` rejects a non-numeric page id locally, so a 400 from
+    ///   Confluence means a bad cursor or another request-contract problem — and telling
+    ///   the user that a page which may have loaded a moment ago does not exist would be
+    ///   worse than saying the integration is having trouble. D-202 claimed this branch
+    ///   was "genuinely shared rather than conveniently shared"; that reasoning was wrong,
+    ///   because it assumed a malformed page id could reach the API. Raised by Copilot in
+    ///   review of PR #44.
+    static func error(
+        forStatus status: Int, headers: [String: String], badRequest: SourceError
+    ) -> SourceError? {
         switch status {
         case 200..<300:
             return nil
@@ -20,7 +38,11 @@ enum JiraErrors {
             // task title — which is exactly what `.notFound` tells the user, while
             // "the integration is unavailable" would send them to a status page over
             // a typo.
-            return .notFound
+            //
+            // **Confluence disagrees, so the caller decides.** See `badRequest` above:
+            // a malformed page id never reaches the API, so a 400 from Confluence is a
+            // different fact and deserves a different sentence.
+            return badRequest
         case 401:
             // §5.2: never a generic network error. D-192 maps every 401 here without
             // consulting the stored expiry date, because that date is hand-entered

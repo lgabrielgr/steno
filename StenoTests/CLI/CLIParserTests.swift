@@ -173,6 +173,10 @@ import Testing
                 ["jira-selftest", "--issue", "PAY-421"],
                 CLICommand.jiraSelftest(issueKey: "PAY-421")
             ),
+            (
+                ["confluence-selftest", "--page", "12345"],
+                CLICommand.confluenceSelftest(pageID: "12345")
+            ),
         ])
     func selftestParses(_ arguments: [String], _ expected: CLICommand) throws {
         #expect(try parse(arguments) == expected)
@@ -224,6 +228,32 @@ import Testing
     func jiraSelftestRefusesAFlagAsItsValue() throws {
         let error = try #require(throws: CLIUsageError.self) {
             try parse(["jira-selftest", "--issue", "--replace"])
+        }
+        #expect(error.message.contains("looks like a flag"))
+    }
+
+    @Test("confluence-selftest requires the page it is meant to read")
+    func confluenceSelftestRequiresAPage() throws {
+        let error = try #require(throws: CLIUsageError.self) {
+            try parse(["confluence-selftest"])
+        }
+        #expect(error.message.contains("--page is required"))
+    }
+
+    /// `--issue` is Jira's word. Accepting it here would read a page id out of a
+    /// ticket key and spend a request proving it.
+    @Test("confluence-selftest rejects an unknown flag, including Jira's")
+    func confluenceSelftestRejectsUnknownFlags() throws {
+        let error = try #require(throws: CLIUsageError.self) {
+            try parse(["confluence-selftest", "--issue", "PAY-421"])
+        }
+        #expect(error.message.contains("unexpected argument"))
+    }
+
+    @Test("confluence-selftest refuses a flag where the page id should be")
+    func confluenceSelftestRefusesAFlagAsItsValue() throws {
+        let error = try #require(throws: CLIUsageError.self) {
+            try parse(["confluence-selftest", "--page", "--replace"])
         }
         #expect(error.message.contains("looks like a flag"))
     }

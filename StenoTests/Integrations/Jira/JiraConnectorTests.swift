@@ -130,7 +130,8 @@ func therenewalLinkIsUnconditional() {
 func afetchBecomesASourceUpdate() async throws {
     let (jira, _) = connector(routes: fullRoutes())
 
-    let update = try await jira.fetch(ref(), since: JiraDate.parse("2026-09-22T00:00:00.000+0000"))
+    let update = try await jira.fetch(
+        ref(), since: AtlassianDate.parse("2026-09-22T00:00:00.000+0000"))
 
     #expect(update.summary == "Add the migration plan — In Review · assigned to Leo Gutierrez")
     #expect(
@@ -139,7 +140,7 @@ func afetchBecomesASourceUpdate() async throws {
             "comment from Ana Ruiz: Could you add the migration plan?",
         ])
     #expect(update.present.map(\.text) == ["linked acme/api#421"])
-    #expect(update.watermark == JiraDate.parse("2026-09-25T19:00:00.000+0000"))
+    #expect(update.watermark == AtlassianDate.parse("2026-09-25T19:00:00.000+0000"))
     // The human-facing page, not the API endpoint: this reaches an event payload.
     #expect(update.url?.absoluteString == "https://acme.atlassian.net/browse/PAY-421")
     // The connector's own clock, diagnostic only — the row's stamp is the app's (D-171).
@@ -279,7 +280,8 @@ func acappedWalkReachesTheSourceUpdate() async throws {
         credentials: InMemoryAtlassianStore(JiraFixture.credential()), transport: transport,
         now: { now })
 
-    let update = try await jira.fetch(ref(), since: JiraDate.parse("2026-09-22T00:00:00.000+0000"))
+    let update = try await jira.fetch(
+        ref(), since: AtlassianDate.parse("2026-09-22T00:00:00.000+0000"))
 
     #expect(update.isWindowCapped)
 }
@@ -290,7 +292,46 @@ func anOrdinaryFetchIsNotCapped() async throws {
     // above and hold every ref's window still forever.
     let (jira, _) = connector(routes: fullRoutes())
 
-    let update = try await jira.fetch(ref(), since: JiraDate.parse("2026-09-22T00:00:00.000+0000"))
+    let update = try await jira.fetch(
+        ref(), since: AtlassianDate.parse("2026-09-22T00:00:00.000+0000"))
 
     #expect(update.isWindowCapped == false)
+}
+
+@Test("D-214: a ticket claimed under one site is not fetched from another")
+func jiraConnectorRefusesARefFromTheOldSiteAfterReconfiguration() async throws {
+    // The same guard as Confluence's, for the same reason: `canHandle` ran at dispatch,
+    // and the credential can be replaced before `fetch`. The same issue key exists on
+    // both sites, so answering from the new one would file a different company's ticket.
+    let store = InMemoryAtlassianStore(JiraFixture.credential())
+    let transport = StubJiraTransport(routes: fullRoutes())
+    let jira = JiraConnector(credentials: store, transport: transport, now: { now })
+
+    let onSiteA = SourceRefSnapshot(
+        refID: UUID(), kind: .jiraIssue, identifier: JiraFixture.key,
+        url: "https://acme.atlassian.net/browse/\(JiraFixture.key)")
+    #expect(jira.canHandle(onSiteA))
+
+    try store.store(
+        AtlassianCredential(
+            site: "other.atlassian.net", email: "leo@example.com", apiToken: "token-value"))
+
+    await #expect(throws: SourceError.notFound) {
+        _ = try await jira.fetch(onSiteA, since: nil)
+    }
+    let received = await transport.received
+    #expect(received.isEmpty)
+}
+
+@Test("D-214: a bare ticket key still means the configured instance")
+func jiraConnectorStillFetchesAURLlessRef() async throws {
+    // D-199 claims a key with no URL, and D-214 must not quietly withdraw that: there is
+    // no host to contradict, so the guard passes it through.
+    let store = InMemoryAtlassianStore(JiraFixture.credential())
+    let transport = StubJiraTransport(routes: fullRoutes())
+    let jira = JiraConnector(credentials: store, transport: transport, now: { now })
+
+    let update = try await jira.fetch(ref(), since: nil)
+
+    #expect(update.summary.isEmpty == false)
 }

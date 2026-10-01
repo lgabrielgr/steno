@@ -26,13 +26,15 @@ import Testing
         (302, SourceError?.some(.unavailable(status: 302))),
     ])
 func theStatusTable(status: Int, expected: SourceError?) {
-    #expect(JiraErrors.error(forStatus: status, headers: [:]) == expected)
+    #expect(
+        AtlassianErrors.error(forStatus: status, headers: [:], badRequest: .notFound) == expected)
 }
 
 @Test("429 carries the interval the service named")
 func rateLimitCarriesRetryAfter() {
     #expect(
-        JiraErrors.error(forStatus: 429, headers: ["retry-after": "30"])
+        AtlassianErrors.error(
+            forStatus: 429, headers: ["retry-after": "30"], badRequest: .notFound)
             == .rateLimited(retryAfter: .seconds(30)))
 }
 
@@ -44,7 +46,8 @@ func rateLimitWithoutAUsableInterval(value: String) {
     // missing value as "no interval was named", which is correct for a shape this API
     // does not use in practice.
     #expect(
-        JiraErrors.error(forStatus: 429, headers: ["retry-after": value])
+        AtlassianErrors.error(
+            forStatus: 429, headers: ["retry-after": value], badRequest: .notFound)
             == .rateLimited(retryAfter: nil))
 }
 
@@ -54,7 +57,8 @@ func retryAfterIsFoundWhateverTheCase() {
     // and the reason that normalization is load-bearing rather than tidiness.
     let response = HTTPResponse(status: 429, headers: ["Retry-After": "12"])
     #expect(
-        JiraErrors.error(forStatus: response.status, headers: response.headers)
+        AtlassianErrors.error(
+            forStatus: response.status, headers: response.headers, badRequest: .notFound)
             == .rateLimited(retryAfter: .seconds(12)))
 }
 
@@ -63,34 +67,57 @@ func jiraCancellationIsATimeout() {
     // The only thing that cancels a fetch is the per-fetch deadline or the pass budget,
     // and telling a user with working wifi that they are offline sends them to fix the
     // wrong thing.
-    #expect(JiraErrors.error(forTransport: CancellationError()) == .timedOut)
-    #expect(JiraErrors.error(forTransport: URLError(.cancelled)) == .timedOut)
+    #expect(AtlassianErrors.error(forTransport: CancellationError()) == .timedOut)
+    #expect(AtlassianErrors.error(forTransport: URLError(.cancelled)) == .timedOut)
 }
 
 @Test(
     "the transport's own failures are network failures",
     arguments: [URLError.Code.notConnectedToInternet, .cannotFindHost, .secureConnectionFailed])
 func transportFailuresAreNetwork(code: URLError.Code) {
-    #expect(JiraErrors.error(forTransport: URLError(code)) == .network)
+    #expect(AtlassianErrors.error(forTransport: URLError(code)) == .network)
 }
 
 @Test("a response that was not HTTP is a network failure")
 func notHTTPIsNetwork() {
     // `TransportError` exists so `URLSessionTransport` could move to `Support/` without
     // dragging the AI layer's error type with it (D-189).
-    #expect(JiraErrors.error(forTransport: TransportError.notHTTP) == .network)
+    #expect(AtlassianErrors.error(forTransport: TransportError.notHTTP) == .network)
 }
 
 @Test("a SourceError passes through unchanged")
 func sourceErrorsPassThrough() {
     // The client throws these itself — an invalid key, a missing credential — and
     // re-mapping them would turn a precise sentence into "check your connection".
-    #expect(JiraErrors.error(forTransport: SourceError.notFound) == .notFound)
-    #expect(JiraErrors.error(forTransport: SourceError.notConfigured) == .notConfigured)
+    #expect(AtlassianErrors.error(forTransport: SourceError.notFound) == .notFound)
+    #expect(AtlassianErrors.error(forTransport: SourceError.notConfigured) == .notConfigured)
 }
 
 @Test("an unrecognised error degrades to network")
 func unknownErrorsDegradeToNetwork() {
     struct Surprise: Error {}
-    #expect(JiraErrors.error(forTransport: Surprise()) == .network)
+    #expect(AtlassianErrors.error(forTransport: Surprise()) == .network)
+}
+
+@Test("D-214: a 400 means what the calling API says it means, not one shared guess")
+func badRequestIsPerAPI() {
+    // Jira answers 400 for a malformed issue key — a mistyped reference, so `.notFound`.
+    // Confluence cannot: `ConfluenceEndpoint` rejects a non-numeric page id locally, so a
+    // 400 from Confluence is a bad cursor or another request-contract problem, and telling
+    // the user a page they were just reading does not exist would be worse than saying the
+    // integration is having trouble.
+    #expect(
+        AtlassianErrors.error(forStatus: 400, headers: [:], badRequest: .notFound) == .notFound)
+    #expect(
+        AtlassianErrors.error(
+            forStatus: 400, headers: [:], badRequest: .unavailable(status: 400))
+            == .unavailable(status: 400))
+
+    // Every other status is genuinely shared, and stays shared.
+    for status in [401, 403, 404, 429, 500] {
+        let asJira = AtlassianErrors.error(forStatus: status, headers: [:], badRequest: .notFound)
+        let asConfluence = AtlassianErrors.error(
+            forStatus: status, headers: [:], badRequest: .unavailable(status: 400))
+        #expect(asJira == asConfluence)
+    }
 }

@@ -58,9 +58,10 @@ struct JiraChangeSet: Equatable {
     /// news. A connector says what it saw; the service says what is new.
     ///
     /// - Parameter incomplete: streams whose walk hit the page cap. The watermark is then
-    ///   the oldest point from which coverage *is* complete, so the gap stays inside the
-    ///   next pass's window instead of being closed over — and fills itself once the ticket
-    ///   quiets down enough for the walk to reach past it.
+    ///   the oldest point from which coverage *is* complete, so the fetch does not claim
+    ///   coverage it did not achieve. **It does not fill itself** — the next pass walks from
+    ///   the same end and stops in the same place, and reaching past the cap needs a
+    ///   persisted cursor (D-208). The earlier wording here promised otherwise.
     static func make(
         issue: JiraIssue,
         history: [JiraChangelogEntry],
@@ -122,7 +123,7 @@ struct JiraChangeSet: Equatable {
         in history: [JiraChangelogEntry], since: Date
     ) -> [SourceChange] {
         history.flatMap { entry -> [SourceChange] in
-            let created = JiraDate.parse(entry.created)
+            let created = AtlassianDate.parse(entry.created)
 
             // **An unparseable timestamp is reported, not dropped.** It cannot be
             // placed in the window, and the safe direction is to say it: the id-based
@@ -243,7 +244,7 @@ struct JiraChangeSet: Equatable {
     private static func watermark(
         history: [JiraChangelogEntry], comments: [JiraComment], incomplete: Set<Stream>
     ) -> Date? {
-        let historyDates = history.compactMap { JiraDate.parse($0.created) }
+        let historyDates = history.compactMap { AtlassianDate.parse($0.created) }
         let commentDates = comments.compactMap(\.stamp)
 
         guard !incomplete.isEmpty else { return (historyDates + commentDates).max() }
