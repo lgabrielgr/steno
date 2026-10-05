@@ -174,6 +174,10 @@ public struct SourceRefreshService {
         }
 
         guard !ready.isEmpty else {
+            // The third zero-attempt return, and the one the first fix missed
+            // (Copilot, PR #45): every claimed ref's log was unreadable, so a mixed
+            // pass carrying disabled refs logged nothing about them.
+            logEmptyPass(notConfigured: notConfigured, disabled: disabled, skipped: unread)
             return RefreshOutcome(
                 notConfigured: notConfigured, disabled: disabled, skipped: unread,
                 credentialWarnings: warnings, oldestFetch: stale)

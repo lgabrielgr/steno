@@ -88,7 +88,7 @@ struct IntegrationsSettingsPane: View {
             }
 
             Section("Cached data") {
-                purgeControls
+                IntegrationsPurgeSection(model: model)
             }
         }
         .formStyle(.grouped)
@@ -227,6 +227,12 @@ struct IntegrationsSettingsPane: View {
                 Button("Test") { Task { await model.testConnection(id: row.id) } }
                     .disabled(!row.isEnabled || model.isBusy)
                     .help("Tests the saved credential, not what is typed above.")
+                    // **The visible label is "Test" on every row, which is fine
+                    // visually — the row names the integration beside it** (Copilot,
+                    // PR #45). VoiceOver reads the button alone, so without this
+                    // every row announces "Test" and the Jira action cannot be told
+                    // from the Confluence one.
+                    .accessibilityLabel("Test \(row.displayName) connection")
 
                 if row.test == .testing {
                     ProgressView().controlSize(.small)
@@ -274,10 +280,16 @@ struct IntegrationsSettingsPane: View {
         switch error {
         case .siteNotFound:
             // The one case that names the site, because this is the surface that
-            // holds it — and the only one that has to name two causes, because a 404
-            // on the verify endpoint means either a mistyped site or a real site
-            // without this product (D-217).
-            return "Steno reached \(model.siteHost) but found no \(row.displayName) API there. "
+            // holds it — and the only one covering three causes (D-217).
+            //
+            // **It must not say "reached"** (Copilot, PR #45). This case covers a 404
+            // from the verify endpoint *and* `.cannotFindHost` / `.dnsLookupFailed`,
+            // where nothing was reached at all — so the earlier wording stated
+            // something false on two of its three paths. That is the mistake D-217's
+            // original premise made: a sentence asserting more than the case
+            // guarantees. This one is true whether the host did not resolve or
+            // answered 404, and the remedy is the same field either way.
+            return "Steno couldn't reach \(row.displayName) at \(model.siteHost). "
                 + "Check the site address — or whether your site has \(row.displayName)."
         case .invalidCredential:
             return "Atlassian rejected this email and token. Check both, and see the note above "
@@ -297,16 +309,33 @@ struct IntegrationsSettingsPane: View {
         }
     }
 
-    /// FR-6's "purge cached external data", behind a confirmation.
-    @ViewBuilder
-    private var purgeControls: some View {
+}
+
+/// FR-6's "purge cached external data", behind a confirmation.
+///
+/// **Its own view because `IntegrationsSettingsPane` reached SwiftLint's 250-line
+/// type-body limit**, and this is the section that is about a different subject from
+/// the other three: the credential, the integrations and their verdicts all describe
+/// Atlassian, while this describes the local store.
+private struct IntegrationsPurgeSection: View {
+    @Bindable var model: IntegrationsSettingsModel
+    @State private var isConfirmingPurge = false
+
+    var body: some View {
         if let note = model.storeFailureNote {
             Text(note).font(.callout).foregroundStyle(.secondary)
         }
 
+        // **Describes the two fields, not a draft behaviour** (Copilot, PR #45).
+        // This said the cache supplies a draft when a fetch fails — the same false
+        // claim `SourceConnector.swift` made, and which the PR body already reports:
+        // `cachedSummary` has no display reader, and what feeds a draft is the
+        // `externalUpdate` event history, which a purge never touches. Correcting it
+        // in two places and leaving it here is how a claim survives.
         Text(
-            "Steno keeps each reference's last known state so a draft has something to show "
-                + "when a fetch fails. Purging forgets it."
+            "For each reference, Steno stores the last state it saw and when it last "
+                + "looked. Purging forgets both. Your tasks, notes and history are "
+                + "untouched, and the next refresh fetches everything again."
         )
         .font(.callout)
         .foregroundStyle(.secondary)
@@ -350,6 +379,4 @@ struct IntegrationsSettingsPane: View {
             .foregroundStyle(.secondary)
         }
     }
-
-    @State private var isConfirmingPurge = false
 }

@@ -52,19 +52,26 @@ extension SourceRefreshService {
         let unreadable: Int
     }
 
-    /// The `sources` line for a pass that dispatched nothing (Copilot, PR #45).
+    /// The `sources` line for a pass that attempted nothing (Copilot, PR #45).
     ///
-    /// **`applyAndSave` is never reached on that path**, and its summary line was the
-    /// only logger — so `RefreshOutcome.disabled`, whose stated purpose is explaining
-    /// exactly this pass, explained nothing. Here rather than inline in `run` because
-    /// `SourceRefreshService.swift` is at SwiftLint's 400-line limit, and because the
-    /// two refresh log lines belong in one file.
-    func logEmptyPass(notConfigured: Int, disabled: Int) {
+    /// **`applyAndSave` is never reached on those paths**, and its summary line was
+    /// the only logger — so `RefreshOutcome.disabled`, whose stated purpose is
+    /// explaining exactly such a pass, explained nothing. Here rather than inline in
+    /// `run` because `SourceRefreshService.swift` is at SwiftLint's 400-line limit,
+    /// and because the refresh log lines belong in one file.
+    ///
+    /// **Called from every zero-attempt return, which took two tries.** The first fix
+    /// covered the one where nothing was claimed and missed the one where everything
+    /// claimed had an unreadable event log — a mixed pass with disabled refs then
+    /// still logged nothing about them. Raised twice by Copilot on PR #45, the second
+    /// time against my own incomplete fix.
+    func logEmptyPass(notConfigured: Int, disabled: Int, skipped: Int = 0) {
         Log.sources.info(
             """
             refresh: attempted 0 \
             notConfigured \(notConfigured, privacy: .public) \
-            disabled \(disabled, privacy: .public)
+            disabled \(disabled, privacy: .public) \
+            skipped \(skipped, privacy: .public)
             """)
     }
 
