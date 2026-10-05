@@ -58,6 +58,22 @@ public final class SourceRef {
         cachedSummary = summary
         lastFetchedAt = date
     }
+
+    /// Forget this ref's cached observation — FR-6's "purge cached external data"
+    /// (D-219).
+    ///
+    /// **Both fields together, for `recordFetch`'s reason**: §10.1 resolves them as
+    /// a pair, and `ImportReader` rejects a document carrying a `cachedSummary`
+    /// with no `lastFetchedAt`. A purge that cleared one would produce exactly the
+    /// record that validator exists to refuse.
+    ///
+    /// **This is not a deletion** (§3.3). No row goes away and no `Event` is
+    /// touched — the identity, the task link, the kind, the identifier and the URL
+    /// all stay, so the ref is simply one that has not been observed yet.
+    func clearCache() {
+        cachedSummary = nil
+        lastFetchedAt = nil
+    }
 }
 
 extension SourceRef {
