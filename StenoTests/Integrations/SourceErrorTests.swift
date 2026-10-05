@@ -95,3 +95,26 @@ func expiredIsNotTheSameAsRejected() {
         SourceError.credentialExpired.errorDescription
             != SourceError.invalidCredential.errorDescription)
 }
+
+// MARK: - D-217's new case
+
+@Test("D-217: siteNotFound has its own sentence, and it names a setting rather than the network")
+func siteNotFoundPointsAtSettings() {
+    let sentence = try? #require(SourceError.siteNotFound.errorDescription)
+
+    // The distinction the case exists for. Mutation: give `.siteNotFound` the
+    // same `errorDescription` as `.network`. Red.
+    #expect(SourceError.siteNotFound.errorDescription != SourceError.network.errorDescription)
+    #expect(sentence?.contains("Settings") == true)
+    // And it names no host: the type carries none, which is what keeps every
+    // `SourceError` safe to log (D-165).
+    #expect(sentence?.contains("atlassian.net") == false)
+}
+
+@Test("D-217: siteNotFound has its own metrics label")
+func siteNotFoundHasItsOwnLabel() {
+    #expect(SourceError.siteNotFound.metricsLabel == "siteNotFound")
+    // Spelled out rather than derived, so the label cannot drift into the
+    // fixed vocabulary the `sources` log uses (D-137).
+    #expect(SourceError.siteNotFound.metricsLabel != SourceError.network.metricsLabel)
+}

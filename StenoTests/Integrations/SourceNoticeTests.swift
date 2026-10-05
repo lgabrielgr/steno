@@ -298,3 +298,71 @@ func acleanPassWithNoWarningIsSilent() {
             for: RefreshOutcome(attempted: 2, cached: 2, oldestFetch: RefreshFixture.origin),
             now: RefreshFixture.origin) == nil)
 }
+
+// MARK: - D-216's silence, and D-217's sentence
+
+@Test("D-216: a pass that only skipped disabled integrations says nothing")
+func aDisabledIntegrationIsSilent() {
+    // **The whole reason `.disabled` is its own dispatch case.** Folded into
+    // `notConfigured`, this outcome would say "Some references have no
+    // integration set up yet" — false, and an instruction the user already
+    // declined by switching it off.
+    //
+    // Mutation: add a `disabled > 0` branch to `SourceNotice.message`. Red.
+    #expect(sentence(for: RefreshOutcome(disabled: 3, oldestFetch: nil), now: now) == nil)
+}
+
+@Test("D-216: a disabled count does not suppress a real complaint about something else")
+func disabledDoesNotMaskAnUnconfiguredIntegration() {
+    // Silence about one integration must not become silence about the pass. The
+    // enabled-but-unconfigured one still has a sentence.
+    let outcome = RefreshOutcome(notConfigured: 1, disabled: 2, oldestFetch: nil)
+
+    #expect(
+        sentence(for: outcome, now: now) == "Some references have no integration set up yet.")
+}
+
+@Test("D-217: a wrong site address is its own sentence, pointing at Settings")
+func aWrongSiteAddressPointsAtSettings() {
+    let outcome = RefreshOutcome(
+        attempted: 1,
+        failures: [failure(.siteNotFound, cachedAt: now.addingTimeInterval(-2 * 86400))])
+
+    // One em-dash, and the remedy last. Composed through `cause` this read
+    // "Jira's site address looks wrong — check it in Settings — using 2 days old
+    // data", which is why the case has its own shape.
+    #expect(
+        sentence(for: outcome, now: now)
+            == "Jira's site address looks wrong — using 2 days old data. Check it in Settings.")
+}
+
+@Test("D-217: a wrong site address does not read as a connection problem")
+func aWrongSiteIsNotAConnectionProblem() {
+    let site = RefreshOutcome(attempted: 1, failures: [failure(.siteNotFound)])
+    let network = RefreshOutcome(attempted: 1, failures: [failure(.network)])
+
+    // Mutation: group `.siteNotFound` with `.network` in `cause`. Red.
+    #expect(sentence(for: site, now: now) != sentence(for: network, now: now))
+    #expect(sentence(for: network, now: now)?.contains("Couldn\'t reach Jira") == true)
+    #expect(sentence(for: site, now: now)?.contains("Couldn\'t reach") == false)
+}
+
+@Test("D-217: a wrong site address with no cache says so without inventing an age")
+func aWrongSiteWithNoCacheNamesNoAge() {
+    let outcome = RefreshOutcome(attempted: 1, failures: [failure(.siteNotFound)])
+
+    #expect(
+        sentence(for: outcome, now: now)
+            == "Jira\'s site address looks wrong — no cached data yet. Check it in Settings.")
+}
+
+@Test("D-194 still holds: a failure outranks an expiry warning for the new case too")
+func aSiteFailureOutranksTheExpiryWarning() {
+    let warning = SourceCredentialWarning(
+        displayName: "Jira", daysRemaining: 9,
+        renewalURL: AtlassianTokenExpiry.renewalURL)
+    let outcome = RefreshOutcome(
+        attempted: 1, failures: [failure(.siteNotFound)], credentialWarnings: [warning])
+
+    #expect(sentence(for: outcome, now: now)?.contains("site address") == true)
+}

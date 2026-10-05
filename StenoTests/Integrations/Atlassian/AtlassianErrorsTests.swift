@@ -73,9 +73,40 @@ func jiraCancellationIsATimeout() {
 
 @Test(
     "the transport's own failures are network failures",
-    arguments: [URLError.Code.notConnectedToInternet, .cannotFindHost, .secureConnectionFailed])
+    arguments: [
+        URLError.Code.notConnectedToInternet, .secureConnectionFailed,
+        // **`.cannotConnectToHost` belongs here, not with the two below** (D-217).
+        // A host that resolves and then refuses the connection is a proxy, a
+        // captive portal or a firewall — not a typo — so sending the user to edit
+        // a site address that is correct would be the wrong instruction.
+        .cannotConnectToHost, .timedOut, .networkConnectionLost,
+    ])
 func transportFailuresAreNetwork(code: URLError.Code) {
     #expect(AtlassianErrors.error(forTransport: URLError(code)) == .network)
+}
+
+@Test(
+    "D-217: a host that does not resolve is a wrong site address, not a network failure",
+    arguments: [URLError.Code.cannotFindHost, .dnsLookupFailed])
+func unresolvableHostsAreSiteNotFound(code: URLError.Code) {
+    // §5.2 forbids reporting a 401 as a generic network error, and the same
+    // reasoning reaches every failure the user can fix. `acmee.atlassian.net` is
+    // shaped correctly, passes `baseURL`'s validation, and fails here — so this
+    // is the mapping that decides whether the user is sent to Settings or to
+    // their router.
+    //
+    // **`.cannotFindHost` was asserted as `.network` by the test above until this
+    // task**, which is what made the wrong sentence a documented behaviour rather
+    // than an oversight.
+    #expect(AtlassianErrors.error(forTransport: URLError(code)) == .siteNotFound)
+}
+
+@Test("D-217: the two site-shaped failures do not collapse into one another")
+func siteAndNetworkStayDistinct() {
+    // Mutation: map `.cannotConnectToHost` to `.siteNotFound` as well. Red —
+    // which is the point, because the generous mapping is the tempting one.
+    #expect(AtlassianErrors.error(forTransport: URLError(.cannotFindHost)) != .network)
+    #expect(AtlassianErrors.error(forTransport: URLError(.cannotConnectToHost)) != .siteNotFound)
 }
 
 @Test("a response that was not HTTP is a network failure")

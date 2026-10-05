@@ -82,7 +82,22 @@ enum AtlassianErrors {
         if error is TransportError { return .network }
 
         if let urlError = error as? URLError {
-            return urlError.code == .cancelled ? .timedOut : .network
+            switch urlError.code {
+            case .cancelled:
+                return .timedOut
+            case .cannotFindHost, .dnsLookupFailed:
+                // D-217: the configured site does not resolve, which is a typo in
+                // Settings rather than a connection problem. This is the most likely
+                // real mistake — a site that is shaped correctly and does not exist
+                // passes `baseURL`'s validation and reaches the resolver.
+                return .siteNotFound
+            default:
+                // **`.cannotConnectToHost` deliberately stays here.** A host that
+                // resolves and then refuses the connection is a proxy, a captive
+                // portal or a firewall — not a typo — and telling that user to edit
+                // a setting that is correct sends them to fix the wrong thing.
+                return .network
+            }
         }
 
         // An unrecognised error is reported as `.network` because that is the reading

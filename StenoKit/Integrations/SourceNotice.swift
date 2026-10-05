@@ -119,6 +119,18 @@ public enum SourceNotice {
                 })
         }
 
+        if failure.error == .siteNotFound {
+            // **Its own shape, for `.credentialExpired`'s reason** (D-217). Composed
+            // through `cause`, the remedy landed after the staleness clause and the
+            // sentence carried two em-dashes: "Jira's site address looks wrong —
+            // check it in Settings — using today's data". The remedy goes last, and
+            // there is no action button because the fix is a field in this app, not
+            // a page on the web.
+            return Message(
+                "\(failure.displayName)'s site address looks wrong — \(fallbackText). "
+                    + "Check it in Settings.")
+        }
+
         return Message("\(cause(failure)) — \(fallbackText).")
     }
 
@@ -160,6 +172,11 @@ public enum SourceNotice {
         switch failure.error {
         case .network, .timedOut:
             return "Couldn't reach \(failure.displayName)"
+        case .siteNotFound:
+            // Never arrives here — `message(for:now:)` gives it its own shape, the
+            // way it does `.credentialExpired` — and is listed rather than defaulted
+            // so that adding the *next* error case is still a compile error.
+            return "\(failure.displayName)'s site address looks wrong"
         case .notConfigured, .invalidCredential, .credentialExpired, .notFound, .rateLimited,
             .unavailable, .invalidResponse:
             // The connector's name still leads, so the user knows which
