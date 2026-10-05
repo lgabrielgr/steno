@@ -49,11 +49,14 @@ struct RefreshFixture {
     }
 
     @discardableResult
+    /// - Parameter url: §3.4's optional link. Defaulted to none; a test that needs a
+    ///   ref the connectors route by *host* — a site change orphaning a cached ref —
+    ///   passes one.
     func ref(
         _ identifier: String, on task: TaskItem, kind: SourceRefKind = .jiraIssue,
-        fetched: Date? = nil, summary: String? = nil
+        url: String? = nil, fetched: Date? = nil, summary: String? = nil
     ) throws -> SourceRef {
-        let ref = SourceRef(taskID: task.id, kind: kind, identifier: identifier)
+        let ref = SourceRef(taskID: task.id, kind: kind, identifier: identifier, url: url)
         context.insert(ref)
         ref.task = task
         if let fetched { ref.recordFetch(summary: summary, at: fetched) }

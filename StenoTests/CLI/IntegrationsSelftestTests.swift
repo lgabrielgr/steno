@@ -3,9 +3,15 @@ import Testing
 
 @testable import StenoKit
 
-/// D-220's harness. **The sequence is what these tests check**; whether a real
-/// resolver answers `cannotFindHost` is what `make verify-integrations` checks,
-/// and nothing here can stand in for it (§9.4 denies the network).
+/// D-220's harness. **The sequence is what these tests check**; what the live
+/// network actually does is what `make verify-integrations` checks, and nothing here
+/// can stand in for it (§9.4 denies the network).
+///
+/// That live half turned out to exercise the **404 mapping, not a DNS failure**:
+/// `*.atlassian.net` has wildcard DNS, so the probe host resolves to an Atlassian
+/// edge and the verify endpoint answers 404 (D-217's revision). This header said
+/// `cannotFindHost` until round 4 of PR #45 — the same stale premise the harness
+/// itself carried.
 
 /// Collects the harness's output so the wording can be asserted — and so §8's
 /// "never prints the token" is a property of the text rather than of a reading.

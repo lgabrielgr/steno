@@ -118,7 +118,6 @@ final class InMemoryAtlassianStore: AtlassianCredentialStore, @unchecked Sendabl
     /// state M4-04's pane told the user to recover from and could not (Copilot,
     /// PR #45).
     private var mutableReadError: (any Error)?
-    private var readError: (any Error)? { mutableReadError }
 
     /// Stop refusing reads, as unlocking the login keychain does.
     func stopFailingReads() { lock.withLock { mutableReadError = nil } }
@@ -181,11 +180,19 @@ final class InMemoryAtlassianStore: AtlassianCredentialStore, @unchecked Sendabl
     }
 
     func credential() throws -> AtlassianCredential? {
-        if let readError { throw readError }
-        return lock.withLock {
+        // **One lock acquisition covering the error *and* the value** (Copilot,
+        // PR #45). `mutableReadError` became a `var` so a test could model a locked
+        // keychain being unlocked, and the computed getter that replaced the old
+        // `let` read it outside the lock — a data race this type's `@unchecked
+        // Sendable` stops the compiler from catching, in the one double that four
+        // concurrent fetches share.
+        let refusal = lock.withLock { () -> (any Error)? in
+            guard mutableReadError == nil else { return mutableReadError }
             reads += 1
-            return stored
+            return nil
         }
+        if let refusal { throw refusal }
+        return lock.withLock { stored }
     }
 
     func delete() throws {

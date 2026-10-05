@@ -178,13 +178,27 @@ extension SourceRefreshService {
     /// `isEnabled` are both cheap and synchronous by contract, and D18 caps a window
     /// at twenty tasks.
     ///
-    /// A `.unhandled` ref needs no exclusion: nothing ever fetched it, so its
-    /// `lastFetchedAt` is `nil` and it cannot be the minimum.
+    /// **`.unhandled` is excluded too, and the comment here used to say it needn't
+    /// be** (Copilot, PR #45, round 4). That comment claimed nothing ever fetches an
+    /// unhandled ref, so its `lastFetchedAt` is always `nil`. False: `canHandle`
+    /// compares a ref's URL host against the configured site, so moving from site A
+    /// to site B leaves every cached site-A ref unclaimed *with its timestamp
+    /// intact*. Its age then reached the label, and with that integration switched
+    /// off D-216's silence broke again by a second route.
+    ///
+    /// So the rule is positive rather than a list of exclusions: the aggregate covers
+    /// the refs this app would actually refresh — the ones a connector claims and
+    /// either serves now (`.ready`) or will serve once configured
+    /// (`.notConfigured`). A ref nothing claims will never get newer, so quoting its
+    /// age as "integration data is N days old" describes something the user cannot
+    /// act on.
     func oldestFetch(of rows: [SourceRef]) -> Date? {
         rows.lazy
             .filter { row in
-                if case .disabled = registry.dispatch(row.snapshot) { return false }
-                return true
+                switch registry.dispatch(row.snapshot) {
+                case .ready, .notConfigured: return true
+                case .disabled, .unhandled: return false
+                }
             }
             .compactMap(\.lastFetchedAt)
             .min()
