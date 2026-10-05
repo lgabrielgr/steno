@@ -40,6 +40,13 @@ public enum CLICommand: Equatable, Sendable {
     /// Keychain harness. See `ModelsSelftest`.
     case modelsSelftest
 
+    /// `steno integrations-selftest` — hidden, and absent from `CLIUsage.text`.
+    ///
+    /// **Carries no store**, for `keychainSelftest`'s reason: FR-6's pane reads a
+    /// credential and asks two APIs whether it works, neither of which has anything
+    /// to do with the event log. See `IntegrationsSelftest` (D-220).
+    case integrationsSelftest
+
     /// `steno atlassian-login` — hidden, and absent from `CLIUsage.text`.
     ///
     /// **Carries no store**, for `keychainSelftest`'s reason: storing a credential

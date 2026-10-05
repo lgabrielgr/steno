@@ -19,7 +19,7 @@ XCCONFIG := Local.xcconfig
 TOOLS    := xcodegen xcbeautify swiftlint
 
 .DEFAULT_GOAL := help
-.PHONY: help bootstrap preflight clean generate build run release test lint format export import atlassian-login verify-jira verify-confluence
+.PHONY: help bootstrap preflight clean generate build run release test lint format export import atlassian-login verify-jira verify-confluence verify-integrations
 
 help: ## Show this help
 	@echo "Steno — make targets:"
@@ -291,6 +291,22 @@ verify-jira: build ## Fetch one real ticket with the stored credential (signed b
 verify-confluence: build ## Fetch one real page with the stored credential (signed build; §5.3, D-197)
 	@test -n "$$PAGE" || { echo "usage: make verify-confluence PAGE=12345"; exit 2; }
 	@"$(BIN)" confluence-selftest --page "$$PAGE"
+
+# FR-6's Integrations pane, against the live site and the real Keychain (D-220).
+#
+# `make test` denies outbound networking (§9.4) and stays out of the Keychain
+# (D-134), which leaves one fact in this task unverifiable by the suite: whether a
+# site that is shaped correctly and does not exist reports `siteNotFound` rather
+# than `network`. That depends on which URLError the real resolver returns, and it
+# is the difference between sending the user to Settings and sending them to their
+# router.
+#
+# It tests both connectors on the stored credential, probes a nonexistent
+# subdomain, confirms a non-Atlassian host is refused before any request, and
+# prints §5.2's expiry arithmetic. It never prints the token. Run it after any
+# change to IntegrationsSettingsModel, AtlassianErrors or SourceError.
+verify-integrations: build ## Test the stored Atlassian credential end to end (signed build; FR-6, D-220)
+	@"$(BIN)" integrations-selftest
 
 # The swiftlint check lives here rather than in `preflight`, which gates
 # build/run/release — none of which should start requiring a linter.

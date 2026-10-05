@@ -49,6 +49,7 @@ public enum CLIParser {
         "keychain-selftest": .keychainSelftest,
         "models-selftest": .modelsSelftest,
         "atlassian-login": .atlassianLogin,
+        "integrations-selftest": .integrationsSelftest,
     ]
 
     private static func parseExport(_ flags: [String]) throws -> CLICommand {

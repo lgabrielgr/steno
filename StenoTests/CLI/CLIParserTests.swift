@@ -169,6 +169,7 @@ import Testing
             (["keychain-selftest"], CLICommand.keychainSelftest),
             (["models-selftest"], CLICommand.modelsSelftest),
             (["atlassian-login"], CLICommand.atlassianLogin),
+            (["integrations-selftest"], CLICommand.integrationsSelftest),
             (
                 ["jira-selftest", "--issue", "PAY-421"],
                 CLICommand.jiraSelftest(issueKey: "PAY-421")
@@ -189,6 +190,7 @@ import Testing
         arguments: [
             ["keychain-selftest", "--replace"], ["models-selftest", "--output", "/tmp/a"],
             ["atlassian-login", "--token", "secret"],
+            ["integrations-selftest", "--site", "acme.atlassian.net"],
         ])
     func selftestTakesNoFlags(_ arguments: [String]) throws {
         let error = try #require(throws: CLIUsageError.self) { try parse(arguments) }
