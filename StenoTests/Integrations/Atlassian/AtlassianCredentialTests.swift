@@ -118,11 +118,19 @@ final class InMemoryAtlassianStore: AtlassianCredentialStore, @unchecked Sendabl
     private let writeError: (any Error)?
     private let announcesChanges: Bool
     private var reads = 0
+    private var writes = 0
 
     /// How many times the credential was read, for the routing contract: `isConfigured` is
     /// asked once per ref, and the connector must not answer it with a Keychain read each
     /// time (Copilot, PR #43).
     var readCount: Int { lock.withLock { reads } }
+
+    /// How many times a credential was written.
+    ///
+    /// Added by M4-04: "a refused read does not overwrite the stored token" cannot be
+    /// asserted by reading the store back, because the store it needs is one whose
+    /// reads fail. The absence of a write is the only observable evidence.
+    var writeCount: Int { lock.withLock { writes } }
 
     /// - Parameters:
     ///   - readError: injected so the connector's "a Keychain failure reads as absent" path
@@ -151,7 +159,10 @@ final class InMemoryAtlassianStore: AtlassianCredentialStore, @unchecked Sendabl
 
     func store(_ credential: AtlassianCredential) throws {
         if let writeError { throw writeError }
-        lock.withLock { stored = credential }
+        lock.withLock {
+            stored = credential
+            writes += 1
+        }
         announce()
     }
 

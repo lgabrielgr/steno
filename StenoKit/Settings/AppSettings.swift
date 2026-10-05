@@ -14,7 +14,21 @@ import Foundation
 ///
 /// A `struct` with `nonmutating` setters, so an owner can hold it as a `let`
 /// and still write through it — the store behind it is a reference type.
-public struct AppSettings {
+///
+/// **`@unchecked Sendable`, and the "unchecked" is load-bearing** (D-216).
+/// `SourceRegistry` stores FR-6's enablement check as a `@Sendable` closure — it is
+/// a `Sendable` struct whose `dispatch` is called from the refresh service's task
+/// group — so the closure the composition root passes has to capture this type.
+/// `UserDefaults` declares its `Sendable` conformance *unavailable*, so a checked
+/// conformance is not reachable however this type is written.
+///
+/// What makes the assertion sound: this is a stateless facade with exactly one
+/// stored property, a `UserDefaults` reference, and `UserDefaults` is documented
+/// thread-safe. Nothing here caches, and no property is mutable — every getter and
+/// setter goes straight through to the store. A stored property added later that is
+/// *not* thread-safe would silently invalidate this, which is why it is stated here
+/// rather than left to be inferred.
+public struct AppSettings: @unchecked Sendable {
     /// FR-1.1's chord. Moved here from `QuickCaptureModel.chordKey`.
     public static let hotkeyChordKey = "com.lgabrielgr.steno.hotkeyChord"
 

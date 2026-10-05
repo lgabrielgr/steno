@@ -41,6 +41,14 @@ final class StubSourceConnector: SourceConnector, @unchecked Sendable {
     private let scripts: [String: Script]
     private let fallback: Script
 
+    /// What `testConnection()` throws, if anything.
+    ///
+    /// Added by M4-04: FR-6's per-integration test is the surface whose whole
+    /// point is telling four failures apart, and until now this double could only
+    /// report `.notConfigured`. Typed `any Error` rather than `SourceError`, so the
+    /// "a connector broke its contract" path can be exercised too.
+    private let connectionFailure: (any Error)?
+
     /// **Locked, because the service fetches four refs at once.** The first
     /// version appended to a plain array from every concurrent fetch, and a record
     /// was lost — which showed up as a test asserting that a ref had never been
@@ -68,7 +76,8 @@ final class StubSourceConnector: SourceConnector, @unchecked Sendable {
         fallback: Script = .success(
             SourceUpdate(
                 summary: "stub state", changes: [], url: nil, fetchedAt: .distantPast,
-                isWindowCapped: false))
+                isWindowCapped: false)),
+        connectionFailure: (any Error)? = nil
     ) {
         self.id = id
         self.displayName = displayName
@@ -76,6 +85,7 @@ final class StubSourceConnector: SourceConnector, @unchecked Sendable {
         self.kinds = kinds
         self.scripts = scripts
         self.fallback = fallback
+        self.connectionFailure = connectionFailure
     }
 
     func canHandle(_ ref: SourceRefSnapshot) -> Bool {
@@ -101,6 +111,7 @@ final class StubSourceConnector: SourceConnector, @unchecked Sendable {
     func testConnection() async throws {
         lock.withLock { connectionCalls += 1 }
         guard isConfigured else { throw SourceError.notConfigured }
+        if let connectionFailure { throw connectionFailure }
     }
 }
 
