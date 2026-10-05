@@ -3,7 +3,7 @@ import Testing
 
 @testable import StenoKit
 
-/// §5.1's routing, and D-166's three outcomes.
+/// §5.1's routing, and D-166's three outcomes plus D-216's fourth.
 
 private func ref(_ kind: SourceRefKind = .jiraIssue) -> SourceRefSnapshot {
     SourceRefSnapshot(refID: UUID(), kind: kind, identifier: "PAY-421")

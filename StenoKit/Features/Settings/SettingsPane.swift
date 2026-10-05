@@ -23,9 +23,10 @@ public enum SettingsPane: String, CaseIterable, Identifiable, Sendable {
     /// It carries the auto-export settings and nothing else. FR-6 also lists
     /// "export all data as JSON", which is already the File menu's Export item
     /// and is not duplicated here, and "purge cached external data", which
-    /// waits for M4 — there is no cached external data until integrations
-    /// exist, and a button that purges nothing is one nobody can verify
-    /// (D-127).
+    /// waited for M4 — there was no cached external data until integrations
+    /// existed, and a button that purges nothing is one nobody can verify
+    /// (D-127). **It now lives in `integrations`**, because the cache it clears
+    /// is M4-01's (D-219).
     case data
 
     /// FR-6's AI area: the provider, the Keychain-backed key, the model picker
