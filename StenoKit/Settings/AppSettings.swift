@@ -42,6 +42,7 @@ public struct AppSettings {
         autoExportStatusKey,
         autoExportOnboardedKey,
         aiSelectedModelIDKey,
+        integrationsDisabledKey,
     ]
 
     private let defaults: UserDefaults
@@ -133,6 +134,72 @@ public struct AppSettings {
             }
             defaults.set(newValue, forKey: Self.aiSelectedModelIDKey)
         }
+    }
+
+    // MARK: - FR-6, per-integration enablement
+
+    /// Which integrations the user has switched off (D-215).
+    ///
+    /// **One key holding the *disabled* set, not a flag per connector.** The
+    /// obvious shape is `integrations.jira.enabled` and
+    /// `integrations.confluence.enabled`, and it does not survive M5-02: MCP
+    /// servers have ids the user chooses, so there is no static list of keys to
+    /// declare — and `allKeys` above is the static list §8's audit reads. A key
+    /// that cannot be listed is a key the audit cannot see.
+    ///
+    /// **Disabled rather than enabled, so absence is the permissive answer.** This
+    /// is `flag(_:)`'s posture one section down: `UserDefaults` holds nothing for a
+    /// key never written, and the only correct reading of "nothing" here is "the
+    /// user has switched nothing off". The inverse spelling would make a fresh
+    /// install's integrations inert in the one direction nobody notices, because an
+    /// integration that never fetches looks exactly like one with nothing to
+    /// report.
+    public static let integrationsDisabledKey = "com.lgabrielgr.steno.integrations.disabled"
+
+    /// The ids in `integrationsDisabledKey`, or an empty set.
+    ///
+    /// Stored as `[String]` because `UserDefaults` has no set; read back through a
+    /// `Set` because membership is the only question anyone asks. A stored value of
+    /// the wrong type reads as empty rather than trapping — the posture
+    /// `hotkeyChord` takes for an undecodable chord, and for the same reason: a
+    /// `defaults write` by hand must not be able to break the app.
+    public var disabledIntegrationIDs: Set<String> {
+        get { Set(defaults.stringArray(forKey: Self.integrationsDisabledKey) ?? []) }
+        nonmutating set {
+            guard !newValue.isEmpty else {
+                // Removed rather than stored as `[]`, so "the user has switched
+                // nothing off" has one representation instead of two.
+                defaults.removeObject(forKey: Self.integrationsDisabledKey)
+                return
+            }
+            // Sorted, so the stored value is stable across writes that change
+            // nothing — a `Set`'s iteration order is its hash order and differs
+            // between processes.
+            defaults.set(newValue.sorted(), forKey: Self.integrationsDisabledKey)
+        }
+    }
+
+    /// Whether `id` may fetch (FR-6's per-integration toggle).
+    ///
+    /// Read per dispatch by `SourceRegistry`, so a toggle takes effect without a
+    /// relaunch (D-216).
+    public func isIntegrationEnabled(_ id: String) -> Bool {
+        !disabledIntegrationIDs.contains(id)
+    }
+
+    /// Switch one integration on or off.
+    ///
+    /// **Writes the whole set, which is what keeps an unknown id harmless.** A
+    /// connector that no longer ships stays in the stored set and simply never
+    /// matches anything, rather than needing a migration.
+    public func setIntegration(_ id: String, enabled: Bool) {
+        var ids = disabledIntegrationIDs
+        if enabled {
+            ids.remove(id)
+        } else {
+            ids.insert(id)
+        }
+        disabledIntegrationIDs = ids
     }
 
     // MARK: - §10.5, auto-export
