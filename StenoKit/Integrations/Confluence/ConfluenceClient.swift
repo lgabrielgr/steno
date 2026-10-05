@@ -110,9 +110,13 @@ struct ConfluenceClient: Sendable {
     /// credential is valid and authorised, whatever it can see.
     func verify(credential: AtlassianCredential) async throws {
         guard let base = credential.baseURL else { throw SourceError.notConfigured }
+        // **`.siteNotFound` for a 404 here, not `.notFound`** (D-217, revised), for
+        // `JiraClient.verify`'s reason: the v2 spaces endpoint answers 200 or 401 on a
+        // site that serves the Confluence API, so a 404 means this host is not serving
+        // it — a mistyped site, or a site without Confluence.
         _ = try await fetch(
             ConfluenceSpacePage.self, from: .spaces(limit: 1), base: base,
-            authorization: credential.basicAuthorization)
+            authorization: credential.basicAuthorization, notFound: .siteNotFound)
     }
 
     // MARK: - Paging
@@ -321,8 +325,12 @@ struct ConfluenceClient: Sendable {
     /// The three failure shapes are separated deliberately: a transport failure, a
     /// status Confluence chose, and a body that would not decode are different facts,
     /// and §5.5's banner says different things about them.
+    /// - Parameter notFound: what a `404` means for this call (D-217, revised).
+    ///   Defaults to `.notFound`, which is right for every ref fetch; `verify`
+    ///   passes `.siteNotFound`.
     private func fetch<T: Decodable>(
-        _ type: T.Type, from endpoint: ConfluenceEndpoint, base: URL, authorization: String
+        _ type: T.Type, from endpoint: ConfluenceEndpoint, base: URL, authorization: String,
+        notFound: SourceError = .notFound
     ) async throws -> T {
         // A page id that is not a page id is a mistyped reference, not a programmer
         // error — `ConfluenceEndpoint.request` explains why this is `nil` rather than a
@@ -340,7 +348,7 @@ struct ConfluenceClient: Sendable {
 
         if let failure = AtlassianErrors.error(
             forStatus: response.status, headers: response.headers,
-            badRequest: .unavailable(status: 400))
+            badRequest: .unavailable(status: 400), notFound: notFound)
         {
             throw failure
         }

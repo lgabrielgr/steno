@@ -114,3 +114,86 @@ func anEmptyModelIDIsNoSelection() throws {
     settings.aiSelectedModelID = ""
     #expect(defaults.object(forKey: AppSettings.aiSelectedModelIDKey) == nil)
 }
+
+// MARK: - FR-6's per-integration toggle (D-215)
+
+@Test("an unset store has every integration enabled")
+@MainActor
+func anUnsetStoreEnablesEveryIntegration() throws {
+    let (settings, _) = try scratch()
+
+    // Absence is the permissive answer, which is the whole reason the key holds
+    // the *disabled* set. Mutation: store the enabled set instead. Red.
+    #expect(settings.disabledIntegrationIDs.isEmpty)
+    #expect(settings.isIntegrationEnabled("jira"))
+    #expect(settings.isIntegrationEnabled("confluence"))
+    // An id nothing has ever registered is enabled too — M5-02 adds ids this
+    // build has never heard of.
+    #expect(settings.isIntegrationEnabled("mcp-github"))
+}
+
+@Test("disabling one integration leaves the others alone")
+@MainActor
+func disablingOneLeavesTheOthersAlone() throws {
+    let (settings, _) = try scratch()
+
+    settings.setIntegration("confluence", enabled: false)
+
+    #expect(!settings.isIntegrationEnabled("confluence"))
+    #expect(settings.isIntegrationEnabled("jira"))
+}
+
+@Test("re-enabling removes the key rather than storing an empty array")
+@MainActor
+func reEnablingRemovesTheKey() throws {
+    let (settings, defaults) = try scratch()
+
+    settings.setIntegration("jira", enabled: false)
+    #expect(defaults.object(forKey: AppSettings.integrationsDisabledKey) != nil)
+
+    settings.setIntegration("jira", enabled: true)
+
+    // One representation of "nothing is switched off", not two.
+    #expect(defaults.object(forKey: AppSettings.integrationsDisabledKey) == nil)
+    #expect(settings.isIntegrationEnabled("jira"))
+}
+
+@Test("the stored value is sorted, so a rewrite that changes nothing is stable")
+@MainActor
+func theStoredValueIsSorted() throws {
+    let (settings, defaults) = try scratch()
+
+    settings.disabledIntegrationIDs = ["jira", "confluence", "mcp-github"]
+
+    // A `Set`'s iteration order is its hash order and differs between
+    // processes. Mutation: drop `.sorted()` in the setter — this goes red
+    // across runs rather than reliably, which is why the expectation is on the
+    // array and not on a round trip.
+    #expect(
+        defaults.stringArray(forKey: AppSettings.integrationsDisabledKey)
+            == ["confluence", "jira", "mcp-github"])
+}
+
+@Test("a stored value of the wrong type reads as nothing disabled")
+@MainActor
+func aWrongTypedValueReadsAsEmpty() throws {
+    let (settings, defaults) = try scratch()
+
+    // What a hand-written `defaults write` can produce. It must not trap, and
+    // it must not silently disable everything.
+    defaults.set(42, forKey: AppSettings.integrationsDisabledKey)
+
+    #expect(settings.disabledIntegrationIDs.isEmpty)
+    #expect(settings.isIntegrationEnabled("jira"))
+}
+
+@Test("disabling is idempotent")
+@MainActor
+func disablingIsIdempotent() throws {
+    let (settings, defaults) = try scratch()
+
+    settings.setIntegration("jira", enabled: false)
+    settings.setIntegration("jira", enabled: false)
+
+    #expect(defaults.stringArray(forKey: AppSettings.integrationsDisabledKey) == ["jira"])
+}

@@ -110,6 +110,8 @@ public struct CLIRunner {
             misroutedSelftest("models-selftest")
         case .atlassianLogin:
             misroutedSelftest("atlassian-login")
+        case .integrationsSelftest:
+            misroutedSelftest("integrations-selftest")
         case .jiraSelftest:
             misroutedSelftest("jira-selftest")
         case .confluenceSelftest:

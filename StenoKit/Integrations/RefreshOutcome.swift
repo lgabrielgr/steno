@@ -62,6 +62,21 @@ public struct RefreshOutcome: Sendable, Equatable {
     /// credential.
     public let notConfigured: Int
 
+    /// Refs claimed only by connectors the user has switched off (D-216).
+    ///
+    /// **Counted, and deliberately never shown.** `SourceNotice` says nothing about
+    /// this number: the user turned the integration off, so there is nothing to
+    /// report, and a banner that complains about a setting the user chose is one
+    /// they learn to ignore (FR-5's reasoning). It exists so the `sources` log can
+    /// still explain a pass that attempted nothing.
+    ///
+    /// **Both loggers carry it, which this comment claimed before either did**
+    /// (Copilot, PR #45): `applyAndSave`'s summary line omitted the field, and a pass
+    /// of only disabled refs returns before that function runs — so the one case
+    /// this count exists to explain was the one case nothing logged. The early
+    /// return in `run` now logs too.
+    public let disabled: Int
+
     /// Refs the pass budget ran out before reaching, plus in-flight fetches
     /// cancelled by it (D-178). Not failures: nothing went wrong with them.
     public let skipped: Int
@@ -116,6 +131,7 @@ public struct RefreshOutcome: Sendable, Equatable {
         changed: Int = 0,
         failures: [Failure] = [],
         notConfigured: Int = 0,
+        disabled: Int = 0,
         skipped: Int = 0,
         superseded: Int = 0,
         duplicates: Int = 0,
@@ -129,6 +145,7 @@ public struct RefreshOutcome: Sendable, Equatable {
         self.changed = changed
         self.failures = failures
         self.notConfigured = notConfigured
+        self.disabled = disabled
         self.skipped = skipped
         self.superseded = superseded
         self.duplicates = duplicates
@@ -148,9 +165,9 @@ public struct RefreshOutcome: Sendable, Equatable {
         guard !warnings.isEmpty else { return self }
         return RefreshOutcome(
             attempted: attempted, cached: cached, changed: changed, failures: failures,
-            notConfigured: notConfigured, skipped: skipped, superseded: superseded,
-            duplicates: duplicates, credentialWarnings: warnings, oldestFetch: oldestFetch,
-            readFailed: readFailed, saveFailed: saveFailed)
+            notConfigured: notConfigured, disabled: disabled, skipped: skipped,
+            superseded: superseded, duplicates: duplicates, credentialWarnings: warnings,
+            oldestFetch: oldestFetch, readFailed: readFailed, saveFailed: saveFailed)
     }
 
     /// A pass that had nothing to do.

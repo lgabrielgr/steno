@@ -49,8 +49,36 @@ public enum SourceError: Error, Equatable, Sendable {
     /// user will notice and fix.
     case notFound
 
-    /// Offline, DNS failure, TLS failure — the request never arrived.
+    /// Offline, TLS failure — the request never arrived for a reason the user's
+    /// settings cannot fix.
+    ///
+    /// **No longer "DNS failure"**: a name that does not resolve is
+    /// `.siteNotFound` below (D-217), because the remedy is a setting rather than
+    /// a connection.
     case network
+
+    /// The configured site does not serve this integration's API (D-217).
+    ///
+    /// **Its own case because the remedy is a setting, not the network.** §5.2
+    /// forbids reporting a 401 as a generic network error, and the same reasoning
+    /// reaches every failure the user can actually fix: a site typed as
+    /// `acmee.atlassian.net` is shaped correctly and passes `baseURL`'s validation,
+    /// and was reported as "check your connection" — sending the user to their
+    /// router over a typo, during stand-up prep.
+    ///
+    /// **Two causes, and the dominant one is not DNS.** `*.atlassian.net` has
+    /// wildcard DNS, so a mistyped-but-well-formed site resolves to an Atlassian
+    /// edge and answers `404` on the verify endpoint rather than failing to resolve
+    /// — found by `make verify-integrations` against the live API, not by review.
+    /// A 404 there can also mean the site is real but does not have that product.
+    /// Both are "the site address in Settings is not serving this", and both have
+    /// the same remedy, so they share a case; a host that genuinely does not resolve
+    /// maps here too.
+    ///
+    /// **Carries no host**, for this type's reason: the pane interpolates the site
+    /// it already holds in view state, and a case with a free-form `String` would
+    /// give up the property that makes a `SourceError` always safe to log.
+    case siteNotFound
 
     /// The fetch exceeded `SourceRefreshService`'s per-fetch budget.
     case timedOut
@@ -85,6 +113,13 @@ extension SourceError: LocalizedError {
             return "That reference doesn't exist, or this account can't see it."
         case .network:
             return "Couldn't reach the integration. Check your connection."
+        case .siteNotFound:
+            // No host named: the type carries none. The Settings pane says which
+            // site it could not find, because that is the surface that holds it.
+            //
+            // "isn't serving" rather than "doesn't exist", because a 404 on the
+            // verify endpoint also describes a real site without that product.
+            return "That site isn't serving this integration. Check the site address in Settings."
         case .timedOut:
             return "The integration didn't answer in time."
         case .rateLimited:
@@ -110,6 +145,7 @@ extension SourceError {
         case .credentialExpired: return "credentialExpired"
         case .notFound: return "notFound"
         case .network: return "network"
+        case .siteNotFound: return "siteNotFound"
         case .timedOut: return "timedOut"
         case .rateLimited: return "rateLimited"
         case .unavailable: return "unavailable"

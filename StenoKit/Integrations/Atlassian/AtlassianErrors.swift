@@ -26,8 +26,24 @@ enum AtlassianErrors {
     ///   was "genuinely shared rather than conveniently shared"; that reasoning was wrong,
     ///   because it assumed a malformed page id could reach the API. Raised by Copilot in
     ///   review of PR #44.
+    /// - Parameter notFound: what a `404` means for the call being made (D-217,
+    ///   revised).
+    ///
+    ///   **Parameterized for `badRequest`'s reason, and discovered the same way.** A
+    ///   ref fetch's 404 is a mistyped ticket key or a page this account cannot see,
+    ///   which is `.notFound`. A *connection test*'s 404 is something else entirely:
+    ///   `/rest/api/3/myself` and `/wiki/api/v2/spaces` answer 200 or 401 on a site
+    ///   that serves them, so a 404 there means the host is not serving that API —
+    ///   the site address is wrong, or the site does not have that product.
+    ///
+    ///   This was found by `make verify-integrations` against the live API, not by
+    ///   review: `*.atlassian.net` has **wildcard DNS**, so a mistyped-but-well-formed
+    ///   site resolves to an Atlassian edge and answers 404 rather than failing to
+    ///   resolve. The DNS mapping below is still correct and still unreachable for
+    ///   that case.
     static func error(
-        forStatus status: Int, headers: [String: String], badRequest: SourceError
+        forStatus status: Int, headers: [String: String], badRequest: SourceError,
+        notFound: SourceError = .notFound
     ) -> SourceError? {
         switch status {
         case 200..<300:
@@ -54,8 +70,9 @@ enum AtlassianErrors {
             return .invalidCredential
         case 404:
             // Jira returns 404 for an issue the account cannot see, which is the same
-            // sentence the user needs either way.
-            return .notFound
+            // sentence the user needs either way — so for a *fetch* the default is
+            // right. A connection test passes `.siteNotFound`; see `notFound` above.
+            return notFound
         case 429:
             return .rateLimited(retryAfter: retryAfter(in: headers))
         case 400..<500:
@@ -82,7 +99,22 @@ enum AtlassianErrors {
         if error is TransportError { return .network }
 
         if let urlError = error as? URLError {
-            return urlError.code == .cancelled ? .timedOut : .network
+            switch urlError.code {
+            case .cancelled:
+                return .timedOut
+            case .cannotFindHost, .dnsLookupFailed:
+                // D-217: the configured site does not resolve, which is a typo in
+                // Settings rather than a connection problem. This is the most likely
+                // real mistake — a site that is shaped correctly and does not exist
+                // passes `baseURL`'s validation and reaches the resolver.
+                return .siteNotFound
+            default:
+                // **`.cannotConnectToHost` deliberately stays here.** A host that
+                // resolves and then refuses the connection is a proxy, a captive
+                // portal or a firewall — not a typo — and telling that user to edit
+                // a setting that is correct sends them to fix the wrong thing.
+                return .network
+            }
         }
 
         // An unrecognised error is reported as `.network` because that is the reading

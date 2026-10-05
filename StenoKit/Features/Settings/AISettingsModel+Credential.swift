@@ -125,9 +125,6 @@ extension AISettingsModel {
     /// type name is shown — the narrowing `ModelsSelftest.describe` makes for
     /// the same reason (§8).
     static func detail(for error: any Error) -> String {
-        guard let keychainError = error as? KeychainError else {
-            return String(describing: type(of: error))
-        }
-        return String(describing: keychainError)
+        KeychainErrorDetail.of(error)
     }
 }

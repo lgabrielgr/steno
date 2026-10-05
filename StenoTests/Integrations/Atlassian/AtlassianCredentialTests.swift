@@ -114,15 +114,29 @@ func theServiceNamesAreSeparate() {
 final class InMemoryAtlassianStore: AtlassianCredentialStore, @unchecked Sendable {
     private let lock = NSLock()
     private var stored: AtlassianCredential?
-    private let readError: (any Error)?
+    /// `var`, so a test can model a locked keychain being unlocked — which is the
+    /// state M4-04's pane told the user to recover from and could not (Copilot,
+    /// PR #45).
+    private var mutableReadError: (any Error)?
+
+    /// Stop refusing reads, as unlocking the login keychain does.
+    func stopFailingReads() { lock.withLock { mutableReadError = nil } }
     private let writeError: (any Error)?
     private let announcesChanges: Bool
     private var reads = 0
+    private var writes = 0
 
     /// How many times the credential was read, for the routing contract: `isConfigured` is
     /// asked once per ref, and the connector must not answer it with a Keychain read each
     /// time (Copilot, PR #43).
     var readCount: Int { lock.withLock { reads } }
+
+    /// How many times a credential was written.
+    ///
+    /// Added by M4-04: "a refused read does not overwrite the stored token" cannot be
+    /// asserted by reading the store back, because the store it needs is one whose
+    /// reads fail. The absence of a write is the only observable evidence.
+    var writeCount: Int { lock.withLock { writes } }
 
     /// - Parameters:
     ///   - readError: injected so the connector's "a Keychain failure reads as absent" path
@@ -144,14 +158,17 @@ final class InMemoryAtlassianStore: AtlassianCredentialStore, @unchecked Sendabl
         writeError: (any Error)? = nil, announcesChanges: Bool = true
     ) {
         self.stored = credential
-        self.readError = readError
+        self.mutableReadError = readError
         self.writeError = writeError
         self.announcesChanges = announcesChanges
     }
 
     func store(_ credential: AtlassianCredential) throws {
         if let writeError { throw writeError }
-        lock.withLock { stored = credential }
+        lock.withLock {
+            stored = credential
+            writes += 1
+        }
         announce()
     }
 
@@ -163,11 +180,19 @@ final class InMemoryAtlassianStore: AtlassianCredentialStore, @unchecked Sendabl
     }
 
     func credential() throws -> AtlassianCredential? {
-        if let readError { throw readError }
-        return lock.withLock {
+        // **One lock acquisition covering the error *and* the value** (Copilot,
+        // PR #45). `mutableReadError` became a `var` so a test could model a locked
+        // keychain being unlocked, and the computed getter that replaced the old
+        // `let` read it outside the lock — a data race this type's `@unchecked
+        // Sendable` stops the compiler from catching, in the one double that four
+        // concurrent fetches share.
+        let refusal = lock.withLock { () -> (any Error)? in
+            guard mutableReadError == nil else { return mutableReadError }
             reads += 1
-            return stored
+            return nil
         }
+        if let refusal { throw refusal }
+        return lock.withLock { stored }
     }
 
     func delete() throws {

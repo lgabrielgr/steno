@@ -40,8 +40,16 @@ public struct SourceRefSnapshot: Sendable, Equatable {
 
 /// What one fetch learned (§5.1).
 public struct SourceUpdate: Sendable, Equatable {
-    /// Human-readable current state. Stored as `SourceRef.cachedSummary`, which
-    /// §7.4 reads when the network is gone.
+    /// Human-readable current state. Stored as `SourceRef.cachedSummary`.
+    ///
+    /// **Nothing displays it yet, and this comment used to say otherwise** (D-219).
+    /// It claimed "§7.4 reads when the network is gone"; no code does. Its only
+    /// readers are `ExportRecords` and the import/merge rules — the staleness
+    /// wording a user actually sees is built from `lastFetchedAt` via
+    /// `RefreshOutcome.Failure.cachedAt`. §5.2 does describe it as "what the app
+    /// shows when it tells the user their integration data is stale", so the surface
+    /// is owed; until one exists this is a durable record for export, import and the
+    /// baseline a later fetch is described against, and nothing more.
     public let summary: String
 
     /// Discrete changes since `since`, each carrying a stable id (D-186).

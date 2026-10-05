@@ -131,25 +131,19 @@ public struct SourceRefreshService {
         // per configured connector, not one per ref.
         let warnings = credentialWarnings()
 
-        var claimed: [(snapshot: SourceRefSnapshot, connector: any SourceConnector)] = []
-        var notConfigured = 0
-        for ref in refs {
-            switch registry.dispatch(ref) {
-            case .ready(let connector):
-                claimed.append((ref, connector))
-            case .notConfigured:
-                notConfigured += 1
-            case .unhandled:
-                // Silent, by D-166: a bare `.url` ref is every link the user has
-                // ever pasted, and it is not a problem.
-                break
-            }
-        }
+        let tally = classify(refs)
+        let claimed = tally.claimed
+        let notConfigured = tally.notConfigured
+        let disabled = tally.disabled
+        // A switched-off integration's cache age must not reach the staleness label
+        // (Copilot, PR #45) — see `oldestFetch(of:)`.
+        let stale = oldestFetch(of: rows)
 
         guard !claimed.isEmpty else {
+            logEmptyPass(notConfigured: notConfigured, disabled: disabled)
             return RefreshOutcome(
-                notConfigured: notConfigured, credentialWarnings: warnings,
-                oldestFetch: Self.oldestFetch(of: rows))
+                notConfigured: notConfigured, disabled: disabled, credentialWarnings: warnings,
+                oldestFetch: stale)
         }
 
         // **One map, computed once, read twice** (D-186). The dispatch half turns
@@ -180,17 +174,21 @@ public struct SourceRefreshService {
         }
 
         guard !ready.isEmpty else {
+            // The third zero-attempt return, and the one the first fix missed
+            // (Copilot, PR #45): every claimed ref's log was unreadable, so a mixed
+            // pass carrying disabled refs logged nothing about them.
+            logEmptyPass(notConfigured: notConfigured, disabled: disabled, skipped: unread)
             return RefreshOutcome(
-                notConfigured: notConfigured, skipped: unread, credentialWarnings: warnings,
-                oldestFetch: Self.oldestFetch(of: rows))
+                notConfigured: notConfigured, disabled: disabled, skipped: unread,
+                credentialWarnings: warnings, oldestFetch: stale)
         }
 
         let fetched = await fetchAll(ready)
         return applyAndSave(
             fetched, rows: rows,
             context: PassContext(
-                attempted: ready.count, notConfigured: notConfigured, resume: resume,
-                warnings: warnings, unreadable: unread))
+                attempted: ready.count, notConfigured: notConfigured, disabled: disabled,
+                resume: resume, warnings: warnings, unreadable: unread))
     }
 
     /// One ref about to be fetched, carrying the `since` its resume point produced.

@@ -75,7 +75,50 @@ extension SourceRefreshService {
     /// on Friday is worth saying even on a pass whose refs all belong to some other
     /// integration.
     func credentialWarnings() -> [SourceCredentialWarning] {
-        registry.all.compactMap(\.credentialWarning)
+        // **`enabled`, not `all`** (D-216). Both Atlassian connectors read one
+        // credential (§5.3), so a user who switches Confluence off to stop its
+        // noise would otherwise keep being warned about the token it is no longer
+        // using. Jira keeps warning while it is on: the token still matters there.
+        registry.enabled.compactMap(\.credentialWarning)
+    }
+
+    // MARK: - Routing
+
+    /// What `registry.dispatch` said about each ref in a pass.
+    ///
+    /// **A named result rather than three `var`s in `run`**, which is also what
+    /// keeps `SourceRefreshService.swift` under SwiftLint's 400-line limit: the
+    /// fourth dispatch case (D-216) is what pushed it over.
+    struct DispatchTally {
+        var claimed: [(snapshot: SourceRefSnapshot, connector: any SourceConnector)] = []
+
+        /// Refs a connector claimed but cannot fetch for want of a credential.
+        var notConfigured = 0
+
+        /// Refs claimed only by connectors the user switched off (D-216).
+        var disabled = 0
+    }
+
+    /// Route every ref, and count the ones that go nowhere.
+    func classify(_ refs: [SourceRefSnapshot]) -> DispatchTally {
+        var tally = DispatchTally()
+        for ref in refs {
+            switch registry.dispatch(ref) {
+            case .ready(let connector):
+                tally.claimed.append((ref, connector))
+            case .notConfigured:
+                tally.notConfigured += 1
+            case .disabled:
+                // Counted for the log and said nowhere else (D-216): the user
+                // switched this integration off, so there is nothing to report.
+                tally.disabled += 1
+            case .unhandled:
+                // Silent, by D-166: a bare `.url` ref is every link the user has
+                // ever pasted, and it is not a problem.
+                break
+            }
+        }
+        return tally
     }
 
     // MARK: - Candidates
@@ -112,13 +155,53 @@ extension SourceRefreshService {
             .filter { taskIDs.contains($0.taskID) }
     }
 
-    /// The oldest observation among `rows`, or `nil` when none has been fetched.
+    /// The oldest observation among the refs this app would actually refresh, or
+    /// `nil` when none has been fetched.
     ///
     /// Read *after* the pass, so a successful fetch has already moved its row's
     /// timestamp forward and only genuinely stale refs remain — which is what
     /// makes it the right input to §5.2's staleness label.
-    static func oldestFetch(of rows: [SourceRef]) -> Date? {
-        rows.compactMap(\.lastFetchedAt).min()
+    ///
+    /// **Refs of switched-off integrations are excluded, and that is D-216's silence
+    /// finally holding** (Copilot, PR #45). A ref fetched three days ago and since
+    /// switched off carried its age in here; `SourceNotice` ignores `disabled` and so
+    /// fell through every branch above staleness, telling the user "Some integration
+    /// data is 3 days old" about data they had deliberately stopped refreshing —
+    /// which is the sentence D-216 exists to not say. The first test of that silence
+    /// passed `oldestFetch: nil`, the state of a store that never fetched, so it
+    /// could not see this.
+    ///
+    /// **It asks the registry per row rather than reusing the pass's tally**, which
+    /// was the first fix and was not enough: `refreshDue` dispatches only the refs
+    /// that are *due*, while this aggregate is computed over every row in scope — so
+    /// a disabled ref that was not due kept leaking its age. `canHandle` and
+    /// `isEnabled` are both cheap and synchronous by contract, and D18 caps a window
+    /// at twenty tasks.
+    ///
+    /// **`.unhandled` is excluded too, and the comment here used to say it needn't
+    /// be** (Copilot, PR #45, round 4). That comment claimed nothing ever fetches an
+    /// unhandled ref, so its `lastFetchedAt` is always `nil`. False: `canHandle`
+    /// compares a ref's URL host against the configured site, so moving from site A
+    /// to site B leaves every cached site-A ref unclaimed *with its timestamp
+    /// intact*. Its age then reached the label, and with that integration switched
+    /// off D-216's silence broke again by a second route.
+    ///
+    /// So the rule is positive rather than a list of exclusions: the aggregate covers
+    /// the refs this app would actually refresh — the ones a connector claims and
+    /// either serves now (`.ready`) or will serve once configured
+    /// (`.notConfigured`). A ref nothing claims will never get newer, so quoting its
+    /// age as "integration data is N days old" describes something the user cannot
+    /// act on.
+    func oldestFetch(of rows: [SourceRef]) -> Date? {
+        rows.lazy
+            .filter { row in
+                switch registry.dispatch(row.snapshot) {
+                case .ready, .notConfigured: return true
+                case .disabled, .unhandled: return false
+                }
+            }
+            .compactMap(\.lastFetchedAt)
+            .min()
     }
 }
 

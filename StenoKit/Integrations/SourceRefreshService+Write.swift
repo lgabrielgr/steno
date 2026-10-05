@@ -37,6 +37,9 @@ extension SourceRefreshService {
         /// Refs a connector claimed but could not fetch for want of a credential.
         let notConfigured: Int
 
+        /// Refs claimed only by connectors the user switched off (D-216).
+        let disabled: Int
+
         /// Each ref's resume point, computed before dispatch and read again here
         /// (D-186).
         let resume: [UUID: ResumePoint]
@@ -47,6 +50,29 @@ extension SourceRefreshService {
         /// Refs dropped before dispatch because their event log could not be read.
         /// Added to `skipped`, never to `failures`.
         let unreadable: Int
+    }
+
+    /// The `sources` line for a pass that attempted nothing (Copilot, PR #45).
+    ///
+    /// **`applyAndSave` is never reached on those paths**, and its summary line was
+    /// the only logger — so `RefreshOutcome.disabled`, whose stated purpose is
+    /// explaining exactly such a pass, explained nothing. Here rather than inline in
+    /// `run` because `SourceRefreshService.swift` is at SwiftLint's 400-line limit,
+    /// and because the refresh log lines belong in one file.
+    ///
+    /// **Called from every zero-attempt return, which took two tries.** The first fix
+    /// covered the one where nothing was claimed and missed the one where everything
+    /// claimed had an unreadable event log — a mixed pass with disabled refs then
+    /// still logged nothing about them. Raised twice by Copilot on PR #45, the second
+    /// time against my own incomplete fix.
+    func logEmptyPass(notConfigured: Int, disabled: Int, skipped: Int = 0) {
+        Log.sources.info(
+            """
+            refresh: attempted 0 \
+            notConfigured \(notConfigured, privacy: .public) \
+            disabled \(disabled, privacy: .public) \
+            skipped \(skipped, privacy: .public)
+            """)
     }
 
     func applyAndSave(
@@ -68,11 +94,12 @@ extension SourceRefreshService {
             changed: saveFailed ? 0 : applied.changed,
             failures: applied.failures,
             notConfigured: pass.notConfigured,
+            disabled: pass.disabled,
             skipped: fetched.skipped + pass.unreadable,
             superseded: applied.superseded,
             duplicates: applied.duplicates,
             credentialWarnings: pass.warnings,
-            oldestFetch: Self.oldestFetch(of: rows),
+            oldestFetch: oldestFetch(of: rows),
             saveFailed: saveFailed)
 
         Log.sources.info(
@@ -82,6 +109,8 @@ extension SourceRefreshService {
             changed \(outcome.changed, privacy: .public) \
             failed \(outcome.failures.count, privacy: .public) \
             skipped \(outcome.skipped, privacy: .public) \
+            notConfigured \(outcome.notConfigured, privacy: .public) \
+            disabled \(outcome.disabled, privacy: .public) \
             duplicates \(outcome.duplicates, privacy: .public)
             """)
 

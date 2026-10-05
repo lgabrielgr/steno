@@ -4575,6 +4575,13 @@ and `.unhandled` when nothing claims it. Connectors are fixed at `init`; there i
 differently — one is fetched, one is reported to the user as an integration awaiting setup, and one
 is dropped without a trace.
 
+> **Extended by D-216 (2026-10-04): there is now a fourth case, `.disabled`.** FR-6's per-integration
+> toggle needed a verdict of its own, because reporting a switched-off integration as
+> `.notConfigured` tells the user to set up something they deliberately turned off. The precedence
+> among all four, and the silence `.disabled` keeps, are D-216's.
+
+
+
 **`.unhandled` is the normal case, not an error.** `SourceRefKind.url` has no connector in any
 planned milestone, and FR-1.5's extractor creates one for every link the user pastes. Logging it, or
 counting it as a failure, would put a permanent warning in front of a user who did nothing wrong —
@@ -6243,3 +6250,278 @@ inside the write precisely so it cannot be forgotten. The double stayed quiet, s
 dropped, so the reconfiguration test passed while the connector went on using the old site — the
 test could not fail for the thing it was written to catch. The double announces writes now; the one
 test that needs a stale memo opts out explicitly and says why.
+
+---
+
+### D-215 — One settings key holds the disabled integrations, not a flag each
+
+**2026-10-04** · M4-04 · **Status:** accepted
+
+FR-6 asks for a per-integration enable toggle. The obvious storage is a key per connector —
+`integrations.jira.enabled`, `integrations.confluence.enabled` — and it does not survive the next
+milestone. M5-02 adds MCP servers whose ids the user chooses, so there is no static list of keys to
+declare, and `AppSettings.allKeys` is a static list: `AISecretsTests` asserts both its contents and
+its count, which is the mechanism keeping §8's "secrets are never exported" audit honest. A key
+that cannot be listed is a key the audit cannot see.
+
+So `com.lgabrielgr.steno.integrations.disabled` holds a JSON array of the ids the user has switched
+off. Any number of integrations fit, including ids this build has never heard of, with no migration.
+
+**Disabled rather than enabled, so that absence is the permissive answer.** This is the posture
+`AppSettings.flag(_:)` already takes for §10.5's opt-out. `UserDefaults` holds nothing for a key
+never written, and the only correct reading of "nothing" here is "the user has switched nothing
+off". The inverse spelling would make a fresh install's integrations inert in the one direction
+nobody notices, because an integration that never fetches looks exactly like one with nothing to
+report.
+
+The stored array is sorted. A `Set`'s iteration order is its hash order and differs between
+processes, so an unsorted write would make an unchanged value a new value on disk — the same
+reasoning D-174 applies to export payloads.
+
+**Falsified by** `an unset store has every integration enabled`, `re-enabling removes the key rather
+than storing an empty array`, `the stored value is sorted, so a rewrite that changes nothing is
+stable`, and `a stored value of the wrong type reads as nothing disabled`.
+
+---
+
+### D-216 — A switched-off integration dispatches to its own case, and to silence
+
+**2026-10-04** · M4-04 · **Status:** accepted · **extends D-166**
+
+A disabled integration needed somewhere to land, and `.notConfigured` was the wrong place. It makes
+`SourceNotice` say "Some references have no integration set up yet" — which is false, and is an
+instruction the user already declined by switching the integration off. FR-5's reasoning applies
+directly: a warning that fires about a setting the user chose is one they learn to ignore.
+
+So `SourceDispatch` gains a fourth case. `RefreshOutcome` counts it so the `sources` log can still
+explain a pass that attempted nothing, and `SourceNotice` deliberately never mentions it.
+
+**Precedence is `.ready` > `.notConfigured` > `.disabled` > `.unhandled`.** A sentence the user can
+act on outranks silence, so where two connectors claim one ref and one is enabled-but-unconfigured
+while the other is switched off, the actionable verdict wins. And `.unhandled` stays itself: a
+pasted link is the ordinary case (D-166), not a switched-off integration.
+
+**`isEnabled` is a closure read per dispatch, not a filter applied at construction.** `StenoApp`
+builds the registry once for the process, so the other spelling would honour a toggle only after a
+relaunch — with nothing on screen saying so. It defaults to "everything is on", which is what keeps
+every M4-01 call site and test behaving exactly as before.
+
+**Two consequences that are requirements, not conveniences.** `credentialWarnings()` reads
+`registry.enabled` rather than `registry.all`: both Atlassian connectors share one credential
+(§5.3), so a user who switches Confluence off to stop its noise would otherwise keep being warned
+about a token it no longer uses — while Jira keeps warning, which is correct. And the Settings pane
+reads `registry.all`, because a row that vanished when switched off would offer no way to switch it
+back on.
+
+This is also what pushed `SourceRefreshService.swift` past SwiftLint's 400-line limit, so the
+dispatch loop became `classify(_:)` in the Reads half.
+
+**It required `AppSettings` to become `@unchecked Sendable`.** `SourceRegistry` is a `Sendable`
+struct whose `dispatch` is called from the refresh service's task group, so its stored closure must
+be `@Sendable` and must capture the settings. `UserDefaults` declares its `Sendable` conformance
+*unavailable*, so no checked conformance is reachable however this is written. The assertion is
+sound for a stateless facade with one stored property over a documented-thread-safe reference, and
+it is stated in the type because a non-thread-safe stored property added later would silently
+invalidate it.
+
+**Falsified by** `D-216: a switched-off claimant dispatches .disabled, not .notConfigured`,
+`D-216: an enabled-but-unconfigured claimant outranks a disabled one`, `D-216: the toggle is read
+per dispatch, so it takes effect without a relaunch`, `D-216: a pass that only skipped disabled
+integrations says nothing`, and `D-216: `enabled` hides what the user switched off and `all` still
+lists it`.
+
+---
+
+### D-217 — A site that does not resolve is its own error, mapped from DNS only
+
+**2026-10-04** · M4-04 · **Status:** accepted · **extends D-165, D-192**
+
+§5.2 forbids reporting a 401 as a generic network error, and the same reasoning reaches every
+failure the user can actually fix. A site typed `acmee.atlassian.net` is shaped correctly, passes
+`AtlassianCredential.baseURL`'s validation, reaches the resolver and fails — and
+`AtlassianErrors.error(forTransport:)` mapped every `URLError` but `.cancelled` to `.network`, so
+the user was told "Couldn't reach the integration. Check your connection." That sends them to their
+router over a typo, during stand-up prep, which is exactly the moment §5.2 is written about. It is
+also the most likely real mistake in this pane.
+
+`SourceError.siteNotFound` is mapped from `URLError.cannotFindHost` and `.dnsLookupFailed`.
+
+**`.cannotConnectToHost` deliberately stays `.network`.** A host that resolves and then refuses the
+connection is a proxy, a captive portal or a firewall — not a typo — and telling that user to edit
+a site address that is correct would be the wrong instruction. The parameterized test above
+asserted `.cannotFindHost == .network` until this task, which is what made the wrong sentence a
+documented behaviour rather than an oversight.
+
+**The case carries no host.** D-165's rule holds: no `SourceError` case carries a free-form
+`String`, which is what makes "a `SourceError` is always safe to log" a property of the type. The
+Settings pane interpolates the site it already holds in view state.
+
+**It earns its keep outside the test button.** `SourceNotice` gets its own branch, split out of
+`case .network, .timedOut`, so a mistyped site stops making every refresh blame the connection. It
+is shaped like `.credentialExpired`'s rather than composed through `cause` — composed, the remedy
+landed after the staleness clause and the sentence carried two em-dashes.
+
+**Verified against the wire by `make verify-integrations`** (D-220), because which `URLError` a
+real resolver returns is not something a double can establish.
+
+> **Revised the same day, by that harness, before this PR opened.** The premise above is wrong
+> about the dominant case. `*.atlassian.net` has **wildcard DNS**: `steno-selftest-no-such-site`
+> resolves to an Atlassian edge (13.227.180.4) and answers **404** on the verify endpoint, so the
+> DNS branch is never reached for a mistyped site. The live probe reported `notFound` — whose
+> sentence is "That reference doesn't exist, or this account can't see it", which sends the user
+> looking for a ticket they never named.
+>
+> The fix follows D-214's shape exactly: a status means what the *calling context* says it means.
+> `AtlassianErrors.error(forStatus:…)` takes a `notFound:` parameter alongside `badRequest:`,
+> defaulting to `.notFound`, and both clients' `verify` pass `.siteNotFound`.
+> `/rest/api/3/myself` and `/wiki/api/v2/spaces` answer 200 or 401 on a site that serves them, so a
+> 404 there means the host is not serving that API. A ref fetch's 404 keeps its own sentence, which
+> is why this is a parameter and not a global change.
+>
+> **A 404 there has a second cause**, and the wording had to grow to cover it: the site may be real
+> and simply not have that product. Both causes are "the configured site is not serving this" and
+> both have the same remedy, so they share the case, rather than the pane claiming the site does
+> not exist.
+>
+> **Corrected again in round 2 (Copilot, PR #45).** This note first quoted the pane as saying
+> "Steno reached acme.atlassian.net but found no Jira API there" — and that sentence shipped
+> briefly and was itself false, because `.siteNotFound` also carries `.cannotFindHost` and
+> `.dnsLookupFailed`, where nothing was reached at all. Which is this decision's own mistake made
+> a second time: a sentence asserting more than its case guarantees. The shipped wording is
+> **"Steno couldn't reach <integration> at <host>. Check the site address — or whether your site
+> has <integration>."**, which holds on all three paths.
+>
+> The DNS mapping stays. It is still the right answer when a host genuinely does not resolve, and
+> it costs nothing. It is simply not the path a typo takes.
+>
+> **This is the whole argument for D-220 made concrete.** Four reviewers and a spec round agreed
+> with a mapping that the first live run disproved in one line.
+
+**Falsified by** `D-217: a host that does not resolve is a wrong site address, not a network
+failure`, `D-217: the two site-shaped failures do not collapse into one another`, `D-217: a wrong
+site address is its own sentence, pointing at Settings`, and `D-217: a wrong site address does not
+read as a connection problem`.
+
+---
+
+### D-218 — The credential is rewritten from the Keychain, never from view state
+
+**2026-10-04** · M4-04 · **Status:** accepted · **extends D-157, D-190**
+
+Site, email and expiry are prefilled into the Integrations pane. None is a secret, and a user who
+cannot see which site is configured cannot fix a typo in it. The token never is (§8, and the
+second acceptance criterion).
+
+All four live in **one Keychain item** (D-190), so changing only the site rewrites the whole item —
+which needs the token. `saveCredential()` therefore reads the stored credential when the field is
+empty and uses its token as a **function-local**. No property of `IntegrationsSettingsModel` can
+hold it, which is what makes "never displayed in full after entry" a property of this code rather
+than of `SecureField`'s drawing behaviour. A `Mirror` walk over the type's stored properties asserts
+it, rather than an allowlist someone has to remember to update — `encodeIfPresent` taught this
+codebase what hand-written allowlists miss.
+
+**The path that mattered most: a refused read is not "no token".** Treating it as absent would
+write an empty token over a working one, so the save reports the refusal and writes nothing. The
+test asserts the *absence of a write*, because the store it needs is one whose reads fail and
+reading it back is therefore unavailable; `InMemoryAtlassianStore` grew a write counter for it.
+
+A verdict is dropped whenever the credential or a toggle changes. A green tick beside Jira after
+the token was replaced is a claim about a credential that no longer exists.
+
+**Falsified by** `§8: the stored token reaches no property of the model`, `D-218: saving with an
+empty token field keeps the stored token`, `D-218: saving with no token anywhere is refused rather
+than storing an empty one`, and `D-218: a refused Keychain read does not overwrite the credential
+with an empty token`.
+
+---
+
+### D-219 — Purging clears two columns, and the event log is what makes it safe
+
+**2026-10-04** · M4-04 · **Status:** accepted
+
+FR-6's "purge cached external data" clears `cachedSummary` and `lastFetchedAt` on every `SourceRef`
+and touches nothing else. No row is deleted, no `Event` is written or removed, and
+`ImportPlan.deletions` is not involved — §3.3 has exactly one sanctioned exception and this is not
+it. A cache column on a `SourceRef` is not an event.
+
+**The failure mode it looks like it should have does not occur, and that is worth recording because
+it is not obvious.** Clearing `lastFetchedAt` could plausibly make the next pass treat every ref as
+a first observation — which reports the summary and nothing else (D-169) while still recording every
+id it saw (D-188), so real changes would be swallowed and never reported again. It does not happen,
+because `SourceRefreshService.apply` computes that flag as
+`row.lastFetchedAt == nil && resume[row.id] == nil`, and the resume point is recovered from
+`externalUpdate` payloads in the log (D-184), which a purge leaves untouched. This is the same
+reasoning that fixed the post-import case in PR #43: first observation means the log has never
+reported this ref, not that the cache column is empty.
+
+**What it actually costs, which the first draft of the spec got wrong.** Nothing in the app displays
+`cachedSummary` — its only readers are `ExportRecords`, `ImportService+Merge`,
+`ImportService+Delete` and `StoreMerge`. The staleness wording is built from `lastFetchedAt` via
+`RefreshOutcome.Failure.cachedAt`. So the costs are: every ref becomes due at once (bounded by
+D18's 20-task cap and `maxInFlight == 4`, the shape of a first launch); a *failed* fetch can no
+longer say how old the data it fell back on is; and an export taken with `--include-cached` carries
+nothing for those refs. The spec's first version claimed a §7.4 offline fallback that no code
+implements — written from `SourceConnector.swift`'s own comment, which asserted that reader and is
+corrected in this PR.
+
+**A plain confirmation, not §10.1's typed one.** Typed confirmation exists for an irreversible wipe
+of the user's authored data; this removes only data the app can re-fetch, and ceremony
+disproportionate to the risk is ceremony users learn to click through.
+
+A refused save rolls back for D-172's reason: cleared columns left in a dirty context are committed
+by the next unrelated capture or note, which would make a refused purge happen anyway, minutes
+later, with nothing to trace it to.
+
+**Falsified by** `a purge clears both cache columns and leaves everything else standing`, `§3.3: a
+purge writes and removes no event`, `D-219: a purged ref is not a first observation, so the next
+pass still reports changes`, `the count names refs that held something, not every ref in the store`,
+and `D-172: a refused save rolls back, so the cache is still there`.
+
+---
+
+### D-220 — `integrations-selftest`, and `make verify-integrations`
+
+**2026-10-04** · M4-04 · **Status:** accepted · **extends D-138, D-197**
+
+D-138's shape, applied to the pane whose whole point is telling four failures apart.
+
+`make test` denies outbound networking (§9.4, D-012) and stays out of the Keychain (D-134), which
+leaves one fact in this task unverifiable by the suite: whether a site that is shaped correctly and
+does not exist reports `siteNotFound` rather than `network`. That depends on which `URLError` the
+real resolver returns — a fact no double can establish, since a double would only repeat what the
+author assumed — and it decides whether the user is sent to Settings or to their router.
+
+So a hidden, store-free `integrations-selftest` runs against `AtlassianKeychainStore`: it tests
+both connectors on the stored credential, probes a nonexistent `*.atlassian.net` subdomain,
+confirms a non-Atlassian host is refused before any request is made, and prints §5.2's expiry
+arithmetic. It also exercises the real store's `credential()` read, which no test does.
+
+**What the subdomain probe actually establishes, after D-217's revision.** That the
+*context-specific 404 mapping* holds against the live API — wildcard DNS means the host resolves
+and the verify endpoint answers 404 — while still accepting a genuine DNS failure as the same
+verdict. The probe was written believing it would exercise the DNS path, and its whole value turned
+out to be proving that belief wrong on the first run.
+
+> **Corrected before merge (Copilot, PR #45): it does not drive `IntegrationsSettingsModel`.**
+> This entry and the file's own comment both claimed it did. It reads the store directly and builds
+> the connectors itself — and the model *cannot* be driven from here: it is `@MainActor`, and
+> `CLISync.runSynchronously` blocks the main thread on a semaphore while the work runs on the
+> cooperative pool, so a main-actor hop inside that work deadlocks the bridge. `CLISync`'s own
+> documentation states that as a requirement on its callers; the claim was written without checking
+> it.
+>
+> The model's `load()` and `saveCredential()` are covered by `IntegrationsSettingsModelTests`
+> against a double, and the real Keychain round trip is covered by the *pair*
+> `make atlassian-login` (writes) and `make verify-integrations` (reads) — which is a better split
+> than one harness doing both, but it is not what was claimed.
+
+**The probe site is deliberately well-formed.** A site `AtlassianCredential.cloudHost` refuses never
+reaches DNS and would establish nothing; a test asserts that the probe site passes that validation
+and that the foreign-host probe does not. The probe carries a placeholder token rather than the
+stored one, so nothing real travels even if a request somehow got past the resolver.
+
+Nothing it prints contains the token on any path, asserted rather than reviewed: interpolating it
+into the credential line turns `§8: the token never appears in the output, on any path` red.
+
+**Falsified by** the file's own tests, and by `make verify-integrations` against a real site — which
+is the half the suite cannot perform.

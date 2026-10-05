@@ -103,6 +103,35 @@ func theConnectionTestAsksMyself() async throws {
     #expect(asked == ["myself"])
 }
 
+@Test("D-217 revised: a 404 from the verify endpoint is a wrong site, not a missing reference")
+func theConnectionTestReportsAWrongSite() async throws {
+    // **The defect `make verify-integrations` found.** `*.atlassian.net` has wildcard
+    // DNS, so a mistyped-but-well-formed site resolves to an Atlassian edge and
+    // answers 404 here — the live probe reported `notFound`, whose sentence is about a
+    // missing *ticket* and sends the user looking for something they never named.
+    //
+    // `/rest/api/3/myself` answers 200 or 401 on a site serving the Jira API, so a 404
+    // means this host is not serving it. Mutation: drop `notFound: .siteNotFound` from
+    // `verify`. Red.
+    let wrongSite = StubJiraTransport(routes: ["myself": [.status(404)]])
+    await #expect(throws: SourceError.siteNotFound) {
+        try await JiraClient(transport: wrongSite).verify(credential: JiraFixture.credential())
+    }
+}
+
+@Test("D-217 revised: a 404 on a ref fetch still means the reference is missing")
+func aFetchStillReportsAMissingReference() async throws {
+    // The other half, and the reason the 404 is a parameter rather than a global
+    // change: a mistyped ticket key must keep its own sentence.
+    var routes = JiraFixture.quietRoutes()
+    routes["issue"] = [.status(404)]
+    let missing = StubJiraTransport(routes: routes)
+    await #expect(throws: SourceError.notFound) {
+        _ = try await JiraClient(transport: missing).changeSet(
+            key: "PAY-421", since: since, credential: JiraFixture.credential())
+    }
+}
+
 @Test("FR-6: a rejected credential is distinguishable from an unreachable host")
 func theConnectionTestDistinguishesItsFailures() async throws {
     let rejected = StubJiraTransport(routes: ["myself": [.status(403)]])

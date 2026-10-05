@@ -97,6 +97,12 @@ public enum CLIEntry {
             return AtlassianLogin.run(store: AtlassianKeychainStore())
         }
 
+        // Before the store, for the same reason: FR-6's pane reads a credential and
+        // asks two APIs whether it works, and neither touches the event log (D-220).
+        if case .integrationsSelftest = command {
+            return IntegrationsSelftest.runSynchronously(credentials: AtlassianKeychainStore())
+        }
+
         // Before the store, and the network twin of the two above: it reads the
         // stored credential and makes four GETs against one ticket (D-197).
         if case .jiraSelftest(let issueKey) = command {

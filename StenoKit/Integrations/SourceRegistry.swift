@@ -14,6 +14,15 @@ public enum SourceDispatch: Sendable {
     /// implying the fetch failed.
     case notConfigured
 
+    /// A connector claims this ref, and the user has switched it off (D-216).
+    ///
+    /// **Its own case because the user must not be told to set up something they
+    /// deliberately turned off.** Folding this into `.notConfigured` makes the
+    /// stand-up sheet say "some references have no integration set up yet" — false,
+    /// and an instruction they have already declined. `SourceNotice` says nothing
+    /// about this case; `RefreshOutcome` counts it so the log still can.
+    case disabled
+
     /// Nothing claims it.
     ///
     /// **The normal case, not an error.** `SourceRefKind.url` has no connector
@@ -37,28 +46,53 @@ public enum SourceDispatch: Sendable {
 public struct SourceRegistry: Sendable {
     private let connectors: [any SourceConnector]
 
+    /// Whether a connector id may fetch — FR-6's per-integration toggle (D-216).
+    private let isEnabled: @Sendable (String) -> Bool
+
     /// - Parameter connectors: **registration order is priority.** M5's MCP
     ///   connector will claim kinds a native connector also claims, and ordering
     ///   decided by which Settings pane the user happened to open first is not a
     ///   routing rule anyone can reason about. There is deliberately no
     ///   `register()`: the order lives at the composition root, where it is one
     ///   readable array literal.
-    public init(connectors: [any SourceConnector] = []) {
+    /// - Parameter isEnabled: FR-6's toggle, read **per dispatch** rather than at
+    ///   construction (D-216). `StenoApp` builds this registry once for the
+    ///   process, so a registry filtered at construction time would honour a
+    ///   toggle only after a relaunch — and nothing on screen would say so.
+    ///   Defaulted to "everything is on", which is what keeps every M4-01 call
+    ///   site and test behaving exactly as before.
+    public init(
+        connectors: [any SourceConnector] = [],
+        isEnabled: @escaping @Sendable (String) -> Bool = { _ in true }
+    ) {
         self.connectors = connectors
+        self.isEnabled = isEnabled
     }
 
-    /// The first configured connector that claims `ref`, or why none did.
+    /// The first enabled, configured connector that claims `ref`, or why none did.
     ///
     /// Configuration is part of the routing decision rather than a check the
     /// service makes afterwards: with two connectors claiming one kind, an
     /// unconfigured first one must not shadow a configured second.
+    ///
+    /// **Precedence: `.ready` > `.notConfigured` > `.disabled` > `.unhandled`**
+    /// (D-216). A sentence the user can act on outranks silence, so where two
+    /// connectors claim one ref and one is enabled-but-unconfigured while the other
+    /// is switched off, "this integration isn't set up yet" is the answer — the
+    /// disabled one is reported only when nothing enabled claims the ref at all.
     public func dispatch(_ ref: SourceRefSnapshot) -> SourceDispatch {
-        var claimed = false
+        var claimedByEnabled = false
+        var claimedByDisabled = false
         for connector in connectors where connector.canHandle(ref) {
-            claimed = true
+            guard isEnabled(connector.id) else {
+                claimedByDisabled = true
+                continue
+            }
+            claimedByEnabled = true
             if connector.isConfigured { return .ready(connector) }
         }
-        return claimed ? .notConfigured : .unhandled
+        if claimedByEnabled { return .notConfigured }
+        return claimedByDisabled ? .disabled : .unhandled
     }
 
     /// One named connector, for FR-6's per-integration "Test connection" button
@@ -67,6 +101,18 @@ public struct SourceRegistry: Sendable {
         connectors.first { $0.id == id }
     }
 
-    /// Every registered connector, for M4-04's list of integrations.
+    /// The connectors the user has not switched off (D-216).
+    ///
+    /// **What `credentialWarnings()` reads.** Both Atlassian connectors share one
+    /// credential (§5.3), so a user who switches Confluence off to stop its noise
+    /// would otherwise keep being warned about the token it is no longer using. Jira
+    /// keeps warning while it is on, which is correct — the token still matters to it.
+    public var enabled: [any SourceConnector] { connectors.filter { isEnabled($0.id) } }
+
+    /// Every registered connector, **including the disabled ones**, for M4-04's list
+    /// of integrations.
+    ///
+    /// The pane must list a disabled integration: one that vanished when switched off
+    /// would offer no way to switch it back on.
     public var all: [any SourceConnector] { connectors }
 }

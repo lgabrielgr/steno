@@ -49,11 +49,14 @@ struct RefreshFixture {
     }
 
     @discardableResult
+    /// - Parameter url: §3.4's optional link. Defaulted to none; a test that needs a
+    ///   ref the connectors route by *host* — a site change orphaning a cached ref —
+    ///   passes one.
     func ref(
         _ identifier: String, on task: TaskItem, kind: SourceRefKind = .jiraIssue,
-        fetched: Date? = nil, summary: String? = nil
+        url: String? = nil, fetched: Date? = nil, summary: String? = nil
     ) throws -> SourceRef {
-        let ref = SourceRef(taskID: task.id, kind: kind, identifier: identifier)
+        let ref = SourceRef(taskID: task.id, kind: kind, identifier: identifier, url: url)
         context.insert(ref)
         ref.task = task
         if let fetched { ref.recordFetch(summary: summary, at: fetched) }
@@ -109,8 +112,11 @@ struct RefreshFixture {
     ///   queues behind another's — the production default is the shared instance
     ///   (D-183). A test that wants two services serialized against each other
     ///   passes one gate to both.
+    /// - Parameter disabled: connector ids FR-6's toggle has switched off (D-216).
+    ///   Defaulted to none, so every existing caller is unchanged.
     func service(
         connectors: [any SourceConnector],
+        disabled: Set<String> = [],
         nowOffset: TimeInterval = 0,
         save: @escaping (ModelContext) throws -> Void = { try $0.save() },
         readEvents: @escaping (ModelContext, UUID) throws -> [Event] = {
@@ -121,7 +127,9 @@ struct RefreshFixture {
         gate: SourceRefreshGate = SourceRefreshGate()
     ) -> SourceRefreshService {
         SourceRefreshService(
-            context: context, registry: SourceRegistry(connectors: connectors),
+            context: context,
+            registry: SourceRegistry(
+                connectors: connectors, isEnabled: { !disabled.contains($0) }),
             now: { Self.origin.addingTimeInterval(nowOffset) }, save: save,
             readEvents: readEvents, perFetch: perFetch, budget: budget, gate: gate)
     }

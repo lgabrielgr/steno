@@ -265,3 +265,16 @@ func confluenceCurrentEditorSurvivesTheLookupCap() async throws {
     let counts = await transport.callCounts
     #expect(counts["user"] == ConfluenceClient.maxNameLookups)
 }
+
+@Test("D-217 revised: a 404 from the verify endpoint is a wrong site, not a missing page")
+func theConfluenceConnectionTestReportsAWrongSite() async throws {
+    // `JiraClient.verify`'s finding, on the other API. The v2 spaces endpoint answers
+    // 200 or 401 on a site serving Confluence, so a 404 means this host is not serving
+    // it — a mistyped site, or a site without Confluence. Mutation: drop
+    // `notFound: .siteNotFound` from `verify`. Red.
+    let wrongSite = StubConfluenceTransport(routes: ["spaces": [.status(404)]])
+    await #expect(throws: SourceError.siteNotFound) {
+        try await ConfluenceClient(transport: wrongSite)
+            .verify(credential: JiraFixture.credential())
+    }
+}

@@ -23,9 +23,10 @@ public enum SettingsPane: String, CaseIterable, Identifiable, Sendable {
     /// It carries the auto-export settings and nothing else. FR-6 also lists
     /// "export all data as JSON", which is already the File menu's Export item
     /// and is not duplicated here, and "purge cached external data", which
-    /// waits for M4 — there is no cached external data until integrations
-    /// exist, and a button that purges nothing is one nobody can verify
-    /// (D-127).
+    /// waited for M4 — there was no cached external data until integrations
+    /// existed, and a button that purges nothing is one nobody can verify
+    /// (D-127). **It now lives in `integrations`**, because the cache it clears
+    /// is M4-01's (D-219).
     case data
 
     /// FR-6's AI area: the provider, the Keychain-backed key, the model picker
@@ -39,8 +40,16 @@ public enum SettingsPane: String, CaseIterable, Identifiable, Sendable {
     /// `identifier_name` rejects a two-character name — the same rule that
     /// named `Log.aiLayer`. The *tab* still reads "AI".
     case aiProvider
-    // case integrations — M4-04: Atlassian site, credentials, MCP servers
-    // case stale        — M6-01: the global default N in days
+
+    /// FR-6's Integrations area: the Atlassian credential, the per-integration
+    /// toggle and connection test, and "purge cached external data" (§5.2, §5.3,
+    /// §8).
+    ///
+    /// **MCP server management is not here, though FR-6 groups it in this pane.**
+    /// It is M5-02's, and the pane renders a row per registered connector — so an
+    /// MCP connector appears here with no change to this file when one exists.
+    case integrations
+    // case stale — M6-01: the global default N in days
 
     public var id: String { rawValue }
 
@@ -50,6 +59,7 @@ public enum SettingsPane: String, CaseIterable, Identifiable, Sendable {
         case .capture: return "Capture"
         case .data: return "Data"
         case .aiProvider: return "AI"
+        case .integrations: return "Integrations"
         }
     }
 
@@ -59,6 +69,7 @@ public enum SettingsPane: String, CaseIterable, Identifiable, Sendable {
         case .capture: return "keyboard"
         case .data: return "externaldrive"
         case .aiProvider: return "sparkles"
+        case .integrations: return "link"
         }
     }
 }
