@@ -49,10 +49,25 @@ struct StenoApp: App {
     ///
     /// The two claim different `SourceRefKind`s, so order decides nothing today; it
     /// will when M5's MCP connector claims kinds a native connector also claims.
-    private let sourceRegistry = SourceRegistry(connectors: [
-        JiraConnector(credentials: AtlassianKeychainStore()),
-        ConfluenceConnector(credentials: AtlassianKeychainStore()),
-    ])
+    ///
+    /// **Built in `init` rather than here, since M4-04.** FR-6's per-integration
+    /// toggle is read per dispatch from `AppSettings` (D-216), and a property
+    /// initializer cannot reach another property — so the enablement closure, and
+    /// therefore this array, moved into the initializer below.
+    private let sourceRegistry: SourceRegistry
+
+    /// FR-6's Integrations pane, built here for the reason the others are.
+    ///
+    /// **Outside the `store` switch, like the AI pane.** The credential lives in the
+    /// Keychain and the toggles in `UserDefaults`, so everything but the purge works
+    /// in a build whose store will not open (§13).
+    private let integrationsSettingsModel: IntegrationsSettingsModel
+
+    /// FR-6's settings, read by the pane and by the registry's enablement check.
+    ///
+    /// One instance, so the pane that writes a toggle and the routing that reads it
+    /// cannot disagree about which store they mean.
+    private let appSettings = AppSettings()
 
     /// §10.5's auto-export. Held for the whole process because it owns a timer
     /// and a termination observation — a controller that went out of scope
@@ -82,6 +97,8 @@ struct StenoApp: App {
             providers: [AnthropicProvider(credentials: KeychainCredentialStore())],
             credentials: KeychainCredentialStore())
 
+        sourceRegistry = Self.makeSourceRegistry(settings: appSettings)
+
         let path = (try? StenoStore.defaultURL.path) ?? "<could not resolve Application Support>"
         storePath = path
         store = Result { try StenoStore.live() }
@@ -99,43 +116,13 @@ struct StenoApp: App {
             Log.app.fault("\(detail, privacy: .public)")
         }
 
-        // Capture must always have somewhere to go (FR-1.4, §1.1). A failure
-        // here is not fatal — the window still opens, and the empty state
-        // tells the user to create a project — so it is logged, not surfaced.
-        if case .success(let container) = store {
-            do {
-                // `container.mainContext`, deliberately — **not** a fresh
-                // `ModelContext(container)`. `MainWindowView.init` builds its
-                // view model over `mainContext`, so seeding into the same
-                // context makes the window's first fetch a same-context read
-                // that is guaranteed to see the seeded row. A sibling context
-                // would leave the one guarantee this seeding exists to make
-                // resting on cross-context visibility, which SwiftData does
-                // not contractually document — and which no test here could
-                // cover, since GUI automation is unavailable.
-                //
-                // This does not contradict the tests' use of
-                // `ModelContext(container)`: that rule exists because
-                // `mainContext` does not retain its container, and a test
-                // whose container is a local would dangle. Here `store` is a
-                // stored property of the `@main` App, so the container lives
-                // for the whole process.
-                if let seeded = try StenoStore.seedDefaultProjectIfEmpty(
-                    in: container.mainContext)
-                {
-                    Log.app.info("seeded default project \(seeded.name, privacy: .public)")
-                }
-            } catch {
-                Log.app.error(
-                    "could not seed the default project: \(String(describing: error), privacy: .public)"
-                )
-            }
-        }
-
         // Only on a working store: with no container there is nowhere to
         // capture to, and a hotkey opening a panel over a failure scene would
         // be worse than no hotkey (D-018).
         if case .success(let container) = store {
+            // Capture must always have somewhere to go (FR-1.4, §1.1).
+            Self.seedDefaultProject(in: container)
+
             let controller = QuickCaptureController(container: container)
             controller.start()
             quickCapture = controller
@@ -156,6 +143,12 @@ struct StenoApp: App {
             exportController.start()
             autoExport = exportController
 
+            // FR-6's purge acts on the same context everything else writes through,
+            // so a purge and a refresh cannot see different stores (D-219).
+            integrationsSettingsModel = IntegrationsSettingsModel(
+                registry: sourceRegistry, settings: appSettings,
+                purge: SourceCachePurge(context: container.mainContext))
+
             Self.startLaunchRefresh(container: container, registry: sourceRegistry)
         } else {
             quickCapture = nil
@@ -169,6 +162,66 @@ struct StenoApp: App {
             // themselves and say why (§13 — degradation ships with the
             // feature, not after it).
             settingsModel = SettingsModel()
+            // No store means no cache to purge. The credential, the toggles and the
+            // connection tests all still work, and the pane says why the purge does
+            // not (§13 — degradation ships with the feature, not after it).
+            integrationsSettingsModel = IntegrationsSettingsModel(
+                registry: sourceRegistry, settings: appSettings, purge: nil)
+        }
+    }
+
+    /// §5.1's connectors, and FR-6's toggle over them (D-216).
+    ///
+    /// **A factory rather than a property initializer**, because the enablement
+    /// closure has to capture `AppSettings` and a property initializer cannot reach
+    /// another property. Static, so it does not read `self` before every stored
+    /// property is assigned.
+    ///
+    /// **Registration order is priority** (D-166), and this array is the one place
+    /// it is decided. **Two stores, one credential** (§5.3): `AtlassianKeychainStore`
+    /// is a stateless struct over a single Keychain item, so both connectors read
+    /// the same site, email and token — which is what makes "configure Atlassian
+    /// once and both work" true rather than aspirational. Each keeps its own
+    /// thirty-second memo of it (D-198).
+    private static func makeSourceRegistry(settings: AppSettings) -> SourceRegistry {
+        SourceRegistry(
+            connectors: [
+                JiraConnector(credentials: AtlassianKeychainStore()),
+                ConfluenceConnector(credentials: AtlassianKeychainStore()),
+            ],
+            isEnabled: { settings.isIntegrationEnabled($0) })
+    }
+
+    /// Capture must always have somewhere to go (FR-1.4, §1.1).
+    ///
+    /// A failure here is not fatal — the window still opens, and the empty state
+    /// tells the user to create a project — so it is logged, not surfaced.
+    ///
+    /// **Extracted from `init`**, which M4-04 pushed past SwiftLint's 50-line body
+    /// budget. The reasoning about which context to seed into is unchanged and is
+    /// recorded below.
+    ///
+    /// `container.mainContext`, deliberately — **not** a fresh
+    /// `ModelContext(container)`. `MainWindowView.init` builds its view model over
+    /// `mainContext`, so seeding into the same context makes the window's first
+    /// fetch a same-context read that is guaranteed to see the seeded row. A sibling
+    /// context would leave the one guarantee this seeding exists to make resting on
+    /// cross-context visibility, which SwiftData does not contractually document —
+    /// and which no test here could cover, since GUI automation is unavailable.
+    ///
+    /// This does not contradict the tests' use of `ModelContext(container)`: that
+    /// rule exists because `mainContext` does not retain its container, and a test
+    /// whose container is a local would dangle. Here the container is a stored
+    /// property of the `@main` App, so it lives for the whole process.
+    private static func seedDefaultProject(in container: ModelContainer) {
+        do {
+            if let seeded = try StenoStore.seedDefaultProjectIfEmpty(in: container.mainContext) {
+                Log.app.info("seeded default project \(seeded.name, privacy: .public)")
+            }
+        } catch {
+            Log.app.error(
+                "could not seed the default project: \(String(describing: error), privacy: .public)"
+            )
         }
     }
 
@@ -232,7 +285,8 @@ struct StenoApp: App {
         // window open, and M1-04's popover is left as it was built.
         Settings {
             SettingsView(
-                model: settingsModel, dataModel: dataSettingsModel, aiModel: aiSettingsModel)
+                model: settingsModel, dataModel: dataSettingsModel, aiModel: aiSettingsModel,
+                integrationsModel: integrationsSettingsModel)
         }
     }
 }

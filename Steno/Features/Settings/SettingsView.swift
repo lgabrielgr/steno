@@ -8,11 +8,12 @@ import SwiftUI
 /// exists, so the registry cannot silently acquire a tab that renders nothing
 /// — the one failure mode a registry of this shape has.
 ///
-/// Three panes as of M3-04; two more are sketched in `SettingsPane`.
+/// Four panes as of M4-04; one more is sketched in `SettingsPane`.
 struct SettingsView: View {
     let model: SettingsModel
     let dataModel: DataSettingsModel
     let aiModel: AISettingsModel
+    let integrationsModel: IntegrationsSettingsModel
     @State private var selection: SettingsPane = .capture
 
     var body: some View {
@@ -37,6 +38,8 @@ struct SettingsView: View {
             DataSettingsPane(model: dataModel)
         case .aiProvider:
             AISettingsPane(model: aiModel)
+        case .integrations:
+            IntegrationsSettingsPane(model: integrationsModel)
         }
     }
 }
