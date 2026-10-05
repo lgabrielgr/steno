@@ -97,9 +97,14 @@ struct JiraClient: Sendable {
     /// confuse the two.
     func verify(credential: AtlassianCredential) async throws {
         guard let base = credential.baseURL else { throw SourceError.notConfigured }
+        // **`.siteNotFound` for a 404 here, not `.notFound`** (D-217, revised).
+        // `/rest/api/3/myself` answers 200 or 401 on a site that serves the Jira API,
+        // so a 404 means this host is not serving it — a mistyped site, or a site
+        // without Jira. Telling the user a *reference* does not exist would send them
+        // looking for a ticket they never named.
         _ = try await fetch(
             JiraUser.self, from: .currentUser, base: base,
-            authorization: credential.basicAuthorization)
+            authorization: credential.basicAuthorization, notFound: .siteNotFound)
     }
 
     // MARK: - Paging
@@ -279,8 +284,12 @@ struct JiraClient: Sendable {
     /// The three failure shapes are separated deliberately: a transport failure, a
     /// status Jira chose, and a body that would not decode are different facts, and
     /// §5.5's banner says different things about them.
+    /// - Parameter notFound: what a `404` means for this call (D-217, revised).
+    ///   Defaults to `.notFound`, which is right for every ref fetch; `verify`
+    ///   passes `.siteNotFound`.
     private func fetch<T: Decodable>(
-        _ type: T.Type, from endpoint: JiraEndpoint, base: URL, authorization: String
+        _ type: T.Type, from endpoint: JiraEndpoint, base: URL, authorization: String,
+        notFound: SourceError = .notFound
     ) async throws -> T {
         // A key that is not shaped like a key is a mistyped reference, not a programmer
         // error — `JiraEndpoint.request` explains why this is `nil` rather than a trap,
@@ -297,7 +306,8 @@ struct JiraClient: Sendable {
         }
 
         if let failure = AtlassianErrors.error(
-            forStatus: response.status, headers: response.headers, badRequest: .notFound)
+            forStatus: response.status, headers: response.headers, badRequest: .notFound,
+            notFound: notFound)
         {
             throw failure
         }

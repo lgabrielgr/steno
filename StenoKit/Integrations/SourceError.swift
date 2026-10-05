@@ -57,14 +57,23 @@ public enum SourceError: Error, Equatable, Sendable {
     /// a connection.
     case network
 
-    /// The configured host does not resolve (D-217).
+    /// The configured site does not serve this integration's API (D-217).
     ///
     /// **Its own case because the remedy is a setting, not the network.** §5.2
     /// forbids reporting a 401 as a generic network error, and the same reasoning
     /// reaches every failure the user can actually fix: a site typed as
-    /// `acmee.atlassian.net` is shaped correctly, passes `baseURL`'s validation,
-    /// fails DNS, and was reported as "check your connection" — sending the user to
-    /// their router over a typo, during stand-up prep.
+    /// `acmee.atlassian.net` is shaped correctly and passes `baseURL`'s validation,
+    /// and was reported as "check your connection" — sending the user to their
+    /// router over a typo, during stand-up prep.
+    ///
+    /// **Two causes, and the dominant one is not DNS.** `*.atlassian.net` has
+    /// wildcard DNS, so a mistyped-but-well-formed site resolves to an Atlassian
+    /// edge and answers `404` on the verify endpoint rather than failing to resolve
+    /// — found by `make verify-integrations` against the live API, not by review.
+    /// A 404 there can also mean the site is real but does not have that product.
+    /// Both are "the site address in Settings is not serving this", and both have
+    /// the same remedy, so they share a case; a host that genuinely does not resolve
+    /// maps here too.
     ///
     /// **Carries no host**, for this type's reason: the pane interpolates the site
     /// it already holds in view state, and a case with a free-form `String` would
@@ -107,7 +116,10 @@ extension SourceError: LocalizedError {
         case .siteNotFound:
             // No host named: the type carries none. The Settings pane says which
             // site it could not find, because that is the surface that holds it.
-            return "Couldn't find that site. Check the site address in Settings."
+            //
+            // "isn't serving" rather than "doesn't exist", because a 404 on the
+            // verify endpoint also describes a real site without that product.
+            return "That site isn't serving this integration. Check the site address in Settings."
         case .timedOut:
             return "The integration didn't answer in time."
         case .rateLimited:

@@ -244,7 +244,7 @@ struct IntegrationsSettingsPane: View {
                 .font(.callout)
         case .failed(let error):
             VStack(alignment: .leading, spacing: 4) {
-                Label(sentence(for: error), systemImage: symbol(for: error))
+                Label(sentence(for: error, row: row), systemImage: symbol(for: error))
                 if error == .credentialExpired {
                     Link("Create a new token", destination: AtlassianTokenExpiry.renewalURL)
                 }
@@ -254,12 +254,17 @@ struct IntegrationsSettingsPane: View {
         }
     }
 
-    private func sentence(for error: SourceError) -> String {
+    private func sentence(for error: SourceError, row: IntegrationsSettingsModel.Row)
+        -> String
+    {
         switch error {
         case .siteNotFound:
             // The one case that names the site, because this is the surface that
-            // holds it.
-            return "Steno couldn't find \(model.site). Check the site above."
+            // holds it — and the only one that has to name two causes, because a 404
+            // on the verify endpoint means either a mistyped site or a real site
+            // without this product (D-217).
+            return "Steno reached \(model.site) but found no \(row.displayName) API there. "
+                + "Check the site address — or whether your site has \(row.displayName)."
         case .invalidCredential:
             return "Atlassian rejected this email and token. Check both, and see the note above "
                 + "about admin policy."

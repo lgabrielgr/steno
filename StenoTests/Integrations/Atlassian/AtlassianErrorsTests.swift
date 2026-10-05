@@ -152,3 +152,37 @@ func badRequestIsPerAPI() {
         #expect(asJira == asConfluence)
     }
 }
+
+@Test("D-217 revised: a 404 means what the calling context says it means")
+func notFoundIsPerCall() {
+    // **Found by `make verify-integrations`, not by review.** `*.atlassian.net` has
+    // wildcard DNS, so a mistyped-but-well-formed site resolves to an Atlassian edge
+    // and answers 404 — the DNS branch this task first relied on is never reached for
+    // the case it was written for. The live probe reported `notFound`, which is the
+    // sentence about a missing *ticket*.
+    #expect(
+        AtlassianErrors.error(forStatus: 404, headers: [:], badRequest: .notFound)
+            == .notFound)
+    #expect(
+        AtlassianErrors.error(
+            forStatus: 404, headers: [:], badRequest: .notFound, notFound: .siteNotFound)
+            == .siteNotFound)
+}
+
+@Test("D-217 revised: parameterizing the 404 leaves every other status alone")
+func theNotFoundParameterIsNarrow() {
+    // A 401 on a verify is still an expired or revoked token, not a wrong site —
+    // §5.2's requirement, and the one this must not have broken.
+    #expect(
+        AtlassianErrors.error(
+            forStatus: 401, headers: [:], badRequest: .notFound, notFound: .siteNotFound)
+            == .credentialExpired)
+    #expect(
+        AtlassianErrors.error(
+            forStatus: 403, headers: [:], badRequest: .notFound, notFound: .siteNotFound)
+            == .invalidCredential)
+    #expect(
+        AtlassianErrors.error(
+            forStatus: 200, headers: [:], badRequest: .notFound, notFound: .siteNotFound)
+            == nil)
+}

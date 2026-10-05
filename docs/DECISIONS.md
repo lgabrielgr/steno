@@ -6364,6 +6364,32 @@ landed after the staleness clause and the sentence carried two em-dashes.
 **Verified against the wire by `make verify-integrations`** (D-220), because which `URLError` a
 real resolver returns is not something a double can establish.
 
+> **Revised the same day, by that harness, before this PR opened.** The premise above is wrong
+> about the dominant case. `*.atlassian.net` has **wildcard DNS**: `steno-selftest-no-such-site`
+> resolves to an Atlassian edge (13.227.180.4) and answers **404** on the verify endpoint, so the
+> DNS branch is never reached for a mistyped site. The live probe reported `notFound` — whose
+> sentence is "That reference doesn't exist, or this account can't see it", which sends the user
+> looking for a ticket they never named.
+>
+> The fix follows D-214's shape exactly: a status means what the *calling context* says it means.
+> `AtlassianErrors.error(forStatus:…)` takes a `notFound:` parameter alongside `badRequest:`,
+> defaulting to `.notFound`, and both clients' `verify` pass `.siteNotFound`.
+> `/rest/api/3/myself` and `/wiki/api/v2/spaces` answer 200 or 401 on a site that serves them, so a
+> 404 there means the host is not serving that API. A ref fetch's 404 keeps its own sentence, which
+> is why this is a parameter and not a global change.
+>
+> **A 404 there has a second cause**, and the wording had to grow to cover it: the site may be real
+> and simply not have that product. Both causes are "the configured site is not serving this" and
+> both have the same remedy, so they share the case — but the pane now says "Steno reached
+> acme.atlassian.net but found no Jira API there. Check the site address — or whether your site has
+> Jira", rather than claiming the site does not exist.
+>
+> The DNS mapping stays. It is still the right answer when a host genuinely does not resolve, and
+> it costs nothing. It is simply not the path a typo takes.
+>
+> **This is the whole argument for D-220 made concrete.** Four reviewers and a spec round agreed
+> with a mapping that the first live run disproved in one line.
+
 **Falsified by** `D-217: a host that does not resolve is a wrong site address, not a network
 failure`, `D-217: the two site-shaped failures do not collapse into one another`, `D-217: a wrong
 site address is its own sentence, pointing at Settings`, and `D-217: a wrong site address does not

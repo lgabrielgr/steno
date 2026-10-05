@@ -132,6 +132,13 @@ case siteNotFound   // "Couldn't reach that Atlassian site. Check the site addre
 
 Mapped from `URLError.cannotFindHost` and `URLError.dnsLookupFailed`.
 
+> **Superseded during implementation by D-217's revision; see `DECISIONS.md`.** `*.atlassian.net`
+> has wildcard DNS, so a mistyped site resolves and answers **404** on the verify endpoint — the
+> DNS branch is never reached for the case this section was written about. `make verify-integrations`
+> found it on its first run. The 404 is now parameterized per call, the way D-214 parameterized the
+> 400: a ref fetch's 404 stays `.notFound`, and `verify`'s becomes `.siteNotFound`. The DNS mapping
+> is kept, and the wording grew to cover a real site that lacks the product.
+
 **Not `.cannotConnectToHost`.** A host that resolves and then refuses the connection is a proxy,
 a captive portal or a firewall — not a typo — and telling that user to edit a correct setting
 sends them to fix the wrong thing. It stays `.network`.

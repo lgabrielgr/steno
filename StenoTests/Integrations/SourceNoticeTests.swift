@@ -333,7 +333,8 @@ func aWrongSiteAddressPointsAtSettings() {
     // data", which is why the case has its own shape.
     #expect(
         sentence(for: outcome, now: now)
-            == "Jira's site address looks wrong — using 2 days old data. Check it in Settings.")
+            == "Jira isn't being served from your configured site — using 2 days old data. "
+            + "Check the site address in Settings.")
 }
 
 @Test("D-217: a wrong site address does not read as a connection problem")
@@ -353,7 +354,8 @@ func aWrongSiteWithNoCacheNamesNoAge() {
 
     #expect(
         sentence(for: outcome, now: now)
-            == "Jira\'s site address looks wrong — no cached data yet. Check it in Settings.")
+            == "Jira isn\'t being served from your configured site — no cached data yet. "
+            + "Check the site address in Settings.")
 }
 
 @Test("D-194 still holds: a failure outranks an expiry warning for the new case too")
@@ -364,5 +366,5 @@ func aSiteFailureOutranksTheExpiryWarning() {
     let outcome = RefreshOutcome(
         attempted: 1, failures: [failure(.siteNotFound)], credentialWarnings: [warning])
 
-    #expect(sentence(for: outcome, now: now)?.contains("site address") == true)
+    #expect(sentence(for: outcome, now: now)?.contains("configured site") == true)
 }
