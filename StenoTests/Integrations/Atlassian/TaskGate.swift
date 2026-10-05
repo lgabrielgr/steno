@@ -22,6 +22,15 @@ actor TaskGate {
         waiters.removeAll()
     }
 
+    /// Open from a synchronous context, without the caller awaiting.
+    ///
+    /// Added by M4-04's verdict-race tests, which run on `@MainActor` and need to
+    /// release a held connection between two assertions. The `Task` only hops to
+    /// this actor, so the ordering the tests rely on is still the gate's.
+    nonisolated func openNow() {
+        Task { await open() }
+    }
+
     /// Suspend until `open()` has been called.
     ///
     /// **It returns immediately only if `open()` came first**, and suspends otherwise —

@@ -6484,10 +6484,23 @@ does not exist reports `siteNotFound` rather than `network`. That depends on whi
 real resolver returns — a fact no double can establish, since a double would only repeat what the
 author assumed — and it decides whether the user is sent to Settings or to their router.
 
-So a hidden, store-free `integrations-selftest` drives the real `IntegrationsSettingsModel` against
-`AtlassianKeychainStore`: it tests both connectors on the stored credential, probes a nonexistent
-`*.atlassian.net` subdomain, confirms a non-Atlassian host is refused before any request is made,
-and prints §5.2's expiry arithmetic. It also exercises the real store's read, which no test does.
+So a hidden, store-free `integrations-selftest` runs against `AtlassianKeychainStore`: it tests
+both connectors on the stored credential, probes a nonexistent `*.atlassian.net` subdomain,
+confirms a non-Atlassian host is refused before any request is made, and prints §5.2's expiry
+arithmetic. It also exercises the real store's `credential()` read, which no test does.
+
+> **Corrected before merge (Copilot, PR #45): it does not drive `IntegrationsSettingsModel`.**
+> This entry and the file's own comment both claimed it did. It reads the store directly and builds
+> the connectors itself — and the model *cannot* be driven from here: it is `@MainActor`, and
+> `CLISync.runSynchronously` blocks the main thread on a semaphore while the work runs on the
+> cooperative pool, so a main-actor hop inside that work deadlocks the bridge. `CLISync`'s own
+> documentation states that as a requirement on its callers; the claim was written without checking
+> it.
+>
+> The model's `load()` and `saveCredential()` are covered by `IntegrationsSettingsModelTests`
+> against a double, and the real Keychain round trip is covered by the *pair*
+> `make atlassian-login` (writes) and `make verify-integrations` (reads) — which is a better split
+> than one harness doing both, but it is not what was claimed.
 
 **The probe site is deliberately well-formed.** A site `AtlassianCredential.cloudHost` refuses never
 reaches DNS and would establish nothing; a test asserts that the probe site passes that validation

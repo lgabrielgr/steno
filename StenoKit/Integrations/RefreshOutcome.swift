@@ -69,6 +69,12 @@ public struct RefreshOutcome: Sendable, Equatable {
     /// report, and a banner that complains about a setting the user chose is one
     /// they learn to ignore (FR-5's reasoning). It exists so the `sources` log can
     /// still explain a pass that attempted nothing.
+    ///
+    /// **Both loggers carry it, which this comment claimed before either did**
+    /// (Copilot, PR #45): `applyAndSave`'s summary line omitted the field, and a pass
+    /// of only disabled refs returns before that function runs — so the one case
+    /// this count exists to explain was the one case nothing logged. The early
+    /// return in `run` now logs too.
     public let disabled: Int
 
     /// Refs the pass budget ran out before reaching, plus in-flight fetches

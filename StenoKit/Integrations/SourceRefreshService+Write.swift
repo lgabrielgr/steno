@@ -52,6 +52,22 @@ extension SourceRefreshService {
         let unreadable: Int
     }
 
+    /// The `sources` line for a pass that dispatched nothing (Copilot, PR #45).
+    ///
+    /// **`applyAndSave` is never reached on that path**, and its summary line was the
+    /// only logger — so `RefreshOutcome.disabled`, whose stated purpose is explaining
+    /// exactly this pass, explained nothing. Here rather than inline in `run` because
+    /// `SourceRefreshService.swift` is at SwiftLint's 400-line limit, and because the
+    /// two refresh log lines belong in one file.
+    func logEmptyPass(notConfigured: Int, disabled: Int) {
+        Log.sources.info(
+            """
+            refresh: attempted 0 \
+            notConfigured \(notConfigured, privacy: .public) \
+            disabled \(disabled, privacy: .public)
+            """)
+    }
+
     func applyAndSave(
         _ fetched: (results: [FetchResult], skipped: Int),
         rows: [SourceRef],
@@ -76,7 +92,7 @@ extension SourceRefreshService {
             superseded: applied.superseded,
             duplicates: applied.duplicates,
             credentialWarnings: pass.warnings,
-            oldestFetch: Self.oldestFetch(of: rows),
+            oldestFetch: oldestFetch(of: rows),
             saveFailed: saveFailed)
 
         Log.sources.info(
@@ -86,6 +102,8 @@ extension SourceRefreshService {
             changed \(outcome.changed, privacy: .public) \
             failed \(outcome.failures.count, privacy: .public) \
             skipped \(outcome.skipped, privacy: .public) \
+            notConfigured \(outcome.notConfigured, privacy: .public) \
+            disabled \(outcome.disabled, privacy: .public) \
             duplicates \(outcome.duplicates, privacy: .public)
             """)
 

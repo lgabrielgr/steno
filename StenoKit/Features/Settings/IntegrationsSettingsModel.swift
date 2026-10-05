@@ -114,6 +114,19 @@ public final class IntegrationsSettingsModel {
     /// half of this type lives in `IntegrationsSettingsModel+Credential.swift`.
     var testStates: [String: TestState] = [:]
 
+    /// Bumped by every change to what a test would be testing (Copilot, PR #45).
+    ///
+    /// **Because a verdict is committed after a suspension point.** `testConnection`
+    /// awaits the network, and the toggle, Save and Remove all stay usable while it
+    /// does — each of them clears the verdicts, and then the in-flight result landed
+    /// and *resurrected* one for a credential or a setting that no longer exists. A
+    /// result is now applied only if the generation it started in is still current.
+    ///
+    /// A counter rather than cancellation: `SourceConnector.testConnection` has no
+    /// cancellation contract — only `fetch` does — so abandoning the task is not
+    /// something this layer may assume works.
+    var configurationGeneration = 0
+
     /// Every registered connector, **including the ones switched off** (D-216).
     ///
     /// A row that vanished when switched off would offer no way to switch it back
@@ -134,18 +147,32 @@ public final class IntegrationsSettingsModel {
         testStates.values.contains(.testing)
     }
 
-    /// The configured site as a bare host, for a sentence to name.
+    /// The host a connection verdict should name — **the stored credential's, not
+    /// the one being typed.**
     ///
-    /// **Normalized, not `site` as typed.** `AtlassianCredential.cloudHost(in:)`
-    /// accepts a pasted URL, which is deliberate — a URL is what people have in
-    /// their clipboard — so `site` can be
+    /// **Normalized.** `AtlassianCredential.cloudHost(in:)` accepts a pasted URL,
+    /// which is deliberate — a URL is what people have in their clipboard — so a
+    /// site value can be
     /// `https://acme.atlassian.net/jira/software/projects/PAY/boards/1`, and a
     /// verdict reading "Reached https://…/boards/1" is exactly the defect PR #44
     /// fixed in `ConfluenceSelftest`, which interpolated `site` where `baseURL` was
-    /// meant. Falls back to the raw value so an unusable site is still shown back to
-    /// the user who typed it.
+    /// meant.
+    ///
+    /// **Read from `storedCredential` first** (Copilot, PR #45). Every verdict
+    /// describes the saved credential, so sourcing this from the editable field made
+    /// an existing "Reached acme.atlassian.net" silently become "Reached
+    /// corrected.atlassian.net" the moment the user typed — naming a host no request
+    /// was ever sent to. `hasUnsavedChanges` tells the user the verdict is about the
+    /// saved credential; this is what stops the verdict from contradicting that.
+    ///
+    /// Falls back to the edited value when nothing is stored, so the pane can still
+    /// name what the user typed, and to the raw value when it is not a usable host,
+    /// so an unusable site is shown back to whoever typed it.
     public var siteHost: String {
-        AtlassianCredential.cloudHost(in: site) ?? site
+        if case .present(let storedSite, _, _) = storedCredential {
+            return AtlassianCredential.cloudHost(in: storedSite) ?? storedSite
+        }
+        return AtlassianCredential.cloudHost(in: site) ?? site
     }
 
     /// Whether the fields differ from the stored credential.
@@ -257,8 +284,10 @@ public final class IntegrationsSettingsModel {
     public func setIntegration(_ id: String, enabled: Bool) {
         settings.setIntegration(id, enabled: enabled)
         // A result that described the previous state is worse than none: the test
-        // was run against a configuration that is no longer the one in force.
+        // was run against a configuration that is no longer the one in force. The
+        // generation bump is what also discards a result still in flight.
         testStates[id] = .untested
+        configurationGeneration += 1
     }
 
     /// FR-6's per-integration connection test.
@@ -280,13 +309,23 @@ public final class IntegrationsSettingsModel {
             return
         }
 
+        let generation = configurationGeneration
         testStates[id] = .testing
+
+        let result: TestState
         do {
             try await connector.testConnection()
-            testStates[id] = .passed
+            result = .passed
         } catch {
-            testStates[id] = .failed(Self.presentable(error))
+            result = .failed(Self.presentable(error))
         }
+
+        // **Only if nothing changed while this was in flight** (Copilot, PR #45).
+        // The toggle, Save and Remove all remain usable during a test and all clear
+        // the verdicts; without this, the late result wrote one back and the pane
+        // showed a tick for a credential that had just been replaced.
+        guard generation == configurationGeneration else { return }
+        testStates[id] = result
     }
 
     /// FR-6's "purge cached external data" (D-219).
@@ -307,6 +346,7 @@ public final class IntegrationsSettingsModel {
     /// replaced is a claim about a credential that no longer exists.
     func forgetTestResults() {
         testStates.removeAll()
+        configurationGeneration += 1
     }
 
     /// `SourceConnector`'s contract is that an implementation throws `SourceError`

@@ -10,8 +10,21 @@ import Foundation
 /// `.network` depends on which `URLError` the real resolver returns — a fact no
 /// double can establish, and the one D-217 turns into a sentence the user reads.
 ///
-/// It drives the real `IntegrationsSettingsModel`, so the Keychain round trip its
-/// `load()` performs is exercised too.
+/// **It does not drive `IntegrationsSettingsModel`, and cannot** (Copilot, PR #45).
+/// An earlier version of this comment, and D-220, claimed it did. It reads
+/// `AtlassianCredentialStore.credential()` directly and builds the two connectors
+/// itself. The model is `@MainActor`, and `CLISync.runSynchronously` blocks the main
+/// thread on a semaphore while the work runs on the cooperative pool — so a hop to
+/// the main actor inside that work deadlocks the bridge, which `CLISync`'s own
+/// documentation states as a requirement on its callers.
+///
+/// What it therefore verifies is the real store's `credential()` read, the real
+/// `baseURL` validation, both connectors' `testConnection()` against the live API,
+/// and §5.2's expiry arithmetic. The model's `load()`, `saveCredential()` and
+/// `resolvedToken()` are covered by `IntegrationsSettingsModelTests` against a
+/// double, and their Keychain round trip is covered by `make atlassian-login`
+/// writing a credential this harness then reads — which is the pairing that closes
+/// the gap, rather than one harness doing both.
 ///
 /// Run by `make verify-integrations`. Hidden from `CLIUsage.text`: it is a
 /// verification harness, not a feature. **Nothing it prints contains the token, on
@@ -38,7 +51,13 @@ public enum IntegrationsSelftest {
         do {
             credential = try credentials.credential()
         } catch {
-            out("integrations-selftest: FAIL — the Keychain refused: \(String(describing: error))")
+            // **Narrowed, not interpolated** (Copilot, PR #45). An arbitrary error
+            // describes itself by quoting the value it choked on, which here is the
+            // credential — so this file's "the token never appears on any path"
+            // guarantee depended on a store that happens not to throw one.
+            out(
+                "integrations-selftest: FAIL — the Keychain refused: \(KeychainErrorDetail.of(error))"
+            )
             return 1
         }
         guard let credential else {

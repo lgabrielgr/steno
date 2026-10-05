@@ -368,3 +368,17 @@ func aSiteFailureOutranksTheExpiryWarning() {
 
     #expect(sentence(for: outcome, now: now)?.contains("configured site") == true)
 }
+
+@Test("a non-nil oldestFetch is reported whatever else the pass counted")
+func stalenessIsReportedFromTheAggregateAlone() {
+    // **Where D-216's silence is *not* enforced, stated so nobody looks for it
+    // here** (Copilot, PR #45). `SourceNotice` cannot tell whose age `oldestFetch`
+    // is — it is one `Date?` — so given a non-nil one with nothing else wrong, it
+    // says so. Keeping a switched-off integration's age out of that aggregate is
+    // `SourceRefreshService.oldestFetch(of:ignoring:)`'s job, and
+    // `aDisabledRefsAgeDoesNotReachTheStalenessLabel` is where it is held.
+    let outcome = RefreshOutcome(
+        disabled: 1, oldestFetch: now.addingTimeInterval(-3 * 86400))
+
+    #expect(sentence(for: outcome, now: now) == "Some integration data is 3 days old.")
+}

@@ -317,3 +317,58 @@ func anEmptyWindowIsIdle() async throws {
     #expect(outcome == .idle)
     #expect(!outcome.readFailed)
 }
+
+@MainActor
+@Test("D-216: a switched-off ref's cache age does not reach the staleness label")
+func aDisabledRefsAgeDoesNotReachTheStalenessLabel() async throws {
+    // **Copilot, PR #45 — the hole in D-216's silence.** A ref fetched three days
+    // ago and since switched off still carried its age into the outcome, so
+    // `SourceNotice` fell through every branch above staleness and told the user
+    // "Some integration data is 3 days old" about data they had deliberately
+    // stopped refreshing. The first test of that silence passed `oldestFetch: nil`
+    // — the state of a store that never fetched — so it could not see this.
+    let fixture = try RefreshFixture()
+    let task = try fixture.task("ship payments")
+    try fixture.ref(
+        "PAY-421", on: task, fetched: RefreshFixture.origin.addingTimeInterval(-3 * 86400),
+        summary: "In Review")
+    let connector = StubSourceConnector(id: "jira", kinds: [.jiraIssue])
+
+    let outcome = await fixture.service(connectors: [connector], disabled: ["jira"])
+        .refresh(taskIDs: [task.id])
+
+    #expect(outcome.disabled == 1)
+    #expect(outcome.attempted == 0)
+    // Mutation: drop `ignoring:` from the `oldestFetch` calls. Red.
+    #expect(outcome.oldestFetch == nil)
+    #expect(SourceNotice.message(for: outcome, now: RefreshFixture.origin) == nil)
+}
+
+@MainActor
+@Test("D-216: an enabled ref's age still reaches the label when a disabled one is older")
+func anEnabledRefsAgeIsStillReported() async throws {
+    // The other direction, so the exclusion is not a blanket suppression: the
+    // switched-off ref is the *older* one, and the sentence must quote the enabled
+    // ref's age rather than going silent.
+    let fixture = try RefreshFixture()
+    let task = try fixture.task("ship payments")
+    try fixture.ref(
+        "PAY-421", on: task, fetched: RefreshFixture.origin.addingTimeInterval(-9 * 86400),
+        summary: "stale and switched off")
+    try fixture.ref(
+        "12345", on: task, kind: .confluencePage,
+        fetched: RefreshFixture.origin.addingTimeInterval(-2 * 86400), summary: "older page")
+    let jira = StubSourceConnector(id: "jira", kinds: [.jiraIssue])
+    let confluence = StubSourceConnector(id: "confluence", kinds: [.confluencePage])
+
+    // Nothing is due within 30 minutes of the origin, so this pass fetches neither
+    // and the aggregate is read over the rows as they stand.
+    let outcome = await fixture.service(
+        connectors: [jira, confluence], disabled: ["jira"]
+    ).refreshDue(olderThan: .seconds(60 * 60 * 24 * 365))
+
+    #expect(outcome.oldestFetch == RefreshFixture.origin.addingTimeInterval(-2 * 86400))
+    #expect(
+        SourceNotice.message(for: outcome, now: RefreshFixture.origin)?.text
+            == "Some integration data is 2 days old.")
+}

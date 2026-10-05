@@ -135,11 +135,15 @@ public struct SourceRefreshService {
         let claimed = tally.claimed
         let notConfigured = tally.notConfigured
         let disabled = tally.disabled
+        // A switched-off integration's cache age must not reach the staleness label
+        // (Copilot, PR #45) — see `oldestFetch(of:)`.
+        let stale = oldestFetch(of: rows)
 
         guard !claimed.isEmpty else {
+            logEmptyPass(notConfigured: notConfigured, disabled: disabled)
             return RefreshOutcome(
                 notConfigured: notConfigured, disabled: disabled, credentialWarnings: warnings,
-                oldestFetch: Self.oldestFetch(of: rows))
+                oldestFetch: stale)
         }
 
         // **One map, computed once, read twice** (D-186). The dispatch half turns
@@ -172,8 +176,7 @@ public struct SourceRefreshService {
         guard !ready.isEmpty else {
             return RefreshOutcome(
                 notConfigured: notConfigured, disabled: disabled, skipped: unread,
-                credentialWarnings: warnings,
-                oldestFetch: Self.oldestFetch(of: rows))
+                credentialWarnings: warnings, oldestFetch: stale)
         }
 
         let fetched = await fetchAll(ready)

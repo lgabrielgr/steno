@@ -41,6 +41,14 @@ final class StubSourceConnector: SourceConnector, @unchecked Sendable {
     private let scripts: [String: Script]
     private let fallback: Script
 
+    /// Holds `testConnection()` at its suspension point until a test opens it
+    /// (Copilot, PR #45).
+    ///
+    /// **A gate, not a sleep.** The verdict race needs the connection genuinely
+    /// in flight while the configuration changes, and a `Task.sleep` would make
+    /// that ordering a property of the scheduler.
+    private let connectionGate: TaskGate?
+
     /// What `testConnection()` throws, if anything.
     ///
     /// Added by M4-04: FR-6's per-integration test is the surface whose whole
@@ -77,7 +85,8 @@ final class StubSourceConnector: SourceConnector, @unchecked Sendable {
             SourceUpdate(
                 summary: "stub state", changes: [], url: nil, fetchedAt: .distantPast,
                 isWindowCapped: false)),
-        connectionFailure: (any Error)? = nil
+        connectionFailure: (any Error)? = nil,
+        connectionGate: TaskGate? = nil
     ) {
         self.id = id
         self.displayName = displayName
@@ -86,6 +95,7 @@ final class StubSourceConnector: SourceConnector, @unchecked Sendable {
         self.scripts = scripts
         self.fallback = fallback
         self.connectionFailure = connectionFailure
+        self.connectionGate = connectionGate
     }
 
     func canHandle(_ ref: SourceRefSnapshot) -> Bool {
@@ -111,6 +121,7 @@ final class StubSourceConnector: SourceConnector, @unchecked Sendable {
     func testConnection() async throws {
         lock.withLock { connectionCalls += 1 }
         guard isConfigured else { throw SourceError.notConfigured }
+        await connectionGate?.wait()
         if let connectionFailure { throw connectionFailure }
     }
 }

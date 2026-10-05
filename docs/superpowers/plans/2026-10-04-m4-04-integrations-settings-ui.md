@@ -1529,6 +1529,13 @@ hiddenness.
 report, then runs three checks and sums their failures: both connectors' `testConnection()`, the
 unresolvable-site probe, and the foreign-host local refusal. Exit 1 if any failed.
 
+**It must not try to drive `IntegrationsSettingsModel`, however tempting.** The model is
+`@MainActor`, and `CLISync.runSynchronously` blocks the main thread on a semaphore while the work
+runs on the cooperative pool — a main-actor hop inside that work deadlocks the bridge, which
+`CLISync`'s own documentation states as a requirement on its callers. The real Keychain round trip
+is covered by the *pair* `make atlassian-login` (writes) and `make verify-integrations` (reads).
+Claiming otherwise in a comment is a finding Copilot raised on PR #45.
+
 Two details are load-bearing:
 
 - The probe credential carries `apiToken: "selftest-not-a-real-token"`, never the stored token, so

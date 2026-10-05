@@ -155,13 +155,39 @@ extension SourceRefreshService {
             .filter { taskIDs.contains($0.taskID) }
     }
 
-    /// The oldest observation among `rows`, or `nil` when none has been fetched.
+    /// The oldest observation among the refs this app would actually refresh, or
+    /// `nil` when none has been fetched.
     ///
     /// Read *after* the pass, so a successful fetch has already moved its row's
     /// timestamp forward and only genuinely stale refs remain — which is what
     /// makes it the right input to §5.2's staleness label.
-    static func oldestFetch(of rows: [SourceRef]) -> Date? {
-        rows.compactMap(\.lastFetchedAt).min()
+    ///
+    /// **Refs of switched-off integrations are excluded, and that is D-216's silence
+    /// finally holding** (Copilot, PR #45). A ref fetched three days ago and since
+    /// switched off carried its age in here; `SourceNotice` ignores `disabled` and so
+    /// fell through every branch above staleness, telling the user "Some integration
+    /// data is 3 days old" about data they had deliberately stopped refreshing —
+    /// which is the sentence D-216 exists to not say. The first test of that silence
+    /// passed `oldestFetch: nil`, the state of a store that never fetched, so it
+    /// could not see this.
+    ///
+    /// **It asks the registry per row rather than reusing the pass's tally**, which
+    /// was the first fix and was not enough: `refreshDue` dispatches only the refs
+    /// that are *due*, while this aggregate is computed over every row in scope — so
+    /// a disabled ref that was not due kept leaking its age. `canHandle` and
+    /// `isEnabled` are both cheap and synchronous by contract, and D18 caps a window
+    /// at twenty tasks.
+    ///
+    /// A `.unhandled` ref needs no exclusion: nothing ever fetched it, so its
+    /// `lastFetchedAt` is `nil` and it cannot be the minimum.
+    func oldestFetch(of rows: [SourceRef]) -> Date? {
+        rows.lazy
+            .filter { row in
+                if case .disabled = registry.dispatch(row.snapshot) { return false }
+                return true
+            }
+            .compactMap(\.lastFetchedAt)
+            .min()
     }
 }
 

@@ -137,3 +137,27 @@ func theProbeSiteReachesTheResolver() {
     #expect(AtlassianCredential.cloudHost(in: IntegrationsSelftest.unresolvableSite) != nil)
     #expect(AtlassianCredential.cloudHost(in: IntegrationsSelftest.foreignSite) == nil)
 }
+
+@Test("§8: a credential-store error that quotes the credential is not printed")
+func aQuotingStoreErrorIsNarrowed() async {
+    // **Copilot, PR #45.** The harness interpolated `String(describing: error)`, and
+    // an arbitrary error describes itself by quoting the value it choked on — which
+    // on this path is the credential. A `DecodingError` is exactly that shape, and
+    // the real `AtlassianKeychainStore` throws one when the stored JSON will not
+    // decode.
+    struct Quoting: Error, CustomStringConvertible {
+        var description: String { "could not decode {\"apiToken\":\"SUPER-SECRET\"}" }
+    }
+    let transcript = Transcript()
+
+    let code = await IntegrationsSelftest.run(
+        credentials: InMemoryAtlassianStore(JiraFixture.credential(), readError: Quoting()),
+        transport: StubJiraTransport(routes: [:]),
+        out: transcript.record)
+
+    #expect(code == 1)
+    // Mutation: restore `String(describing: error)`. Red.
+    #expect(transcript.text.contains("SUPER-SECRET") == false)
+    // The type name still reaches the operator, so the failure is diagnosable.
+    #expect(transcript.text.contains("Quoting"))
+}

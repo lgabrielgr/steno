@@ -165,9 +165,6 @@ extension IntegrationsSettingsModel {
     /// `EncodingError` quoting the value it failed on — which here is the whole
     /// credential — so only its type name is shown (§8).
     static func detail(for error: any Error) -> String {
-        guard let keychainError = error as? KeychainError else {
-            return String(describing: type(of: error))
-        }
-        return String(describing: keychainError)
+        KeychainErrorDetail.of(error)
     }
 }
