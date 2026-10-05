@@ -96,7 +96,12 @@ struct IntegrationsSettingsPane: View {
         // held for the process, so "the token field starts empty" is a fact only
         // the view can make true. On disappear as well as appear, so an unsaved
         // token does not sit in memory for as long as the app runs.
-        .onAppear { model.forgetEntry() }
+        .onAppear {
+            model.forgetEntry()
+            // What makes `storedCredentialNote`'s "unlock your login Keychain and
+            // reopen this window" true (Copilot, PR #45).
+            model.reloadIfUnreadable()
+        }
         .onDisappear { model.forgetEntry() }
     }
 

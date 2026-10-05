@@ -296,10 +296,13 @@ verify-confluence: build ## Fetch one real page with the stored credential (sign
 #
 # `make test` denies outbound networking (§9.4) and stays out of the Keychain
 # (D-134), which leaves one fact in this task unverifiable by the suite: whether a
-# site that is shaped correctly and does not exist reports `siteNotFound` rather
-# than `network`. That depends on which URLError the real resolver returns, and it
-# is the difference between sending the user to Settings and sending them to their
-# router.
+# site that is shaped correctly and is not a real Atlassian site reports
+# `siteNotFound` rather than something that sends the user to their router or after
+# a ticket they never named.
+#
+# It answered that by disproving the assumption it was built on: `*.atlassian.net`
+# has wildcard DNS, so the probe host resolves to an Atlassian edge and the verify
+# endpoint answers 404. See D-217's revision.
 #
 # It tests both connectors on the stored credential, probes a nonexistent
 # subdomain, confirms a non-Atlassian host is refused before any request, and

@@ -6380,9 +6380,16 @@ real resolver returns is not something a double can establish.
 >
 > **A 404 there has a second cause**, and the wording had to grow to cover it: the site may be real
 > and simply not have that product. Both causes are "the configured site is not serving this" and
-> both have the same remedy, so they share the case — but the pane now says "Steno reached
-> acme.atlassian.net but found no Jira API there. Check the site address — or whether your site has
-> Jira", rather than claiming the site does not exist.
+> both have the same remedy, so they share the case, rather than the pane claiming the site does
+> not exist.
+>
+> **Corrected again in round 2 (Copilot, PR #45).** This note first quoted the pane as saying
+> "Steno reached acme.atlassian.net but found no Jira API there" — and that sentence shipped
+> briefly and was itself false, because `.siteNotFound` also carries `.cannotFindHost` and
+> `.dnsLookupFailed`, where nothing was reached at all. Which is this decision's own mistake made
+> a second time: a sentence asserting more than its case guarantees. The shipped wording is
+> **"Steno couldn't reach <integration> at <host>. Check the site address — or whether your site
+> has <integration>."**, which holds on all three paths.
 >
 > The DNS mapping stays. It is still the right answer when a host genuinely does not resolve, and
 > it costs nothing. It is simply not the path a typo takes.
@@ -6488,6 +6495,12 @@ So a hidden, store-free `integrations-selftest` runs against `AtlassianKeychainS
 both connectors on the stored credential, probes a nonexistent `*.atlassian.net` subdomain,
 confirms a non-Atlassian host is refused before any request is made, and prints §5.2's expiry
 arithmetic. It also exercises the real store's `credential()` read, which no test does.
+
+**What the subdomain probe actually establishes, after D-217's revision.** That the
+*context-specific 404 mapping* holds against the live API — wildcard DNS means the host resolves
+and the verify endpoint answers 404 — while still accepting a genuine DNS failure as the same
+verdict. The probe was written believing it would exercise the DNS path, and its whole value turned
+out to be proving that belief wrong on the first run.
 
 > **Corrected before merge (Copilot, PR #45): it does not drive `IntegrationsSettingsModel`.**
 > This entry and the file's own comment both claimed it did. It reads the store directly and builds

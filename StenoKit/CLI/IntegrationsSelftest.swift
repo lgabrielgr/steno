@@ -6,9 +6,19 @@ import Foundation
 /// **It exists because the pane's whole point is telling four failures apart, and
 /// `make test` cannot check any of them against the wire.** The suite denies
 /// outbound networking (§9.4, D-012) and stays out of the Keychain (D-134), so
-/// whether a nonexistent Atlassian subdomain produces `.siteNotFound` rather than
-/// `.network` depends on which `URLError` the real resolver returns — a fact no
-/// double can establish, and the one D-217 turns into a sentence the user reads.
+/// whether a nonexistent Atlassian subdomain reports `.siteNotFound` rather than
+/// something that sends the user to their router depends on what the real network
+/// does — a fact no double can establish, and the one D-217 turns into a sentence
+/// the user reads.
+///
+/// **And it already earned that, by disproving the premise it was written on**
+/// (D-217's revision). This harness was built expecting the probe to exercise a DNS
+/// failure. `*.atlassian.net` has wildcard DNS: the host resolves to an Atlassian
+/// edge and the verify endpoint answers **404**. So what the probe now establishes
+/// is the *context-specific 404 mapping* — a 404 from `verify` is a wrong site,
+/// while a 404 from a ref fetch is a missing reference — and it accepts a genuine
+/// DNS failure as the same verdict, which is still the right answer when a host
+/// truly does not resolve.
 ///
 /// **It does not drive `IntegrationsSettingsModel`, and cannot** (Copilot, PR #45).
 /// An earlier version of this comment, and D-220, claimed it did. It reads
@@ -31,11 +41,15 @@ import Foundation
 /// any path** — it reports the email, the site and the expiry, which §5.2 treats as
 /// configuration rather than secrets.
 public enum IntegrationsSelftest {
-    /// A subdomain that does not exist, for the `.siteNotFound` probe.
+    /// A subdomain no Atlassian site uses, for the `.siteNotFound` probe.
     ///
     /// **Shaped correctly on purpose.** `AtlassianCredential.cloudHost` accepts it,
-    /// so it reaches the resolver — which is the whole point: a site refused locally
-    /// proves nothing about the mapping D-217 added.
+    /// so the request is actually made — which is the whole point: a site refused
+    /// locally proves nothing about the mapping D-217 added.
+    ///
+    /// Not named `unresolvable` any more than it has to be: thanks to wildcard DNS
+    /// it *does* resolve, to an Atlassian edge that answers 404. That is the path
+    /// under test.
     static let unresolvableSite = "steno-selftest-no-such-site.atlassian.net"
 
     /// A host that is not Atlassian Cloud at all, for the local-refusal probe.
@@ -140,9 +154,15 @@ public enum IntegrationsSelftest {
 
     /// **D-217's probe, and the reason this harness exists.**
     ///
-    /// A site that is shaped correctly and does not exist must report
-    /// `.siteNotFound`, not `.network`. Which `URLError` the resolver returns is the
-    /// fact under test, and only a real resolver can supply it.
+    /// A site that is shaped correctly and is not a real Atlassian site must report
+    /// `.siteNotFound` — not `.network`, which sends the user to their router, and
+    /// not `.notFound`, which sends them looking for a ticket they never named.
+    ///
+    /// **What it exercises is the 404 path, not the DNS one.** Wildcard DNS means
+    /// this host resolves and the verify endpoint answers 404, which is what the
+    /// first run of this probe revealed and what D-217's revision records. A genuine
+    /// DNS failure maps to the same verdict, so either outcome passes — but only the
+    /// live network can say which one actually happens.
     private static func reportSiteProbe(
         credential: AtlassianCredential,
         transport: any HTTPTransport,
@@ -152,8 +172,9 @@ public enum IntegrationsSelftest {
         let probe = AtlassianCredential(
             site: Self.unresolvableSite, email: credential.email,
             // **The stored token is not sent to a host that is not the user's site.**
-            // A placeholder is enough: the request never gets past DNS, and if it
-            // somehow did, it must not carry a working credential.
+            // A placeholder is enough: this request is answered by an edge that has
+            // no idea what site this is, and if it somehow reached further it must
+            // not carry a working credential.
             apiToken: "selftest-not-a-real-token", expiresAt: nil)
         let store = FixedCredentialStore(probe)
 

@@ -272,9 +272,19 @@ outbound networking (§9.4, D-012), so nothing in the unit suite can prove that 
 Atlassian subdomain produces `siteNotFound` rather than `network` — that depends on which
 `URLError` the real resolver returns. The probe is the check that can disagree.
 
-It drives the real `IntegrationsSettingsModel` against `AtlassianKeychainStore`, so it also covers
-the Keychain round trip that `make test` cannot (D-134): the store's own code path is exercised
-only by the signed binary.
+It runs against `AtlassianKeychainStore`, so it also covers the real store's `credential()` read,
+which `make test` cannot reach (D-134): that code path is exercised only by the signed binary.
+
+> **Narrowed during implementation; see D-220 (Copilot, PR #45).** This paragraph claimed the
+> harness "drives the real `IntegrationsSettingsModel`", and it does not — it reads the store
+> directly and builds the connectors itself. Nor can it: the model is `@MainActor`, and
+> `CLISync.runSynchronously` blocks the main thread on a semaphore while the work runs on the
+> cooperative pool, so a main-actor hop inside that work deadlocks the bridge. The model's
+> `load()`, `saveCredential()` and `resolvedToken()` are covered by
+> `IntegrationsSettingsModelTests` against a double; the real Keychain round trip is covered by the
+> *pair* `make atlassian-login` (writes) and `make verify-integrations` (reads). The claim appeared
+> in four places and was corrected in three of them first, which is the point
+> "widening a behaviour strands its prose" keeps making.
 
 Nothing it prints contains the token, on any path.
 

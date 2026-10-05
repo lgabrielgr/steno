@@ -38,6 +38,27 @@ extension IntegrationsSettingsModel {
         }
     }
 
+    /// Re-read the credential when the last read was refused (Copilot, PR #45).
+    ///
+    /// **Called by the pane on appearance, and it is what makes the pane's own
+    /// recovery instruction true.** `.unreadable` tells the user to unlock their
+    /// login Keychain and reopen the window — and this model is built once in
+    /// `StenoApp.init` and read the Keychain only in `init`, so reopening Settings
+    /// called `forgetEntry()` and nothing else. The pane stayed unreadable, with
+    /// empty fields, until the whole app restarted.
+    ///
+    /// **Gated on `.unreadable`, not run on every appearance.** An unconditional
+    /// reload would overwrite a site or email the user is part-way through typing
+    /// every time the window regained focus. The stuck state is the only one that
+    /// needs recovering, and it is one the user cannot have edited their way into.
+    public func reloadIfUnreadable() {
+        guard case .unreadable = storedCredential else { return }
+        // Cleared first: a successful reload must not leave the refusal it is
+        // recovering from sitting under the fields.
+        credentialProblem = nil
+        load()
+    }
+
     /// Store what is in the fields (§8: Keychain only).
     ///
     /// **The token is read back from the Keychain when the field is empty**

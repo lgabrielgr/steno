@@ -161,3 +161,45 @@ func forgetEntryEmptiesTheField() throws {
 
     #expect(fixture.model.tokenEntry.isEmpty)
 }
+
+@Test("§13: reopening the pane recovers from a transient Keychain failure")
+@MainActor
+func reopeningThePaneRecoversAnUnreadableCredential() throws {
+    struct Locked: Error {}
+    let fixture = try IntegrationsFixture(
+        credential: JiraFixture.credential(), readError: Locked())
+
+    // The state the pane reports, with the instruction "unlock your login Keychain
+    // and reopen this window".
+    guard case .unreadable = fixture.model.storedCredential else {
+        Issue.record("expected .unreadable")
+        return
+    }
+
+    // **That instruction could not work** (Copilot, PR #45). This model is built
+    // once in `StenoApp.init` and reads the Keychain only in `init`; reopening
+    // Settings called `forgetEntry()` and nothing else, so the pane stayed
+    // unreadable with empty fields until the whole app restarted.
+    fixture.store.stopFailingReads()
+    fixture.model.reloadIfUnreadable()
+
+    #expect(fixture.model.hasStoredCredential)
+    #expect(fixture.model.site == JiraFixture.site)
+    #expect(fixture.model.email == "leo@example.com")
+    // The stale refusal must not outlive the state it described.
+    #expect(fixture.model.credentialProblem == nil)
+}
+
+@Test("reopening the pane does not discard an edit in progress")
+@MainActor
+func reopeningThePaneKeepsAnEditInProgress() throws {
+    let fixture = try IntegrationsFixture(credential: JiraFixture.credential())
+    fixture.model.site = "half-typed.atlassian.net"
+
+    // The reload is gated on `.unreadable` precisely so the ordinary appearance
+    // does not clobber what the user is typing. Mutation: call `load()`
+    // unconditionally. Red.
+    fixture.model.reloadIfUnreadable()
+
+    #expect(fixture.model.site == "half-typed.atlassian.net")
+}

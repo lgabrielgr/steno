@@ -114,7 +114,14 @@ func theServiceNamesAreSeparate() {
 final class InMemoryAtlassianStore: AtlassianCredentialStore, @unchecked Sendable {
     private let lock = NSLock()
     private var stored: AtlassianCredential?
-    private let readError: (any Error)?
+    /// `var`, so a test can model a locked keychain being unlocked — which is the
+    /// state M4-04's pane told the user to recover from and could not (Copilot,
+    /// PR #45).
+    private var mutableReadError: (any Error)?
+    private var readError: (any Error)? { mutableReadError }
+
+    /// Stop refusing reads, as unlocking the login keychain does.
+    func stopFailingReads() { lock.withLock { mutableReadError = nil } }
     private let writeError: (any Error)?
     private let announcesChanges: Bool
     private var reads = 0
@@ -152,7 +159,7 @@ final class InMemoryAtlassianStore: AtlassianCredentialStore, @unchecked Sendabl
         writeError: (any Error)? = nil, announcesChanges: Bool = true
     ) {
         self.stored = credential
-        self.readError = readError
+        self.mutableReadError = readError
         self.writeError = writeError
         self.announcesChanges = announcesChanges
     }

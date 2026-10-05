@@ -106,3 +106,53 @@ func anUninterruptedTestStillRecordsItsVerdict() async throws {
     // result that crossed a suspension point.
     #expect(fixture.model.rows.first?.test == .passed)
 }
+
+@Test("toggling one integration does not leave another's test stuck, disabling every button")
+@MainActor
+func togglingOneRowDoesNotStrandAnother() async throws {
+    // **A regression my own round-1 guard introduced** (Copilot, PR #45). The
+    // generation was global, so toggling Confluence while Jira was testing made
+    // Jira's completion return at the guard — leaving `testStates["jira"]` at
+    // `.testing` forever, so `isBusy` stayed true and every Test button in the pane
+    // was disabled until relaunch.
+    let gate = TaskGate()
+    let jira = StubSourceConnector(id: "jira", displayName: "Jira", connectionGate: gate)
+    let confluence = StubSourceConnector(id: "confluence", displayName: "Confluence")
+    let fixture = try IntegrationsFixture(
+        credential: JiraFixture.credential(), connectors: [jira, confluence])
+
+    let test = Task { await fixture.model.testConnection(id: "jira") }
+    while jira.testConnectionCalls == 0 { await Task.yield() }
+    #expect(fixture.model.isBusy)
+
+    // A different row, mid-flight.
+    fixture.model.setIntegration("confluence", enabled: false)
+
+    gate.openNow()
+    await test.value
+
+    // Jira's own configuration never changed, so its verdict is still meaningful.
+    #expect(fixture.model.rows.first { $0.id == "jira" }?.test == .passed)
+    #expect(fixture.model.isBusy == false)
+}
+
+@Test("a row whose own configuration changed mid-test ends untested, never stuck testing")
+@MainActor
+func anInvalidatedRowIsNeverLeftTesting() async throws {
+    // The belt to the braces above: whatever invalidates a row, it must not be left
+    // `.testing`, because that is what makes `isBusy` true forever.
+    let gate = TaskGate()
+    let jira = StubSourceConnector(id: "jira", displayName: "Jira", connectionGate: gate)
+    let fixture = try IntegrationsFixture(
+        credential: JiraFixture.credential(), connectors: [jira])
+
+    let test = Task { await fixture.model.testConnection(id: "jira") }
+    while jira.testConnectionCalls == 0 { await Task.yield() }
+
+    fixture.model.setIntegration("jira", enabled: false)
+    gate.openNow()
+    await test.value
+
+    #expect(fixture.model.rows.first?.test == .untested)
+    #expect(fixture.model.isBusy == false)
+}

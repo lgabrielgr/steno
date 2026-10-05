@@ -114,18 +114,27 @@ public final class IntegrationsSettingsModel {
     /// half of this type lives in `IntegrationsSettingsModel+Credential.swift`.
     var testStates: [String: TestState] = [:]
 
-    /// Bumped by every change to what a test would be testing (Copilot, PR #45).
+    /// Bumped per connector by every change to what *that* connector's test would be
+    /// testing (Copilot, PR #45, twice).
     ///
     /// **Because a verdict is committed after a suspension point.** `testConnection`
     /// awaits the network, and the toggle, Save and Remove all stay usable while it
     /// does — each of them clears the verdicts, and then the in-flight result landed
     /// and *resurrected* one for a credential or a setting that no longer exists. A
-    /// result is now applied only if the generation it started in is still current.
+    /// result is applied only if the generation it started in is still current.
+    ///
+    /// **Per connector, not one counter for the pane.** The first version was global,
+    /// and toggling Confluence while Jira was testing therefore invalidated Jira's
+    /// result while clearing only Confluence's state — so Jira stayed `.testing`
+    /// forever, `isBusy` stayed true, and every Test button in the pane was disabled
+    /// until relaunch. Toggling one integration says nothing about what another's
+    /// test would find; replacing the shared credential says it about all of them,
+    /// which is why `forgetTestResults()` bumps every id.
     ///
     /// A counter rather than cancellation: `SourceConnector.testConnection` has no
     /// cancellation contract — only `fetch` does — so abandoning the task is not
     /// something this layer may assume works.
-    var configurationGeneration = 0
+    var generations: [String: Int] = [:]
 
     /// Every registered connector, **including the ones switched off** (D-216).
     ///
@@ -287,7 +296,7 @@ public final class IntegrationsSettingsModel {
         // was run against a configuration that is no longer the one in force. The
         // generation bump is what also discards a result still in flight.
         testStates[id] = .untested
-        configurationGeneration += 1
+        invalidate(id)
     }
 
     /// FR-6's per-integration connection test.
@@ -309,7 +318,7 @@ public final class IntegrationsSettingsModel {
             return
         }
 
-        let generation = configurationGeneration
+        let generation = generations[id, default: 0]
         testStates[id] = .testing
 
         let result: TestState
@@ -324,7 +333,14 @@ public final class IntegrationsSettingsModel {
         // The toggle, Save and Remove all remain usable during a test and all clear
         // the verdicts; without this, the late result wrote one back and the pane
         // showed a tick for a credential that had just been replaced.
-        guard generation == configurationGeneration else { return }
+        guard generation == generations[id, default: 0] else {
+            // **Never leave the row `.testing`** — that is what made `isBusy` stick
+            // and disabled every button in the pane (Copilot, PR #45). Whoever
+            // invalidated this row already set it to `.untested`; this makes that a
+            // property of the code rather than of each caller remembering.
+            if testStates[id] == .testing { testStates[id] = .untested }
+            return
+        }
         testStates[id] = result
     }
 
@@ -345,8 +361,15 @@ public final class IntegrationsSettingsModel {
     /// credential it was obtained with: a green tick beside Jira after the token was
     /// replaced is a claim about a credential that no longer exists.
     func forgetTestResults() {
+        // Every id, because the credential these verdicts describe is shared by all
+        // of them (§5.3) — unlike a toggle, which concerns one row.
+        for id in testStates.keys { invalidate(id) }
         testStates.removeAll()
-        configurationGeneration += 1
+    }
+
+    /// Discard whatever `id`'s in-flight test is about to report.
+    func invalidate(_ id: String) {
+        generations[id, default: 0] += 1
     }
 
     /// `SourceConnector`'s contract is that an implementation throws `SourceError`
