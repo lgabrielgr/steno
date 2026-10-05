@@ -108,7 +108,7 @@ func aDisabledClaimantIsDisabled() {
 
 @Test("D-216: a disabled connector is skipped even though it has a credential")
 func aDisabledConnectorWithACredentialStillDoesNotFetch() {
-    // The sixth acceptance criterion: disabling stops fetches without deleting
+    // The fourth acceptance criterion: disabling stops fetches without deleting
     // the credential, so `isConfigured` is true here and must not matter.
     let configured = StubSourceConnector(id: "jira", isConfigured: true)
     let registry = SourceRegistry(connectors: [configured], isEnabled: { _ in false })

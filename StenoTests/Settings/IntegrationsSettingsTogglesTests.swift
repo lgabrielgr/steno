@@ -26,7 +26,7 @@ func theToggleChangesRoutingWithoutARelaunch() throws {
     #expect(fixture.settings.disabledIntegrationIDs == ["jira"])
 }
 
-@Test("the sixth acceptance criterion: disabling does not delete the credential")
+@Test("the fourth acceptance criterion: disabling does not delete the credential")
 @MainActor
 func disablingKeepsTheCredential() throws {
     let fixture = try IntegrationsFixture(credential: JiraFixture.credential())

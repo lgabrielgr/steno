@@ -252,7 +252,7 @@ public final class IntegrationsSettingsModel {
     ///
     /// **Writes `AppSettings`, which is where `SourceRegistry` reads it per
     /// dispatch** (D-216) — so the change takes effect on the next refresh with no
-    /// relaunch. It does not touch the credential: the sixth acceptance criterion
+    /// relaunch. It does not touch the credential: the fourth acceptance criterion
     /// is that disabling stops fetches *without* deleting it.
     public func setIntegration(_ id: String, enabled: Bool) {
         settings.setIntegration(id, enabled: enabled)
