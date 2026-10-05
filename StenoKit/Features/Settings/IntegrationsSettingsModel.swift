@@ -134,6 +134,43 @@ public final class IntegrationsSettingsModel {
         testStates.values.contains(.testing)
     }
 
+    /// The configured site as a bare host, for a sentence to name.
+    ///
+    /// **Normalized, not `site` as typed.** `AtlassianCredential.cloudHost(in:)`
+    /// accepts a pasted URL, which is deliberate — a URL is what people have in
+    /// their clipboard — so `site` can be
+    /// `https://acme.atlassian.net/jira/software/projects/PAY/boards/1`, and a
+    /// verdict reading "Reached https://…/boards/1" is exactly the defect PR #44
+    /// fixed in `ConfluenceSelftest`, which interpolated `site` where `baseURL` was
+    /// meant. Falls back to the raw value so an unusable site is still shown back to
+    /// the user who typed it.
+    public var siteHost: String {
+        AtlassianCredential.cloudHost(in: site) ?? site
+    }
+
+    /// Whether the fields differ from the stored credential.
+    ///
+    /// **Because "Test" verifies what is *stored*, not what is typed.** A user who
+    /// corrects the site and presses Test without saving would otherwise get a
+    /// verdict about the old credential, displayed beside the new fields, with
+    /// nothing saying so — and would reasonably conclude their correction did not
+    /// work.
+    public var hasUnsavedChanges: Bool {
+        if !tokenEntry.isEmpty { return true }
+        guard case .present(let storedSite, let storedEmail, let storedExpiry) = storedCredential
+        else {
+            // With nothing stored, anything typed is unsaved.
+            return !site.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                || !email.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        }
+        if site.trimmingCharacters(in: .whitespacesAndNewlines) != storedSite { return true }
+        if email.trimmingCharacters(in: .whitespacesAndNewlines) != storedEmail { return true }
+        // The date only counts when the user says they recorded one, so toggling the
+        // switch off and on without touching the picker is not a change.
+        let typedExpiry = recordsExpiry ? expiresAt : nil
+        return typedExpiry != storedExpiry
+    }
+
     // MARK: - §5.2's expiry warning
 
     /// §5.2's 14-day warning, derived from the **stored** expiry rather than the

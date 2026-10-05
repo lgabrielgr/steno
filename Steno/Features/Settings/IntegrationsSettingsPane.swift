@@ -69,6 +69,19 @@ struct IntegrationsSettingsPane: View {
             }
 
             Section("Integrations") {
+                // **Said once, above the rows.** "Test" verifies the stored
+                // credential; a user who corrected the site and pressed Test without
+                // saving would otherwise read a verdict about the old one as a verdict
+                // about their correction.
+                if model.hasUnsavedChanges {
+                    Label(
+                        "You have unsaved changes above. Test checks the saved credential.",
+                        systemImage: "info.circle"
+                    )
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                }
+
                 ForEach(model.rows) { row in
                     integrationRow(row)
                 }
@@ -213,6 +226,7 @@ struct IntegrationsSettingsPane: View {
 
                 Button("Test") { Task { await model.testConnection(id: row.id) } }
                     .disabled(!row.isEnabled || model.isBusy)
+                    .help("Tests the saved credential, not what is typed above.")
 
                 if row.test == .testing {
                     ProgressView().controlSize(.small)
@@ -240,7 +254,7 @@ struct IntegrationsSettingsPane: View {
                     .foregroundStyle(.secondary)
             }
         case .passed:
-            Label("Reached \(model.site).", systemImage: "checkmark.circle")
+            Label("Reached \(model.siteHost).", systemImage: "checkmark.circle")
                 .font(.callout)
         case .failed(let error):
             VStack(alignment: .leading, spacing: 4) {
@@ -263,7 +277,7 @@ struct IntegrationsSettingsPane: View {
             // holds it — and the only one that has to name two causes, because a 404
             // on the verify endpoint means either a mistyped site or a real site
             // without this product (D-217).
-            return "Steno reached \(model.site) but found no \(row.displayName) API there. "
+            return "Steno reached \(model.siteHost) but found no \(row.displayName) API there. "
                 + "Check the site address — or whether your site has \(row.displayName)."
         case .invalidCredential:
             return "Atlassian rejected this email and token. Check both, and see the note above "

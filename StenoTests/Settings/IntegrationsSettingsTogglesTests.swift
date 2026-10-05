@@ -229,3 +229,80 @@ func purgingWithNoStoreIsANoOp() throws {
 
     #expect(fixture.model.purgeState == .idle)
 }
+
+// MARK: - What a verdict is about, and which site it names
+
+@Test("a pasted site URL is named back as a host, not as the whole URL")
+@MainActor
+func aPastedURLIsNamedAsAHost() throws {
+    let fixture = try IntegrationsFixture()
+
+    // A URL is what people actually have in their clipboard, and `cloudHost`
+    // deliberately accepts one — so the pane must not echo it verbatim. This is the
+    // defect PR #44 fixed in `ConfluenceSelftest`, which interpolated `site` where
+    // `baseURL` was meant. Mutation: return `site` from `siteHost`. Red.
+    fixture.model.site = "https://acme.atlassian.net/jira/software/projects/PAY/boards/1"
+
+    #expect(fixture.model.siteHost == "acme.atlassian.net")
+}
+
+@Test("a site that is not usable is still shown back to the user who typed it")
+@MainActor
+func anUnusableSiteIsStillEchoed() throws {
+    let fixture = try IntegrationsFixture()
+    fixture.model.site = "example.com"
+
+    // Falling back to the raw value matters: a sentence about a site the user can't
+    // see is a sentence they can't act on.
+    #expect(fixture.model.siteHost == "example.com")
+}
+
+@Test("the pane can tell that a verdict would be about the saved credential, not the typed one")
+@MainActor
+func unsavedChangesAreDetected() throws {
+    let fixture = try IntegrationsFixture(credential: JiraFixture.credential())
+
+    #expect(fixture.model.hasUnsavedChanges == false)
+
+    // The sequence that misleads: correct the site, press Test, read a verdict about
+    // the credential you were trying to replace.
+    fixture.model.site = "corrected.atlassian.net"
+    #expect(fixture.model.hasUnsavedChanges)
+
+    fixture.model.saveCredential()
+    #expect(fixture.model.hasUnsavedChanges == false)
+}
+
+@Test("a half-typed token counts as an unsaved change")
+@MainActor
+func aTypedTokenCountsAsUnsaved() throws {
+    let fixture = try IntegrationsFixture(credential: JiraFixture.credential())
+
+    fixture.model.tokenEntry = "new-token"
+
+    #expect(fixture.model.hasUnsavedChanges)
+}
+
+@Test("toggling the expiry switch without touching the picker is not a change")
+@MainActor
+func togglingTheExpirySwitchIsNotAChange() throws {
+    let fixture = try IntegrationsFixture(credential: JiraFixture.credential(expiresAt: nil))
+
+    // The stored credential records no expiry, and `recordsExpiry` is therefore
+    // false. Turning it on *is* a change; turning it back off is not.
+    #expect(fixture.model.hasUnsavedChanges == false)
+    fixture.model.recordsExpiry = true
+    #expect(fixture.model.hasUnsavedChanges)
+    fixture.model.recordsExpiry = false
+    #expect(fixture.model.hasUnsavedChanges == false)
+}
+
+@Test("with nothing stored, a typed site is an unsaved change")
+@MainActor
+func typingIntoAnEmptyPaneIsUnsaved() throws {
+    let fixture = try IntegrationsFixture()
+
+    #expect(fixture.model.hasUnsavedChanges == false)
+    fixture.model.site = "acme.atlassian.net"
+    #expect(fixture.model.hasUnsavedChanges)
+}
