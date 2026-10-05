@@ -37,6 +37,9 @@ extension SourceRefreshService {
         /// Refs a connector claimed but could not fetch for want of a credential.
         let notConfigured: Int
 
+        /// Refs claimed only by connectors the user switched off (D-216).
+        let disabled: Int
+
         /// Each ref's resume point, computed before dispatch and read again here
         /// (D-186).
         let resume: [UUID: ResumePoint]
@@ -68,6 +71,7 @@ extension SourceRefreshService {
             changed: saveFailed ? 0 : applied.changed,
             failures: applied.failures,
             notConfigured: pass.notConfigured,
+            disabled: pass.disabled,
             skipped: fetched.skipped + pass.unreadable,
             superseded: applied.superseded,
             duplicates: applied.duplicates,

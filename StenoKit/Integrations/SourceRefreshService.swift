@@ -131,24 +131,14 @@ public struct SourceRefreshService {
         // per configured connector, not one per ref.
         let warnings = credentialWarnings()
 
-        var claimed: [(snapshot: SourceRefSnapshot, connector: any SourceConnector)] = []
-        var notConfigured = 0
-        for ref in refs {
-            switch registry.dispatch(ref) {
-            case .ready(let connector):
-                claimed.append((ref, connector))
-            case .notConfigured:
-                notConfigured += 1
-            case .unhandled:
-                // Silent, by D-166: a bare `.url` ref is every link the user has
-                // ever pasted, and it is not a problem.
-                break
-            }
-        }
+        let tally = classify(refs)
+        let claimed = tally.claimed
+        let notConfigured = tally.notConfigured
+        let disabled = tally.disabled
 
         guard !claimed.isEmpty else {
             return RefreshOutcome(
-                notConfigured: notConfigured, credentialWarnings: warnings,
+                notConfigured: notConfigured, disabled: disabled, credentialWarnings: warnings,
                 oldestFetch: Self.oldestFetch(of: rows))
         }
 
@@ -181,7 +171,8 @@ public struct SourceRefreshService {
 
         guard !ready.isEmpty else {
             return RefreshOutcome(
-                notConfigured: notConfigured, skipped: unread, credentialWarnings: warnings,
+                notConfigured: notConfigured, disabled: disabled, skipped: unread,
+                credentialWarnings: warnings,
                 oldestFetch: Self.oldestFetch(of: rows))
         }
 
@@ -189,8 +180,8 @@ public struct SourceRefreshService {
         return applyAndSave(
             fetched, rows: rows,
             context: PassContext(
-                attempted: ready.count, notConfigured: notConfigured, resume: resume,
-                warnings: warnings, unreadable: unread))
+                attempted: ready.count, notConfigured: notConfigured, disabled: disabled,
+                resume: resume, warnings: warnings, unreadable: unread))
     }
 
     /// One ref about to be fetched, carrying the `since` its resume point produced.

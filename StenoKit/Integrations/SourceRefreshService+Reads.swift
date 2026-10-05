@@ -75,7 +75,50 @@ extension SourceRefreshService {
     /// on Friday is worth saying even on a pass whose refs all belong to some other
     /// integration.
     func credentialWarnings() -> [SourceCredentialWarning] {
-        registry.all.compactMap(\.credentialWarning)
+        // **`enabled`, not `all`** (D-216). Both Atlassian connectors read one
+        // credential (§5.3), so a user who switches Confluence off to stop its
+        // noise would otherwise keep being warned about the token it is no longer
+        // using. Jira keeps warning while it is on: the token still matters there.
+        registry.enabled.compactMap(\.credentialWarning)
+    }
+
+    // MARK: - Routing
+
+    /// What `registry.dispatch` said about each ref in a pass.
+    ///
+    /// **A named result rather than three `var`s in `run`**, which is also what
+    /// keeps `SourceRefreshService.swift` under SwiftLint's 400-line limit: the
+    /// fourth dispatch case (D-216) is what pushed it over.
+    struct DispatchTally {
+        var claimed: [(snapshot: SourceRefSnapshot, connector: any SourceConnector)] = []
+
+        /// Refs a connector claimed but cannot fetch for want of a credential.
+        var notConfigured = 0
+
+        /// Refs claimed only by connectors the user switched off (D-216).
+        var disabled = 0
+    }
+
+    /// Route every ref, and count the ones that go nowhere.
+    func classify(_ refs: [SourceRefSnapshot]) -> DispatchTally {
+        var tally = DispatchTally()
+        for ref in refs {
+            switch registry.dispatch(ref) {
+            case .ready(let connector):
+                tally.claimed.append((ref, connector))
+            case .notConfigured:
+                tally.notConfigured += 1
+            case .disabled:
+                // Counted for the log and said nowhere else (D-216): the user
+                // switched this integration off, so there is nothing to report.
+                tally.disabled += 1
+            case .unhandled:
+                // Silent, by D-166: a bare `.url` ref is every link the user has
+                // ever pasted, and it is not a problem.
+                break
+            }
+        }
+        return tally
     }
 
     // MARK: - Candidates
