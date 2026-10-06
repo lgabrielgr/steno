@@ -102,6 +102,15 @@ func aLateEveningScheduleStillExpires() throws {
     #expect(try isDue("2026-10-07 03:30:00", time: elevenAtNight) == false)
 }
 
+/// **An app left running past midnight must not re-serve yesterday's occurrence.** The
+/// walk-back makes the most recent occurrence yesterday's 08:00 at 00:30, and the stamp
+/// from yesterday morning is what keeps it served — without that comparison a machine
+/// left on overnight would fetch again every night at midnight.
+@Test("a tick after midnight does not re-serve yesterday's morning")
+func aTickAfterMidnightDoesNotRepeatYesterday() throws {
+    #expect(try isDue("2026-10-07 00:30:00", lastRun: "2026-10-06 08:02:00") == false)
+}
+
 @Test("the walk-back finds the previous day's occurrence")
 func theWalkBackFindsYesterday() throws {
     let pacific = try calendar()

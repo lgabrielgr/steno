@@ -10,6 +10,30 @@ private final class PassCounter {
     var count = 0
 }
 
+/// Wait up to `limit` for `condition`, yielding between checks.
+///
+/// **A deadline, not a continuation the refresh closure resumes.** The continuation
+/// version read better and was wrong in the way that matters: a mutation which stops the
+/// pass being dispatched left it never resumed, so the suite *hung* instead of going red
+/// — found by the mutation sweep, where one edit turned a fifteen-second run into a
+/// fifteen-minute one. A test that hangs under mutation is worse than one that fails,
+/// because the failure never arrives and nothing says why.
+///
+/// Returns `false` on timeout, so the caller's `#expect` is what records the issue. Two
+/// seconds is generous for a `Task` already enqueued on this actor; the loop costs
+/// nothing when the pass has already run.
+@MainActor
+private func waitFor(
+    _ limit: Duration = .seconds(2), _ condition: @MainActor () -> Bool
+) async -> Bool {
+    let deadline = ContinuousClock.now + limit
+    while ContinuousClock.now < deadline {
+        if condition() { return true }
+        await Task.yield()
+    }
+    return condition()
+}
+
 @MainActor
 private func scratchSettings() throws -> AppSettings {
     let defaults = try #require(UserDefaults(suiteName: "steno.tests.\(UUID().uuidString)"))
@@ -145,6 +169,28 @@ func aLaunchInsideTheWindowServesIt() throws {
     #expect(subject.tick() == false)
 }
 
+/// **Switching the schedule off must not switch off §5.5's launch pass**, which is a
+/// fixed rule and not the setting the user was given. The toggle governs the unattended
+/// pass at a time of day; a launch is the user opening the app.
+@Test("the launch pass still runs with the schedule switched off")
+@MainActor
+func theLaunchPassIgnoresTheToggle() async throws {
+    let settings = try scratchSettings()
+    settings.scheduledRefreshEnabled = false
+    let calendar = try pacific()
+    let moment = try instant("2026-10-06 08:03:00", in: calendar)
+
+    let passes = PassCounter()
+    let subject = ScheduledRefreshController(
+        settings: settings, now: { moment }, calendar: { calendar },
+        refresh: { passes.count += 1 })
+
+    // No occurrence is claimed — the schedule is off — and the pass runs anyway.
+    #expect(subject.runLaunchPass() == false)
+    #expect(await waitFor { passes.count == 1 }, "the launch pass never reached the service")
+    #expect(settings.scheduledRefreshLastRun == nil)
+}
+
 /// A scheduled `Timer` is retained by the run loop, so reassigning the property does
 /// not stop the old one. Found by Copilot in PR #32 against `AutoExportController`; the
 /// assertion here is that a second `start()` leaves exactly one armed timer, observed
@@ -170,20 +216,21 @@ func startIsIdempotent() throws {
     #expect(second.isValid == false)
 }
 
-/// The one test that waits for the pass itself. `withCheckedContinuation`'s body runs
-/// synchronously, so the dispatch happens before the await — and the await ends only
-/// when the closure has actually run, rather than when a `Task` has been created.
+/// The test that waits for the pass itself rather than for the decision — the dispatch is
+/// the one thing `tick()`'s return value does not prove, because a `Task` has not
+/// necessarily started when the method that created it returns.
 @Test("a dispatched pass reaches the refresh closure")
 @MainActor
 func aDispatchedPassReachesTheRefreshClosure() async throws {
     let settings = try scratchSettings()
     let calendar = try pacific()
     let moment = try instant("2026-10-06 08:03:00", in: calendar)
+    let passes = PassCounter()
+    let subject = ScheduledRefreshController(
+        settings: settings, now: { moment }, calendar: { calendar },
+        refresh: { passes.count += 1 })
 
-    await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
-        let subject = ScheduledRefreshController(
-            settings: settings, now: { moment }, calendar: { calendar },
-            refresh: { continuation.resume() })
-        #expect(subject.tick())
-    }
+    #expect(subject.tick())
+
+    #expect(await waitFor { passes.count == 1 }, "the pass never reached the service")
 }
