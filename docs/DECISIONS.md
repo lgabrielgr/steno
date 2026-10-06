@@ -6525,3 +6525,203 @@ into the credential line turns `§8: the token never appears in the output, on a
 
 **Falsified by** the file's own tests, and by `make verify-integrations` against a real site — which
 is the half the suite cannot perform.
+
+---
+
+### D-221 — A polling tick over a pure due rule, not a timer armed at the occurrence
+
+**2026-10-06** · M4-05 · **Status:** accepted · **extends D-121, D-183**
+
+§5.5's scheduled refresh is a five-minute `Timer` that asks `ScheduledRefreshDue` whether an
+occurrence is owed. `AutoExportController`'s division of labour, for its reason: everything
+decidable lives in a function with no clock of its own, so the type holding the timer has almost no
+branches and the rule gets a test table instead of a wait.
+
+**The rejected alternative is the one that looks better.** A single-shot timer armed at the next
+occurrence fires on the minute, where this can start up to five minutes late. It was rejected
+because precision is not what §5.5 asks for — "so the morning view is instant" is about a
+stand-up
+nobody gives before 09:00 — and because the re-arming is where the bugs would live: the fire date
+has to be recomputed when the toggle changes, when the time changes, when the machine wakes, and
+when the time zone moves. A stale armed timer is *silent*, which is the failure mode nobody
+notices, because a refresh that never happens looks exactly like a refresh with nothing to report.
+Polling has no state to go stale: sleep, a closed app, a daylight-saving boundary and a clock
+dragged backwards all reduce to "the next tick re-asks".
+
+`NSBackgroundActivityScheduler` is the API Apple points at for M4-05's fourth acceptance criterion
+and cannot express this setting: it schedules by interval, not by time of day, and its whole value
+is the right to defer — including past the morning this exists to make fast. What the criterion
+actually buys here is `tolerance = 60` on the tick, `.common` run-loop mode, and a not-due tick
+that performs two date comparisons and touches no store.
+
+`calendar` is a closure read per tick rather than a stored value, which is what makes a time-zone
+change take effect with nothing re-armed — D-216's posture for enablement, applied to the clock.
+
+**Falsified by** `ScheduledRefreshControllerTests`: deleting the `stop()` at the top of `start()`
+turns `start is idempotent and leaves one armed timer` red, which is the defect Copilot found in
+`AutoExportController` in PR #32 and the reason that line is not decoration.
+
+---
+
+### D-222 — The most recent occurrence, a four-hour grace window, then the day is skipped
+
+**2026-10-06** · M4-05 · **Status:** accepted
+
+The rule asks for the latest instant matching the configured time that is at or before `now`, and
+serves it if `now` is less than four hours past it and no stamp already covers it.
+
+**"Today's occurrence" is the obvious reading and is wrong at the edge a laptop hits most.** With
+the time set to 23:00, a Mac asleep from 23:30 until 01:00 computes *that day's* 23:00, finds it in
+the future, and concludes nothing is owed — silently dropping the one occurrence the grace window
+exists to catch. Walking back a day costs one branch and removes the class.
+
+**Four hours, then the day is skipped rather than queued.** §5.5's launch pass already refreshes
+anything older than thirty minutes and FR-4's "Prepare Stand-up" refreshes the report window
+unconditionally, so correctness never depends on this rule firing; past the window a pass optimizes
+a morning that has gone. M4-05's second acceptance criterion asks for "a catch-up on next launch
+rather than a skipped day **or a thundering herd of requests**", and the window is how both halves
+hold at once.
+
+A `lastRun` in the future is treated as no stamp at all, `AutoExportDue`'s position for its reason:
+a clock dragged backwards would otherwise suppress the schedule until real time caught up, which
+for a mis-set year means never.
+
+**Daylight saving was measured, not predicted** (probe, `America/Los_Angeles`, 2026-10-06). A time
+inside a skipped hour answers the next valid instant *that day* — 02:30 becomes 03:00 —
+under the
+default `matchingPolicy: .nextTime`, so a skipped hour costs thirty minutes rather than a day.
+`.strict` answers the next day's 02:30 and would skip the day outright, so the default is load
+bearing and not merely inherited. A repeated hour answers its first instance, and the stamp from
+that instance covers the second.
+
+The same probe disproved this task's first explanation of why `startOfDay` is needed:
+`date(bySettingHour:minute:second:of:)` does **not** search forward across days despite `direction`
+defaulting to `.forward`. The anchor stays, because a rule whose correctness rests on which reading
+of `direction` is right is one the next reader has to re-derive.
+
+**Falsified by** `ScheduledRefreshDueTests`, where both boundaries are pinned in both directions —
+and by one finding worth recording: `a late-evening schedule is still served after midnight` does
+*not* go red when the walk-back is deleted, because a future occurrence yields a negative interval
+which is also less than the grace window. The walk-back is held by `the walk-back finds the
+previous day's occurrence`, which asserts the instant directly. The behavioural test states the
+promise; the direct one is the one that can fail.
+
+---
+
+### D-223 — `lastRun` is stamped at dispatch, not at success
+
+**2026-10-06** · M4-05 · **Status:** accepted · **contrasts D-121**
+
+The stamp is written before the pass is awaited, so an occurrence gets one attempt.
+
+**This is the inverse of `AutoExportDue`, which measures from the last success, and the inversion
+is the decision.** Auto-export measures from success so that a folder which has gone missing keeps
+re-announcing itself: that failure is the user's problem and must stay visible. A failed background
+refresh is not the user's problem — §5.5 makes every fetch best-effort, and the stand-up draft
+already labels stale data (D-176) — so stamping on success would retry every five minutes
+until the
+grace window closed: forty-eight passes at a source that is, most likely, down. That is precisely
+the "thundering herd" M4-05's acceptance criteria forbid.
+
+One attempt per occurrence also removes the need for an in-flight guard: the stamp makes the next
+tick not-due, so a second dispatch while the first is still fetching is unreachable rather than
+prevented. The code says so, because the obvious review comment on this file is "add a flag".
+
+A pass cut short by its own budget (D-178) is not retried either: the refs that got their turn are
+cached, the rest are stale, and `SourceNotice` is what tells the user.
+
+**Falsified by** `a failed pass is not retried inside the same occurrence` and `two ticks inside one
+occurrence dispatch one pass` — both go red when the stamp is removed.
+
+---
+
+### D-224 — Launch runs exactly one pass; the schedule only decides whether it counts
+
+**2026-10-06** · M4-05 · **Status:** accepted · **supersedes the launch call in D-179's note**
+
+`StenoApp.startLaunchRefresh` becomes `startScheduledRefresh`, which builds the controller and
+calls `start()`. At launch the rule is asked once: if an occurrence is owed the stamp is written,
+and either way exactly one `refreshDue()` is dispatched.
+
+**Not two passes.** Keeping the unconditional launch pass *and* adding a due-check pass dispatches
+twice; the second finds nothing stale, fetches nothing, and leaves two triggers claiming the same
+moment in the log. One dispatch, one log line, and the only thing the schedule decides at launch is
+whether this morning's occurrence has now been served.
+
+The pass stays in `StenoApp` for D-179's reason — the CLI bundle builds a store too, and `steno
+export` must not open a socket — and keeps using `mainContext`, because the window's own model
+reads that context.
+
+There is no `NSWorkspace.didWakeNotification` observation. A sleep spanning the window is
+indistinguishable from the app having been closed, and both end in the same catch-up; whether the
+run loop fires a missed tick immediately on wake or at the next five-minute boundary changes the
+latency by minutes, not the outcome, and an observation would be a second path to test for a
+difference the user cannot perceive.
+
+**The toggle does not reach the launch pass**, which is a distinction worth stating because the code
+makes it in one line: `runLaunchPass()` dispatches before consulting enablement for anything but
+the stamp. §5.5's launch rule is fixed; FR-6's setting is about the unattended pass at a time of
+day. `the launch pass still runs with the schedule switched off` is what holds it.
+
+---
+
+### D-225 — `TimeOfDay`, three settings keys, and a toggle whose absence means on
+
+**2026-10-06** · M4-05 · **Status:** accepted · **extends D-024, D-215**
+
+`TimeOfDay` stores minutes since midnight; `AppSettings` gains `scheduledRefresh.enabled`,
+`scheduledRefresh.time` and `scheduledRefresh.lastRun`, all three listed in `allKeys`.
+
+**Not a `Date`.** SwiftUI's `DatePicker(displayedComponents: .hourAndMinute)` binds one, so a
+setting taken straight from the control is an instant whose date component is noise every reader has
+to know to ignore — and whose meaning moves with the time zone it was written in, because 08:00 in
+Berlin and 08:00 here are one setting and two instants. The initializers are failable because the
+caller is either a settings read, where a nonsense stored value must fall back to a default only
+the caller knows, or a test; clamping would refresh at a time the user never chose.
+
+**Absence of the toggle means enabled.** §5.5 states the schedule as policy rather than as an
+option, so a fresh install schedules. `flag(_:)` already exists for exactly this: `bool(forKey:)`
+answers `false` for a key never written, and the inverse spelling would make a fresh install's
+schedule inert in the one direction nobody notices. The switch exists at all because unattended
+network activity deserves an off switch that is not "switch the integration off entirely", which
+would also stop the launch and Prepare passes.
+
+**The time's getter reads `object(forKey:) as? Int`, not `integer(forKey:)`.** The latter answers
+`0` for an absent key, and `0` is midnight — a legitimate setting. Written the obvious way,
+midnight
+and "unset" become one value and the 08:00 default is unreachable for anyone who chose 00:00.
+
+**Two deviations from the spec, recorded here rather than left to be noticed.** The default time
+lives on `TimeOfDay.eightAM` rather than on `ScheduledRefreshDue.defaultTime`: the initializers are
+failable and `force_unwrapping` is an enabled lint rule, so a literal at a call site has no spelling
+that compiles. And the pane's state is a new `ScheduledRefreshSettingsModel` rather than the
+`IntegrationsSettingsModel+Schedule` extension the spec named — an extension cannot add the stored
+properties `@Observable` needs to track, and `IntegrationsSettingsModel` at 387 lines cannot take a
+second subject without crossing SwiftLint's `file_length` limit. The model mirrors `UserDefaults`
+and writes through on every set, because a computed property over the store would change the
+setting and leave the control drawing its old value.
+
+**Falsified by** `AppSettingsTests` and `ScheduledRefreshSettingsModelTests`: replacing `flag(_:)`
+with `bool(forKey:)` turns a fresh install's schedule off, and emptying the model's `didSet` stops
+the write-through — each caught by its own test.
+
+---
+
+### D-226 — The scheduled pass keeps the 30-minute staleness rule
+
+**2026-10-06** · M4-05 · **Status:** accepted · **extends D-169**
+
+The scheduled pass calls `refreshDue()` with its default, `RefreshPolicy.launchStaleness`, rather
+than sweeping every ref unconditionally.
+
+Unconditional is the tempting reading of "make the morning instant", and it is how a herd starts: a
+Mac woken at 07:58 runs the launch pass, and an unconditional 08:00 pass refetches everything it
+just fetched. A ref read at 07:45 does not need rereading at 08:00 for the view to be warm.
+`RefreshPolicy.launchStaleness` is documented as not user-configurable precisely because M4-05's
+scheduled pass is the setting the user gets — the setting is *when*, not *how stale*.
+
+The resume window is unaffected. `since` comes from the event-log watermark less D-185's overlap,
+computed inside the service, which is what `SourceConnector.fetch`'s documentation means by "M4-05's
+catch-up pass needs to pass something else": a catch-up at 11:30 still asks the source about
+everything since the watermark, however long ago that was. **No connector-facing change ships in
+this task.**
