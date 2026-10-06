@@ -207,7 +207,7 @@ difference the user cannot perceive.
 
 ```swift
 // StenoKit/Settings/TimeOfDay.swift
-public struct TimeOfDay: Sendable, Equatable, Codable {
+public struct TimeOfDay: Sendable, Equatable {   // not Codable — see the note below
     public let hour: Int       // 0..<24
     public let minute: Int     // 0..<60
     public var minutesSinceMidnight: Int
@@ -223,6 +223,12 @@ public var scheduledRefreshEnabled: Bool          { get nonmutating set }
 public var scheduledRefreshTime: TimeOfDay        { get nonmutating set }
 public var scheduledRefreshLastRun: Date?         { get nonmutating set }
 ```
+
+**Not `Codable`, corrected after review.** The first version conformed, and a synthesized
+`init(from:)` assigns the stored property directly — so `{"minutesSinceMidnight":1440}` decodes to
+an hour of 24, which the type's own initializer refuses. Nothing serializes a `TimeOfDay`: the
+setting is an `Int` in `UserDefaults`, and §10's export deliberately does not carry settings
+(D-024). The conformance bought nothing and cost the invariant (Copilot, PR #46).
 
 **A `TimeOfDay`, not a `Date`.** SwiftUI's `DatePicker(displayedComponents: .hourAndMinute)` binds
 a `Date`, so without a value type the stored setting is a 1970 instant whose date component is

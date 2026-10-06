@@ -49,6 +49,21 @@ func aTimeOutsideTheDayIsRefused() {
     #expect(TimeOfDay(hour: -1, minute: 0) == nil)
 }
 
+/// **The conformance that was removed, pinned so its removal is falsifiable** (Copilot,
+/// PR #46). A synthesized `init(from:)` assigns the stored property directly, so
+/// `{"minutesSinceMidnight":1440}` decoded to an hour of 24 — a value the initializers
+/// below refuse. Nothing serializes this type, so `Codable` cost the invariant and bought
+/// nothing; without this test, re-adding it would contradict a comment and nothing else.
+///
+/// Through `Any`, so the compiler cannot decide the cast statically and warn about it.
+@Test("TimeOfDay is not Codable, so no decoder can bypass its bounds")
+func timeOfDayIsNotCodable() {
+    let value: Any = TimeOfDay.eightAM
+
+    #expect(!(value is any Decodable), "a synthesized init(from:) bypasses the bounds check")
+    #expect(!(value is any Encodable))
+}
+
 @Test("a date's hour and minute become the setting, and its date is dropped")
 func aDateBecomesATimeOfDay() throws {
     let calendar = try pacific()

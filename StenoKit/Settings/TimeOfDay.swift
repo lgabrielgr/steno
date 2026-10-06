@@ -12,7 +12,16 @@ import Foundation
 /// Stored as that one integer rather than as two, so `defaults read
 /// com.lgabrielgr.steno` prints something legible and there is only one value to
 /// validate on the way in.
-public struct TimeOfDay: Sendable, Equatable, Codable {
+/// **Deliberately not `Codable`** (Copilot, PR #46). A synthesized `init(from:)` assigns
+/// the stored property directly, so it bypasses both validating initializers below:
+/// `{"minutesSinceMidnight":1440}` decodes to an hour of 24, a value this type's own
+/// initializer refuses. Nothing serializes a `TimeOfDay` — the setting is stored as an
+/// `Int` in `UserDefaults`, and §10's export deliberately does not carry settings (D-024)
+/// — so the conformance bought nothing and cost the invariant. If serialization is ever
+/// needed, write `init(from:)` through `init?(minutesSinceMidnight:)` rather than letting
+/// it be synthesized. `TimeOfDayTests` pins this, so re-adding it turns a test red rather
+/// than only contradicting this comment.
+public struct TimeOfDay: Sendable, Equatable {
     /// §5.5's default: "a user-set time (default 08:00)".
     ///
     /// **A static rather than `TimeOfDay(hour: 8, minute: 0)` at every call site.**
