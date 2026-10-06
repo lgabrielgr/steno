@@ -114,9 +114,12 @@ at 23:30 and wakes at 01:00 computes *tomorrow's* 23:00, finds `now` before it, 
 nothing is owed — silently dropping the one occurrence the grace window exists to catch. Walking
 back a day when the candidate is in the future costs one branch and removes the whole class.
 
-**`startOfDay` is load-bearing.** `Calendar.date(bySettingHour:minute:second:of:)` searches
-*forward* from the date it is given, so applying 08:00 to a 14:00 `now` returns tomorrow morning,
-not this morning. Anchoring on midnight is what makes "today's occurrence" mean today's.
+**`startOfDay` makes the day explicit.** `Calendar.date(bySettingHour:minute:second:of:)` takes a
+`direction` that defaults to `.forward`, which reads as though applying 08:00 to a 14:00 `now`
+would return tomorrow morning. Probed on 2026-10-06, it does not: it returns the same day's 08:00,
+already in the past. The anchor is kept anyway, because a rule whose correctness rests on which
+reading of `direction` is right is a rule the next reader has to re-derive — and because anchoring
+is what lets the walk-back below be a plain "subtract one day".
 
 **Four hours, then the day is skipped.** Past the window the pass buys nothing: §5.5's launch rule
 refreshes anything older than thirty minutes, and "Prepare Stand-up" refreshes the report window
@@ -134,12 +137,22 @@ Boundaries are strict and pinned in both directions, matching `RefreshPolicy.due
 candidate` is due, and `now - candidate == grace` is **not**. Which side the boundary falls on
 matters less than a test holding it still.
 
-Daylight saving is the one case this document does not assert and the plan must measure. A
-configured time inside a skipped hour has no instant on that day, and `date(bySettingHour:)`
-answers with `matchingPolicy: .nextTime` — what it actually returns, and whether it returns
-`nil`, is a Foundation behaviour to be observed in a harness and then written into the test
-table, not predicted here. Two properties must hold whatever it returns: a well-formed day fires
-exactly once, and a repeated hour fires exactly once. A `nil` candidate is not due, and logs.
+**Daylight saving, measured rather than predicted** (probe, `America/Los_Angeles`, 2026-10-06):
+
+| Input | `matchingPolicy: .nextTime` (the default) |
+|---|---|
+| 02:30 on 2026-03-08, an hour that does not exist | `03:00` the same day |
+| 08:00 on the same day | `08:00`, unremarkable |
+| 01:30 on 2026-11-01, an hour that happens twice | the first instance (`-07:00`); `.last` gives `-08:00` |
+
+So a skipped hour moves the occurrence forward by minutes rather than losing the day, and a
+repeated hour fires once because the stamp from the first instance covers the second.
+`matchingPolicy: .strict` was rejected on the evidence: it answers the skipped 02:30 with *the
+next day's* 02:30, which would silently skip a day.
+
+A `nil` candidate is therefore unreachable for a well-formed `TimeOfDay`, and the `guard` that
+returns "not due" on one is deliberately untested — there is no input that reaches it, and a test
+that cannot fail is worse than an honest comment saying so.
 
 ## D-223 — `lastRun` is stamped at dispatch, not at success
 
@@ -386,7 +399,8 @@ overnight, the schedule never fires and the catch-up happens at the next launch 
 launch pass the user was getting anyway. This is a property of an in-process scheduler, not a
 bug, and the pane's explanatory sentence is where the user is told.
 
-**The DST behaviour of `date(bySettingHour:)` is unverified in this document** and is the one
-thing the plan must settle with a harness before writing the test table. Writing an assumed
-return value into a test would produce a test that passes for the wrong reason — the second
-defect this repository ships most often.
+**The DST behaviour was probed, not assumed**, and the table in D-222 records what Foundation
+actually answered on 2026-10-06. The same probe disproved this document's first explanation of why
+`startOfDay` is needed, which is the argument for probing: an assumed return value becomes a test
+that passes for the wrong reason, and a plausible explanation becomes a comment asserting a false
+property — the two defects this repository ships most often.
