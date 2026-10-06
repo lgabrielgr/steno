@@ -197,3 +197,84 @@ func disablingIsIdempotent() throws {
 
     #expect(defaults.stringArray(forKey: AppSettings.integrationsDisabledKey) == ["jira"])
 }
+
+// MARK: - §5.5's scheduled refresh (M4-05)
+
+/// **Absence means enabled**, which `UserDefaults.bool(forKey:)` cannot say. §5.5
+/// states the schedule as policy rather than as an option, and the inverse spelling
+/// would make a fresh install's schedule inert in the one direction nobody notices: a
+/// pass that never fires looks exactly like one with nothing to fetch.
+@Test("a fresh install has the schedule on, at 08:00, never run")
+@MainActor
+func aFreshInstallIsScheduledAtEight() throws {
+    let (settings, _) = try scratch()
+
+    #expect(settings.scheduledRefreshEnabled)
+    #expect(settings.scheduledRefreshTime == .eightAM)
+    #expect(settings.scheduledRefreshLastRun == nil)
+}
+
+@Test("the schedule's three settings round-trip")
+@MainActor
+func theScheduleRoundTrips() throws {
+    let (settings, _) = try scratch()
+    let dispatchedAt = Date(timeIntervalSince1970: 1_792_000_000)
+    let quarterPastSix = try #require(TimeOfDay(hour: 6, minute: 15))
+
+    settings.scheduledRefreshEnabled = false
+    settings.scheduledRefreshTime = quarterPastSix
+    settings.scheduledRefreshLastRun = dispatchedAt
+
+    #expect(settings.scheduledRefreshEnabled == false)
+    #expect(settings.scheduledRefreshTime == quarterPastSix)
+    #expect(settings.scheduledRefreshLastRun == dispatchedAt)
+}
+
+/// Midnight is a legitimate setting, which is why the getter reads `object(forKey:)`
+/// rather than `integer(forKey:)` — the latter answers `0` for an absent key, so
+/// midnight and "unset" would be the same value and the 08:00 default would be
+/// unreachable for anyone who ever chose 00:00.
+@Test("midnight is a real setting, not an absent one")
+@MainActor
+func midnightIsARealSetting() throws {
+    let (settings, _) = try scratch()
+    let midnight = try #require(TimeOfDay(minutesSinceMidnight: 0))
+
+    settings.scheduledRefreshTime = midnight
+
+    #expect(settings.scheduledRefreshTime == midnight)
+}
+
+@Test("an out-of-range stored time reads as the default")
+@MainActor
+func anOutOfRangeTimeReadsAsTheDefault() throws {
+    let (settings, defaults) = try scratch()
+
+    // What a hand-written `defaults write` can produce. It must not trap, and it must
+    // not schedule a refresh at a time the user never chose.
+    defaults.set(99 * 60, forKey: AppSettings.scheduledRefreshTimeKey)
+
+    #expect(settings.scheduledRefreshTime == .eightAM)
+}
+
+@Test("a stored time of the wrong type reads as the default")
+@MainActor
+func aWrongTypedTimeReadsAsTheDefault() throws {
+    let (settings, defaults) = try scratch()
+
+    defaults.set("eight o'clock", forKey: AppSettings.scheduledRefreshTimeKey)
+
+    #expect(settings.scheduledRefreshTime == .eightAM)
+}
+
+@Test("clearing the last run removes it")
+@MainActor
+func clearingTheLastRunRemovesIt() throws {
+    let (settings, defaults) = try scratch()
+    settings.scheduledRefreshLastRun = Date()
+
+    settings.scheduledRefreshLastRun = nil
+
+    #expect(settings.scheduledRefreshLastRun == nil)
+    #expect(defaults.object(forKey: AppSettings.scheduledRefreshLastRunKey) == nil)
+}
