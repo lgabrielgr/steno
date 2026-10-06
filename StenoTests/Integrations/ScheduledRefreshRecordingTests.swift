@@ -179,12 +179,17 @@ func aWakeInsideTheWindowServesIt() async throws {
     subject.stop()
 }
 
-/// A burst of wakes must not become a burst of fetches. The stamp stops the occurrence being
-/// claimed twice; `refreshDue()`'s staleness rule and the gate are what stop the passes
-/// themselves from costing anything, which is why dispatching on every wake is safe.
-@Test("repeated wakes claim the occurrence once")
+/// **A burst of wakes collapses to one pass** (D-230). The gate serializes queued passes but
+/// does not deduplicate them, and a pass whose fetches fail leaves `lastFetchedAt` untouched —
+/// so three wakes against an unreachable source meant three full attempts. This test asserted
+/// exactly that storm (`passes.total == 3`) until Copilot pointed out it contradicted the
+/// no-herd rationale it was written to defend.
+///
+/// Deterministic without a sleep: `dispatch()` sets its flag synchronously, and the two posts
+/// below happen before this test suspends, so the queued wakes meet a flag that is already up.
+@Test("a burst of wakes runs one pass, and a later wake runs another")
 @MainActor
-func repeatedWakesClaimOnce() async throws {
+func aBurstOfWakesRunsOnePass() async throws {
     let settings = try scratchSettings()
     let workspace = NotificationCenter()
     let calendar = try pacific()
@@ -197,14 +202,52 @@ func repeatedWakesClaimOnce() async throws {
             passes.total += 1
             return .idle
         })
+
+    subject.start(interval: 3600)
+    workspace.post(name: NSWorkspace.didWakeNotification, object: nil)
+    workspace.post(name: NSWorkspace.didWakeNotification, object: nil)
+
+    #expect(await waitFor { passes.total == 1 }, "the launch pass never ran")
+    #expect(passes.total == 1, "a burst of wakes must not queue a pass each")
+    #expect(settings.scheduledRefreshLastRun == morning)
+
+    // Once it has finished, a later wake is a new pass rather than a coalesced one — the
+    // guard must not latch.
+    workspace.post(name: NSWorkspace.didWakeNotification, object: nil)
+
+    #expect(await waitFor { passes.total == 2 }, "the guard latched and never let go")
+    subject.stop()
+}
+
+/// **The switch has to switch the unattended thing off** (D-231). D-228's wake path dispatched
+/// without consulting `scheduledRefreshEnabled`, so "Refresh in the background" off still
+/// reached the network on every wake.
+@Test("a wake does nothing while the schedule is switched off")
+@MainActor
+func aWakeObeysTheToggle() async throws {
+    let settings = try scratchSettings()
+    settings.scheduledRefreshEnabled = false
+    let workspace = NotificationCenter()
+    let calendar = try pacific()
+    let morning = try instant("2026-10-06 09:00:00", in: calendar)
+    let passes = PassCounter()
+    let subject = ScheduledRefreshController(
+        settings: settings, now: { morning }, calendar: { calendar },
+        workspaceCenter: workspace, center: NotificationCenter(),
+        refresh: {
+            passes.total += 1
+            return .idle
+        })
+
+    // `start()` still runs its launch pass — that is §5.5's fixed rule, not this setting
+    // (D-224) — so the baseline is one, and the wake must not add to it.
     subject.start(interval: 3600)
     #expect(await waitFor { passes.total == 1 })
 
     workspace.post(name: NSWorkspace.didWakeNotification, object: nil)
-    workspace.post(name: NSWorkspace.didWakeNotification, object: nil)
 
-    #expect(await waitFor { passes.total == 3 })
-    #expect(settings.scheduledRefreshLastRun == morning)
+    #expect(await waitFor(.milliseconds(300)) { passes.total > 1 } == false)
+    #expect(settings.scheduledRefreshLastRun == nil)
     subject.stop()
 }
 

@@ -6814,10 +6814,13 @@ would do — and claims nothing, so D-222's grace window still decides what coun
 morning, and the day is not resurrected after it has gone. The method is named `runCatchUpPass()`
 rather than `runLaunchPass()` now that two triggers share it.
 
-**Repeated wakes are harmless, which is what makes dispatching on every one safe.**
+**Repeated wakes were claimed to be harmless here, and that claim was wrong — see D-230.**
 `refreshDue()` fetches only refs older than thirty minutes (D-169) and `SourceRefreshGate`
-serializes passes (D-183), so a burst of wake notifications costs one pass and no fetches. The
-stamp (D-223) independently stops the occurrence being claimed twice.
+serializes passes (D-183), which this paragraph read as "a burst of wake notifications costs one
+pass and no fetches". Serializing is not deduplicating: a pass whose fetches fail leaves
+`lastFetchedAt` untouched, so every queued pass attempts the same refs again. D-230 adds the
+coalescing that makes the sentence true. The stamp (D-223) independently stops the occurrence
+being claimed twice.
 
 **It observes `NSWorkspace.shared.notificationCenter`, not `NotificationCenter.default`**, because
 that is where AppKit posts workspace notifications; an observer on the default center is silently
@@ -6866,3 +6869,60 @@ false and invalidated the memo on every refused pass.
 **Falsified by** `an open pane hears a rejection recorded while it was showing`, `an open pane
 hears a recovery too`, and `a pass that changes nothing announces nothing` — the last of which is
 what stops the fix becoming a notification storm.
+
+---
+
+### D-230 — Outstanding passes are coalesced, because the gate serializes rather than deduplicates
+
+**2026-10-06** · M4-05 · **Status:** accepted · **corrects D-223, D-228** · **extends D-183**
+
+`ScheduledRefreshController.dispatch()` drops a request while one of its own passes is still
+running.
+
+**The gate was doing less than two comments in this task claimed.** `SourceRefreshGate` (D-183)
+makes queued passes run one after another, which is what stops them racing — and D-228 read that
+as "a burst of wake notifications costs one pass and no fetches". It does not. A pass whose
+fetches *fail* leaves `lastFetchedAt` untouched, deliberately and documented as such in
+`SourceRefreshService+Write`, so every queued pass finds the same refs due and attempts them
+again. Three wake notifications against an unreachable source therefore meant three full
+attempts: the thundering herd M4-05's own acceptance criteria forbid, produced by the fix for the
+missed catch-up. Raised by Copilot in review round 4 of PR #46.
+
+**D-223 said this flag was unreachable, and was right about ticks only.** The stamp makes the next
+*tick* not-due while a pass is in flight, so a tick cannot dispatch twice. D-228's wake path
+dispatches without claiming anything, which took the guarantee away — and the comment telling the
+next reader "do not add the flag back" survived the change that invalidated it. Both the comment
+and the behaviour are corrected here.
+
+**Dropping a concurrent request loses nothing**, which is what makes coalescing the right shape
+rather than queueing: the pass already running is refreshing every ref that is due, which is all
+the dropped one would have done. The stamp is still written by `claimOccurrenceIfDue()` before the
+dispatch, so a coalesced wake does not lose an occurrence — the in-flight pass covers it.
+
+**Falsified by** `a burst of wakes runs one pass, and a later wake runs another` — which asserted
+`passes.total == 3` until this round, and whose second half exists because a guard that latches is
+the obvious way to get this wrong.
+
+---
+
+### D-231 — A wake obeys the toggle; a launch does not
+
+**2026-10-06** · M4-05 · **Status:** accepted · **corrects D-228** · **extends D-224, D-225**
+
+`runCatchUpPass(_:)` takes a trigger. With `scheduledRefreshEnabled` off, a `.wake` pass does not
+run; a `.launch` pass still does.
+
+D-225 gives the switch its purpose: "unattended network activity deserves an off switch that is
+not 'switch the integration off entirely'". A machine waking up is unattended network activity.
+D-228 dispatched on every wake without consulting the setting, so the switch stopped the scheduled
+pass and left a wake-triggered one — which is the switch failing to switch off the thing it
+exists for. Raised by Copilot in review round 4 of PR #46.
+
+**A launch is not unattended.** §5.5's launch rule is fixed and not what FR-6 offers to disable
+(D-224), and a user opening the app is present by definition. So the asymmetry is deliberate and
+is now stated in one place — the trigger — rather than implied by which call site reached the
+pass.
+
+**Falsified by** `a wake does nothing while the schedule is switched off`, and by the mutation
+that makes the *launch* pass obey the toggle too, which turns `the launch pass still runs with the
+schedule switched off` red.

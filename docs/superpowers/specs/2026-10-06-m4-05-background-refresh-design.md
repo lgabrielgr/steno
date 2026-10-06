@@ -207,6 +207,13 @@ sat on yesterday's caches until the user pressed Prepare. So `NSWorkspace.didWak
 runs the same catch-up pass launch runs: a wake at 09:30 claims the occurrence, a wake at 13:00
 warms the cache and claims nothing.
 
+Two further corrections came out of the next round (D-230, D-231). A burst of wakes used to queue
+one pass each — the gate serializes them but does not make the later ones cheap, because a pass
+whose fetches fail leaves `lastFetchedAt` untouched — so `dispatch()` now coalesces while one of
+its own passes is running. And a wake now obeys `scheduledRefreshEnabled`, which D-228's version
+bypassed: a switch for unattended network activity has to stop a machine waking up and fetching,
+while a launch, where the user is present, stays on §5.5's fixed rule.
+
 ## D-225 — `TimeOfDay`, three settings keys, and a toggle whose absence means on
 
 ```swift

@@ -49,6 +49,25 @@ public final class ScheduledRefreshController {
     private var timer: Timer?
     private var wakeObservation: WriteObservation?
 
+    /// Whether a pass this controller started is still running (D-230).
+    ///
+    /// **A guard this file previously argued was unreachable.** D-223 reasoned that the
+    /// dispatch stamp makes a second pass impossible, and that is true of *ticks*, which
+    /// dispatch only when they claim an occurrence. It is not true of the wake path D-228
+    /// added, which dispatches whether or not anything is claimed — so a burst of wake
+    /// notifications queued one pass per notification.
+    private var passInFlight = false
+
+    /// What asked for a catch-up pass.
+    ///
+    /// **The toggle reaches one of these and not the other** (D-231). A launch is the user
+    /// opening the app, and §5.5's launch refresh is a fixed rule; a wake is unattended
+    /// network activity, which is the thing FR-6's switch exists to be able to stop.
+    enum CatchUpTrigger {
+        case launch
+        case wake
+    }
+
     /// - Parameters:
     ///   - settings: the same instance the Settings pane writes, so the toggle and
     ///     the time take effect on the next tick with no relaunch.
@@ -111,7 +130,7 @@ public final class ScheduledRefreshController {
             workspaceCenter.addObserver(
                 forName: NSWorkspace.didWakeNotification, object: nil, queue: nil
             ) { [weak self] _ in
-                MainActor.assumeIsolated { _ = self?.runCatchUpPass() }
+                MainActor.assumeIsolated { _ = self?.runCatchUpPass(.wake) }
             }, center: workspaceCenter)
 
         let timer = Timer.scheduledTimer(
@@ -162,7 +181,17 @@ public final class ScheduledRefreshController {
     ///
     /// - Returns: whether this pass also served a due occurrence.
     @discardableResult
-    func runCatchUpPass() -> Bool {
+    func runCatchUpPass(_ trigger: CatchUpTrigger = .launch) -> Bool {
+        // **A wake obeys the toggle; a launch does not** (D-231). "Refresh in the background"
+        // is an off switch for *unattended* network activity (D-225), and a machine waking up
+        // is exactly that — while a launch is the user opening the app, where §5.5's
+        // thirty-minute rule applies regardless of this setting. D-228 dispatched on every
+        // wake without consulting it, which made the switch fail to switch the thing off.
+        if trigger == .wake, !settings.scheduledRefreshEnabled {
+            Log.sources.debug("scheduled refresh: wake catch-up skipped, the schedule is off")
+            return false
+        }
+
         let claimed = claimOccurrenceIfDue()
         if claimed {
             Log.sources.info("scheduled refresh: this catch-up pass serves the due occurrence")
@@ -200,9 +229,14 @@ public final class ScheduledRefreshController {
     /// mean retrying every five minutes until the grace window closed, forty-eight
     /// passes at a source that is most likely down.
     ///
-    /// One attempt per occurrence is also why there is no in-flight guard: the stamp
-    /// makes the next tick not-due, so a second dispatch while the first is still
-    /// fetching is unreachable rather than prevented. Do not add the flag back.
+    /// One attempt per occurrence is what makes a *tick* unable to dispatch twice: the stamp
+    /// makes the next tick not-due while the first pass is still fetching.
+    ///
+    /// **That is not a general guarantee, and this comment claimed it was.** It used to end
+    /// "a second dispatch while the first is still fetching is unreachable rather than
+    /// prevented. Do not add the flag back" — true of ticks, false as soon as D-228 gave a
+    /// wake a pass that dispatches without claiming anything. `passInFlight` is that flag,
+    /// added deliberately in D-230.
     private func claimOccurrenceIfDue() -> Bool {
         guard settings.scheduledRefreshEnabled else { return false }
 
@@ -228,8 +262,26 @@ public final class ScheduledRefreshController {
     /// expiry warnings — reaches the user at the next "Prepare Stand-up" through
     /// `SourceNotice` (D-193), which is the surface §5.2 chose for them.
     private func dispatch() {
+        // **Coalesced, because the gate serializes rather than deduplicates** (D-230).
+        // `SourceRefreshGate` makes queued passes run one after another, which is what keeps
+        // them from racing — but it does not make the later ones cheap. A pass whose fetches
+        // *fail* leaves `lastFetchedAt` untouched by design (`SourceRefreshService+Write`
+        // says so), so every queued pass finds the same refs due and attempts them again.
+        // Three wake notifications against an unreachable source therefore meant three full
+        // attempts, which is the herd this task's acceptance criteria forbid. Raised by
+        // Copilot in review round 4 of PR #46.
+        //
+        // Dropping a concurrent request loses nothing: the pass already running is refreshing
+        // every ref that is due, which is all the dropped one would have done.
+        guard !passInFlight else {
+            Log.sources.debug("scheduled refresh: a pass is already running, coalescing this one")
+            return
+        }
+
+        passInFlight = true
         Task { @MainActor in
             let outcome = await refresh()
+            passInFlight = false
             record(outcome)
         }
     }

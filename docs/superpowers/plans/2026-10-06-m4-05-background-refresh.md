@@ -1354,6 +1354,25 @@ public final class ScheduledRefreshController {
     private var timer: Timer?
     private var wakeObservation: WriteObservation?
 
+    /// Whether a pass this controller started is still running (D-230).
+    ///
+    /// **A guard this file previously argued was unreachable.** D-223 reasoned that the
+    /// dispatch stamp makes a second pass impossible, and that is true of *ticks*, which
+    /// dispatch only when they claim an occurrence. It is not true of the wake path D-228
+    /// added, which dispatches whether or not anything is claimed — so a burst of wake
+    /// notifications queued one pass per notification.
+    private var passInFlight = false
+
+    /// What asked for a catch-up pass.
+    ///
+    /// **The toggle reaches one of these and not the other** (D-231). A launch is the user
+    /// opening the app, and §5.5's launch refresh is a fixed rule; a wake is unattended
+    /// network activity, which is the thing FR-6's switch exists to be able to stop.
+    enum CatchUpTrigger {
+        case launch
+        case wake
+    }
+
     /// - Parameters:
     ///   - settings: the same instance the Settings pane writes, so the toggle and
     ///     the time take effect on the next tick with no relaunch.
@@ -1416,7 +1435,7 @@ public final class ScheduledRefreshController {
             workspaceCenter.addObserver(
                 forName: NSWorkspace.didWakeNotification, object: nil, queue: nil
             ) { [weak self] _ in
-                MainActor.assumeIsolated { _ = self?.runCatchUpPass() }
+                MainActor.assumeIsolated { _ = self?.runCatchUpPass(.wake) }
             }, center: workspaceCenter)
 
         let timer = Timer.scheduledTimer(
@@ -1467,7 +1486,17 @@ public final class ScheduledRefreshController {
     ///
     /// - Returns: whether this pass also served a due occurrence.
     @discardableResult
-    func runCatchUpPass() -> Bool {
+    func runCatchUpPass(_ trigger: CatchUpTrigger = .launch) -> Bool {
+        // **A wake obeys the toggle; a launch does not** (D-231). "Refresh in the background"
+        // is an off switch for *unattended* network activity (D-225), and a machine waking up
+        // is exactly that — while a launch is the user opening the app, where §5.5's
+        // thirty-minute rule applies regardless of this setting. D-228 dispatched on every
+        // wake without consulting it, which made the switch fail to switch the thing off.
+        if !settings.scheduledRefreshEnabled {
+            Log.sources.debug("scheduled refresh: wake catch-up skipped, the schedule is off")
+            return false
+        }
+
         let claimed = claimOccurrenceIfDue()
         if claimed {
             Log.sources.info("scheduled refresh: this catch-up pass serves the due occurrence")
@@ -1505,9 +1534,14 @@ public final class ScheduledRefreshController {
     /// mean retrying every five minutes until the grace window closed, forty-eight
     /// passes at a source that is most likely down.
     ///
-    /// One attempt per occurrence is also why there is no in-flight guard: the stamp
-    /// makes the next tick not-due, so a second dispatch while the first is still
-    /// fetching is unreachable rather than prevented. Do not add the flag back.
+    /// One attempt per occurrence is what makes a *tick* unable to dispatch twice: the stamp
+    /// makes the next tick not-due while the first pass is still fetching.
+    ///
+    /// **That is not a general guarantee, and this comment claimed it was.** It used to end
+    /// "a second dispatch while the first is still fetching is unreachable rather than
+    /// prevented. Do not add the flag back" — true of ticks, false as soon as D-228 gave a
+    /// wake a pass that dispatches without claiming anything. `passInFlight` is that flag,
+    /// added deliberately in D-230.
     private func claimOccurrenceIfDue() -> Bool {
         guard settings.scheduledRefreshEnabled else { return false }
 
@@ -1533,8 +1567,26 @@ public final class ScheduledRefreshController {
     /// expiry warnings — reaches the user at the next "Prepare Stand-up" through
     /// `SourceNotice` (D-193), which is the surface §5.2 chose for them.
     private func dispatch() {
+        // **Coalesced, because the gate serializes rather than deduplicates** (D-230).
+        // `SourceRefreshGate` makes queued passes run one after another, which is what keeps
+        // them from racing — but it does not make the later ones cheap. A pass whose fetches
+        // *fail* leaves `lastFetchedAt` untouched by design (`SourceRefreshService+Write`
+        // says so), so every queued pass finds the same refs due and attempts them again.
+        // Three wake notifications against an unreachable source therefore meant three full
+        // attempts, which is the herd this task's acceptance criteria forbid. Raised by
+        // Copilot in review round 4 of PR #46.
+        //
+        // Dropping a concurrent request loses nothing: the pass already running is refreshing
+        // every ref that is due, which is all the dropped one would have done.
+        guard !passInFlight else {
+            Log.sources.debug("scheduled refresh: a pass is already running, coalescing this one")
+            return
+        }
+
+        passInFlight = true
         Task { @MainActor in
             let outcome = await refresh()
+            passInFlight = false
             record(outcome)
         }
     }
@@ -2676,12 +2728,17 @@ func aWakeInsideTheWindowServesIt() async throws {
     subject.stop()
 }
 
-/// A burst of wakes must not become a burst of fetches. The stamp stops the occurrence being
-/// claimed twice; `refreshDue()`'s staleness rule and the gate are what stop the passes
-/// themselves from costing anything, which is why dispatching on every wake is safe.
-@Test("repeated wakes claim the occurrence once")
+/// **A burst of wakes collapses to one pass** (D-230). The gate serializes queued passes but
+/// does not deduplicate them, and a pass whose fetches fail leaves `lastFetchedAt` untouched —
+/// so three wakes against an unreachable source meant three full attempts. This test asserted
+/// exactly that storm (`passes.total == 3`) until Copilot pointed out it contradicted the
+/// no-herd rationale it was written to defend.
+///
+/// Deterministic without a sleep: `dispatch()` sets its flag synchronously, and the two posts
+/// below happen before this test suspends, so the queued wakes meet a flag that is already up.
+@Test("a burst of wakes runs one pass, and a later wake runs another")
 @MainActor
-func repeatedWakesClaimOnce() async throws {
+func aBurstOfWakesRunsOnePass() async throws {
     let settings = try scratchSettings()
     let workspace = NotificationCenter()
     let calendar = try pacific()
@@ -2694,14 +2751,52 @@ func repeatedWakesClaimOnce() async throws {
             passes.total += 1
             return .idle
         })
+
+    subject.start(interval: 3600)
+    workspace.post(name: NSWorkspace.didWakeNotification, object: nil)
+    workspace.post(name: NSWorkspace.didWakeNotification, object: nil)
+
+    #expect(await waitFor { passes.total == 1 }, "the launch pass never ran")
+    #expect(passes.total == 1, "a burst of wakes must not queue a pass each")
+    #expect(settings.scheduledRefreshLastRun == morning)
+
+    // Once it has finished, a later wake is a new pass rather than a coalesced one — the
+    // guard must not latch.
+    workspace.post(name: NSWorkspace.didWakeNotification, object: nil)
+
+    #expect(await waitFor { passes.total == 2 }, "the guard latched and never let go")
+    subject.stop()
+}
+
+/// **The switch has to switch the unattended thing off** (D-231). D-228's wake path dispatched
+/// without consulting `scheduledRefreshEnabled`, so "Refresh in the background" off still
+/// reached the network on every wake.
+@Test("a wake does nothing while the schedule is switched off")
+@MainActor
+func aWakeObeysTheToggle() async throws {
+    let settings = try scratchSettings()
+    settings.scheduledRefreshEnabled = false
+    let workspace = NotificationCenter()
+    let calendar = try pacific()
+    let morning = try instant("2026-10-06 09:00:00", in: calendar)
+    let passes = PassCounter()
+    let subject = ScheduledRefreshController(
+        settings: settings, now: { morning }, calendar: { calendar },
+        workspaceCenter: workspace, center: NotificationCenter(),
+        refresh: {
+            passes.total += 1
+            return .idle
+        })
+
+    // `start()` still runs its launch pass — that is §5.5's fixed rule, not this setting
+    // (D-224) — so the baseline is one, and the wake must not add to it.
     subject.start(interval: 3600)
     #expect(await waitFor { passes.total == 1 })
 
     workspace.post(name: NSWorkspace.didWakeNotification, object: nil)
-    workspace.post(name: NSWorkspace.didWakeNotification, object: nil)
 
-    #expect(await waitFor { passes.total == 3 })
-    #expect(settings.scheduledRefreshLastRun == morning)
+    #expect(await waitFor(.milliseconds(300)) { passes.total > 1 } == false)
+    #expect(settings.scheduledRefreshLastRun == nil)
     subject.stop()
 }
 
@@ -2900,7 +2995,7 @@ injected so a test never touches a process-wide center:
             workspaceCenter.addObserver(
                 forName: NSWorkspace.didWakeNotification, object: nil, queue: nil
             ) { [weak self] _ in
-                MainActor.assumeIsolated { _ = self?.runCatchUpPass() }
+                MainActor.assumeIsolated { _ = self?.runCatchUpPass(.wake) }
             }, center: workspaceCenter)
 
         let timer = Timer.scheduledTimer(
@@ -3105,3 +3200,189 @@ Record both as decisions — **D-228** correcting D-224, **D-229** correcting D-
 spec in place. Both findings were a comment asserting something untrue of the code beside it, which
 is this repository's most-shipped defect; the decision records say so rather than only describing
 the fix.
+
+---
+
+## Task 9: What round 4 added — coalescing, and a wake that obeys the switch
+
+**Added after the fourth review round**, which found that Task 8's fix had created the problem
+Task 3's grace window exists to prevent, and that it had routed around FR-6's switch.
+
+**Files:**
+- Modify: `StenoKit/Integrations/ScheduledRefreshController.swift` — `passInFlight`, a `CatchUpTrigger`, and the corrected comment that said the flag was unreachable
+- Modify: `StenoTests/Integrations/ScheduledRefreshRecordingTests.swift` — the burst test now asserts one pass, plus a wake-with-the-toggle-off test
+
+**Interfaces:**
+- Produces: `ScheduledRefreshController.CatchUpTrigger` (`.launch`, `.wake`); `runCatchUpPass(_ trigger:)` defaulting to `.launch`.
+
+### Finding 1: the gate serializes, it does not deduplicate
+
+Task 8 dispatched a pass on every wake and justified it like this: *"Repeated wakes are harmless —
+`refreshDue()` fetches only refs older than thirty minutes and `SourceRefreshGate` serializes
+passes, so a burst costs one pass and no fetches."*
+
+That is true only when the first pass **succeeds**. `SourceRefreshService+Write` leaves
+`lastFetchedAt` untouched on a failed fetch — deliberately, and its own comment says so — so
+against an unreachable source every queued pass finds the same refs due and attempts them again.
+Three wakes, three full attempts: the herd this task's acceptance criteria forbid.
+
+```swift
+    /// Fire and forget, silent, logs only — the launch pass's posture (D-176).
+    ///
+    /// This runs unattended, so it must never surface a modal, a permission prompt or
+    /// an auth dialog. It cannot: `SourceRefreshService`'s refresh methods do not
+    /// throw (D-167), and nothing on this path can present anything.
+    ///
+    /// **One thing is kept from the outcome rather than discarded** (D-227): whether a
+    /// connector refused the credential. Everything else — the counts, the staleness, the
+    /// expiry warnings — reaches the user at the next "Prepare Stand-up" through
+    /// `SourceNotice` (D-193), which is the surface §5.2 chose for them.
+    private func dispatch() {
+        // **Coalesced, because the gate serializes rather than deduplicates** (D-230).
+        // `SourceRefreshGate` makes queued passes run one after another, which is what keeps
+        // them from racing — but it does not make the later ones cheap. A pass whose fetches
+        // *fail* leaves `lastFetchedAt` untouched by design (`SourceRefreshService+Write`
+        // says so), so every queued pass finds the same refs due and attempts them again.
+        // Three wake notifications against an unreachable source therefore meant three full
+        // attempts, which is the herd this task's acceptance criteria forbid. Raised by
+        // Copilot in review round 4 of PR #46.
+        //
+        // Dropping a concurrent request loses nothing: the pass already running is refreshing
+        // every ref that is due, which is all the dropped one would have done.
+        guard !passInFlight else {
+            Log.sources.debug("scheduled refresh: a pass is already running, coalescing this one")
+            return
+        }
+
+        passInFlight = true
+        Task { @MainActor in
+            let outcome = await refresh()
+            passInFlight = false
+            record(outcome)
+        }
+    }
+```
+
+**Dropping a concurrent request loses nothing**, which is why coalescing rather than queueing is
+right: the running pass is already refreshing every ref that is due. The stamp is written by
+`claimOccurrenceIfDue()` *before* the dispatch, so a coalesced wake does not lose an occurrence.
+
+**D-223 said this flag was unreachable, and its comment told the next reader not to add it.** That
+was true of ticks — the stamp makes the next tick not-due — and stopped being true the moment a
+wake could dispatch without claiming anything. Correct the comment in the same change; a stale
+instruction not to fix something is worse than no comment.
+
+- [ ] **Step 1: Rewrite the burst test to assert what the rationale claims**
+
+It asserted `passes.total == 3`, which is the storm. It now asserts one pass, and a second pass
+after the first finishes so a latching guard is caught:
+
+```swift
+/// **A burst of wakes collapses to one pass** (D-230). The gate serializes queued passes but
+/// does not deduplicate them, and a pass whose fetches fail leaves `lastFetchedAt` untouched —
+/// so three wakes against an unreachable source meant three full attempts. This test asserted
+/// exactly that storm (`passes.total == 3`) until Copilot pointed out it contradicted the
+/// no-herd rationale it was written to defend.
+///
+/// Deterministic without a sleep: `dispatch()` sets its flag synchronously, and the two posts
+/// below happen before this test suspends, so the queued wakes meet a flag that is already up.
+@Test("a burst of wakes runs one pass, and a later wake runs another")
+@MainActor
+func aBurstOfWakesRunsOnePass() async throws {
+    let settings = try scratchSettings()
+    let workspace = NotificationCenter()
+    let calendar = try pacific()
+    let morning = try instant("2026-10-06 09:00:00", in: calendar)
+    let passes = PassCounter()
+    let subject = ScheduledRefreshController(
+        settings: settings, now: { morning }, calendar: { calendar },
+        workspaceCenter: workspace, center: NotificationCenter(),
+        refresh: {
+            passes.total += 1
+            return .idle
+        })
+
+    subject.start(interval: 3600)
+    workspace.post(name: NSWorkspace.didWakeNotification, object: nil)
+    workspace.post(name: NSWorkspace.didWakeNotification, object: nil)
+
+    #expect(await waitFor { passes.total == 1 }, "the launch pass never ran")
+    #expect(passes.total == 1, "a burst of wakes must not queue a pass each")
+    #expect(settings.scheduledRefreshLastRun == morning)
+
+    // Once it has finished, a later wake is a new pass rather than a coalesced one — the
+    // guard must not latch.
+    workspace.post(name: NSWorkspace.didWakeNotification, object: nil)
+
+    #expect(await waitFor { passes.total == 2 }, "the guard latched and never let go")
+    subject.stop()
+}
+```
+
+Deterministic without a sleep: `dispatch()` sets the flag synchronously, and the posts happen
+before the test suspends, so the queued wakes meet a flag that is already up.
+
+### Finding 2: the wake bypassed FR-6's switch
+
+D-225 gives the toggle its purpose — an off switch for *unattended* network activity that is not
+"switch the integration off entirely". A machine waking up is unattended; Task 8 dispatched anyway.
+
+- [ ] **Step 2: Give the pass a trigger**
+
+```swift
+/// **The switch has to switch the unattended thing off** (D-231). D-228's wake path dispatched
+/// without consulting `scheduledRefreshEnabled`, so "Refresh in the background" off still
+/// reached the network on every wake.
+@Test("a wake does nothing while the schedule is switched off")
+@MainActor
+func aWakeObeysTheToggle() async throws {
+    let settings = try scratchSettings()
+    settings.scheduledRefreshEnabled = false
+    let workspace = NotificationCenter()
+    let calendar = try pacific()
+    let morning = try instant("2026-10-06 09:00:00", in: calendar)
+    let passes = PassCounter()
+    let subject = ScheduledRefreshController(
+        settings: settings, now: { morning }, calendar: { calendar },
+        workspaceCenter: workspace, center: NotificationCenter(),
+        refresh: {
+            passes.total += 1
+            return .idle
+        })
+
+    // `start()` still runs its launch pass — that is §5.5's fixed rule, not this setting
+    // (D-224) — so the baseline is one, and the wake must not add to it.
+    subject.start(interval: 3600)
+    #expect(await waitFor { passes.total == 1 })
+
+    workspace.post(name: NSWorkspace.didWakeNotification, object: nil)
+
+    #expect(await waitFor(.milliseconds(300)) { passes.total > 1 } == false)
+    #expect(settings.scheduledRefreshLastRun == nil)
+    subject.stop()
+}
+```
+
+A `.wake` pass returns early when the schedule is off; a `.launch` pass does not, because §5.5's
+launch rule is fixed and a user opening the app is present by definition (D-224). The asymmetry
+now lives in one place — the trigger — rather than in which call site reached the pass.
+
+- [ ] **Step 3: Run everything, then mutate**
+
+| Edit | Must go red |
+|---|---|
+| `guard !passInFlight` → `if false` | `a burst of wakes runs one pass, and a later wake runs another` |
+| never set `passInFlight = false` again (the guard latches) | the second half of that same test |
+| the wake ignores the toggle | `a wake does nothing while the schedule is switched off` |
+| the *launch* pass also obeys the toggle | `the launch pass still runs with the schedule switched off` |
+| the wake observer passes `.launch` | `a wake does nothing while the schedule is switched off` |
+
+- [ ] **Step 4: Commit**
+
+```bash
+git add StenoKit StenoTests docs
+git commit   # subject: "fix: coalesce outstanding passes, and let the switch stop a wake"
+```
+
+Record as **D-230** and **D-231**, and correct D-223's and D-228's claims in place — both were
+sentences that stayed true-looking after the change that invalidated them.
