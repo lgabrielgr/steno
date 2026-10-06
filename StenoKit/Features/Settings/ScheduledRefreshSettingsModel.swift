@@ -53,6 +53,22 @@ public final class ScheduledRefreshSettingsModel {
         self.time = settings.scheduledRefreshTime
     }
 
+    /// What an unattended pass last learned about the credential (D-227), or `nil`.
+    ///
+    /// **Re-read rather than mirrored**, which is the opposite of `isEnabled` and `time`
+    /// above, because this one is written by the controller rather than by this model: a
+    /// mirror taken at launch would still say "nothing" after an 08:00 pass was refused.
+    /// `reload()` is what the pane calls as it appears, which is the only moment the value
+    /// has to be right — the pane cannot be open at the instant a background pass runs and
+    /// then fail to redraw, because appearing is what triggers the read.
+    public private(set) var credentialRejection: CredentialRejection?
+
+    /// Re-read the rejection from the store. Called by the pane as it appears, beside the
+    /// `forgetEntry()` the credential half already does there.
+    public func reload() {
+        credentialRejection = settings.scheduledRefreshRejection
+    }
+
     /// `time` as the `Date` a `DatePicker(displayedComponents: .hourAndMinute)` binds.
     ///
     /// **The date component is deliberately today's and deliberately ignored.** The

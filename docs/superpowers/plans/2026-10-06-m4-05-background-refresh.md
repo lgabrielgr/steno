@@ -373,9 +373,12 @@ The body says *why*: the picker binds a `Date`, the stored setting must not be o
 ## Task 2: The schedule's three settings keys
 
 **Files:**
-- Modify: `StenoKit/Settings/AppSettings.swift` — add three keys to `allKeys` (the array at ~line 50), and a `// MARK: - §5.5, the scheduled background refresh` section immediately above `// MARK: - §10.5, auto-export`
+- Create: `StenoKit/Settings/AppSettings+ScheduledRefresh.swift` — this feature's keys and accessors, as an extension
+- Modify: `StenoKit/Settings/AppSettings.swift` — add the keys to `allKeys` (the array at ~line 50); make `defaults` and `flag(_:)` internal rather than `private`, since `private` is file-scoped and the extension is the other half of the type
 - Modify: `StenoTests/Settings/AppSettingsTests.swift` — append a `// MARK: - §5.5's scheduled refresh (M4-05)` section at the end
-- Modify: `StenoTests/AI/AISecretsTests.swift:47` — `#expect(AppSettings.allKeys.count == 10)` becomes `13`
+- Modify: `StenoTests/AI/AISecretsTests.swift:47` — `#expect(AppSettings.allKeys.count == 10)` becomes `14`
+
+**Why an extension and not more of `AppSettings.swift`:** that file reaches SwiftLint's 400-line `file_length` limit once this feature's keys are in it, and `--strict` makes that a build failure. Splitting by subject is what `IntegrationsSettingsModel+Credential.swift` already does. Task 1's `TimeOfDay` and Task 7's `CredentialRejection` are both referenced from here, so write this file after Task 1 and extend it in Task 7.
 
 **Interfaces:**
 - Consumes: `TimeOfDay` and `TimeOfDay.eightAM` (Task 1).
@@ -470,6 +473,40 @@ func clearingTheLastRunRemovesIt() throws {
     #expect(settings.scheduledRefreshLastRun == nil)
     #expect(defaults.object(forKey: AppSettings.scheduledRefreshLastRunKey) == nil)
 }
+
+@Test("the unattended credential rejection round-trips")
+@MainActor
+func theRejectionRoundTrips() throws {
+    let (settings, _) = try scratch()
+    let rejection = CredentialRejection(
+        displayName: "Jira", at: Date(timeIntervalSince1970: 1_792_000_000))
+
+    settings.scheduledRefreshRejection = rejection
+
+    #expect(settings.scheduledRefreshRejection == rejection)
+}
+
+@Test("an unreadable stored rejection reads as none")
+@MainActor
+func anUnreadableRejectionReadsAsNone() throws {
+    let (settings, defaults) = try scratch()
+
+    defaults.set("not json", forKey: AppSettings.scheduledRefreshRejectionKey)
+
+    #expect(settings.scheduledRefreshRejection == nil)
+}
+
+@Test("clearing the rejection removes it")
+@MainActor
+func clearingTheRejectionRemovesIt() throws {
+    let (settings, defaults) = try scratch()
+    settings.scheduledRefreshRejection = CredentialRejection(displayName: "Jira", at: Date())
+
+    settings.scheduledRefreshRejection = nil
+
+    #expect(settings.scheduledRefreshRejection == nil)
+    #expect(defaults.object(forKey: AppSettings.scheduledRefreshRejectionKey) == nil)
+}
 ```
 
 - [ ] **Step 2: Run them and confirm they fail**
@@ -491,9 +528,20 @@ In `AppSettings.allKeys`, after `integrationsDisabledKey,`:
         scheduledRefreshLastRunKey,
 ```
 
-Then insert this section immediately above `// MARK: - §10.5, auto-export`:
+Then create `StenoKit/Settings/AppSettings+ScheduledRefresh.swift`:
 
 ```swift
+import Foundation
+
+/// §5.5's scheduled refresh, as settings (M4-05).
+///
+/// **A second file rather than more of `AppSettings.swift`**, which reached SwiftLint's
+/// 400-line `file_length` limit when D-227's rejection record was added. Split by subject,
+/// the way `IntegrationsSettingsModel+Credential.swift` splits its own type: everything here
+/// belongs to one feature, and the audit that reads `AppSettings.allKeys` is unaffected —
+/// the keys below are declared in this extension and listed in that array, which the
+/// compiler checks and `AISecretsTests` counts.
+extension AppSettings {
     // MARK: - §5.5, the scheduled background refresh
 
     /// M4-05's three keys, namespaced for the reason auto-export's six are.
@@ -505,6 +553,8 @@ Then insert this section immediately above `// MARK: - §10.5, auto-export`:
     public static let scheduledRefreshEnabledKey = "com.lgabrielgr.steno.scheduledRefresh.enabled"
     public static let scheduledRefreshTimeKey = "com.lgabrielgr.steno.scheduledRefresh.time"
     public static let scheduledRefreshLastRunKey = "com.lgabrielgr.steno.scheduledRefresh.lastRun"
+    public static let scheduledRefreshRejectionKey =
+        "com.lgabrielgr.steno.scheduledRefresh.rejection"
 
     /// Whether §5.5's scheduled pass runs at all.
     ///
@@ -558,7 +608,35 @@ Then insert this section immediately above `// MARK: - §10.5, auto-export`:
             defaults.set(newValue, forKey: Self.scheduledRefreshLastRunKey)
         }
     }
+
+    /// The credential an unattended pass last found broken (D-227), or `nil`.
+    ///
+    /// **This is the M4-05 requirement that `expiryWarning` cannot meet.** That warning is
+    /// derived from the user-entered expiry date, so a revoked token — or one that expired
+    /// with no date recorded — leaves the pane silent; the scheduled pass is the only thing
+    /// that knows, and before this key it discarded what it knew (Copilot, PR #46).
+    ///
+    /// Stored as JSON, the shape `autoExportStatus` uses, and an unreadable value reads as
+    /// `nil` rather than being overwritten — `hotkeyChord`'s posture.
+    public var scheduledRefreshRejection: CredentialRejection? {
+        get {
+            guard let data = defaults.data(forKey: Self.scheduledRefreshRejectionKey),
+                let decoded = try? JSONDecoder().decode(CredentialRejection.self, from: data)
+            else { return nil }
+            return decoded
+        }
+        nonmutating set {
+            guard let newValue, let encoded = try? JSONEncoder().encode(newValue) else {
+                defaults.removeObject(forKey: Self.scheduledRefreshRejectionKey)
+                return
+            }
+            defaults.set(encoded, forKey: Self.scheduledRefreshRejectionKey)
+        }
+    }
+}
 ```
+
+The fourth key and its accessor — `scheduledRefreshRejection` — belong to Task 7; everything else here is this task's.
 
 Three readings in there are deliberate and each has a test:
 
@@ -568,7 +646,7 @@ Three readings in there are deliberate and each has a test:
 
 - [ ] **Step 4: Update the §8 audit's count**
 
-`StenoTests/AI/AISecretsTests.swift`: `#expect(AppSettings.allKeys.count == 10)` → `13`.
+`StenoTests/AI/AISecretsTests.swift`: `#expect(AppSettings.allKeys.count == 10)` → `14` (three keys here, one more in Task 7).
 
 That assertion is what stops the audit passing by matching nothing — a key added without being listed in `allKeys` turns the suite red rather than quietly shrinking the audit's coverage. Confirm the other assertion in that test still holds: none of the three new key names looks like a credential.
 
@@ -1027,7 +1105,7 @@ private func controller(
     let calendar = try pacific()
     let moment = try instant(nowText, in: calendar)
     return ScheduledRefreshController(
-        settings: settings, now: { moment }, calendar: { calendar }, refresh: {})
+        settings: settings, now: { moment }, calendar: { calendar }, refresh: { .idle })
 }
 
 @Test("a tick inside the window dispatches and stamps")
@@ -1075,7 +1153,10 @@ func aFailedPassIsNotRetried() throws {
     let attempts = PassCounter()
     let subject = ScheduledRefreshController(
         settings: settings, now: { moment }, calendar: { calendar },
-        refresh: { attempts.count += 1 })
+        refresh: {
+            attempts.count += 1
+            return .idle
+        })
 
     #expect(subject.tick())
     #expect(subject.tick() == false)
@@ -1119,7 +1200,7 @@ func aLaunchInsideTheWindowServesIt() throws {
     let calendar = try pacific()
     let moment = try instant("2026-10-06 09:30:00", in: calendar)
     let subject = ScheduledRefreshController(
-        settings: settings, now: { moment }, calendar: { calendar }, refresh: {})
+        settings: settings, now: { moment }, calendar: { calendar }, refresh: { .idle })
 
     #expect(subject.runLaunchPass())
     #expect(settings.scheduledRefreshLastRun == moment)
@@ -1141,7 +1222,10 @@ func theLaunchPassIgnoresTheToggle() async throws {
     let passes = PassCounter()
     let subject = ScheduledRefreshController(
         settings: settings, now: { moment }, calendar: { calendar },
-        refresh: { passes.count += 1 })
+        refresh: {
+            passes.count += 1
+            return .idle
+        })
 
     // No occurrence is claimed — the schedule is off — and the pass runs anyway.
     #expect(subject.runLaunchPass() == false)
@@ -1186,11 +1270,81 @@ func aDispatchedPassReachesTheRefreshClosure() async throws {
     let passes = PassCounter()
     let subject = ScheduledRefreshController(
         settings: settings, now: { moment }, calendar: { calendar },
-        refresh: { passes.count += 1 })
+        refresh: {
+            passes.count += 1
+            return .idle
+        })
 
     #expect(subject.tick())
 
     #expect(await waitFor { passes.count == 1 }, "the pass never reached the service")
+}
+
+// MARK: - D-227: what an unattended pass records about the credential
+
+@Test("a refused credential is persisted by the pass that found it")
+@MainActor
+func aRefusedCredentialIsPersisted() async throws {
+    let settings = try scratchSettings()
+    let calendar = try pacific()
+    let moment = try instant("2026-10-06 08:03:00", in: calendar)
+    let subject = ScheduledRefreshController(
+        settings: settings, now: { moment }, calendar: { calendar },
+        refresh: {
+            RefreshOutcome(
+                attempted: 1,
+                failures: [
+                    RefreshOutcome.Failure(
+                        connectorID: "jira", displayName: "Jira", error: .credentialExpired)
+                ])
+        })
+
+    #expect(subject.tick())
+
+    #expect(await waitFor { settings.scheduledRefreshRejection != nil })
+    let rejection = try #require(settings.scheduledRefreshRejection)
+    #expect(rejection.displayName == "Jira")
+    #expect(rejection.discoveredAt == moment)
+}
+
+@Test("a later pass that reaches the source clears the record")
+@MainActor
+func aLaterPassClearsTheRecord() async throws {
+    let settings = try scratchSettings()
+    settings.scheduledRefreshRejection = CredentialRejection(displayName: "Jira", at: .distantPast)
+    let calendar = try pacific()
+    let moment = try instant("2026-10-06 08:03:00", in: calendar)
+    let subject = ScheduledRefreshController(
+        settings: settings, now: { moment }, calendar: { calendar },
+        refresh: { RefreshOutcome(attempted: 2, cached: 2) })
+
+    #expect(subject.tick())
+
+    #expect(await waitFor { settings.scheduledRefreshRejection == nil })
+}
+
+/// A pass with nothing due is the normal case, so clearing on one would erase the warning on
+/// the next tick after recording it.
+@Test("a pass that attempted nothing leaves the record standing")
+@MainActor
+func anEmptyPassLeavesTheRecord() async throws {
+    let settings = try scratchSettings()
+    let recorded = CredentialRejection(displayName: "Jira", at: .distantPast)
+    settings.scheduledRefreshRejection = recorded
+    let calendar = try pacific()
+    let moment = try instant("2026-10-06 08:03:00", in: calendar)
+    let passes = PassCounter()
+    let subject = ScheduledRefreshController(
+        settings: settings, now: { moment }, calendar: { calendar },
+        refresh: {
+            passes.count += 1
+            return .idle
+        })
+
+    #expect(subject.tick())
+    #expect(await waitFor { passes.count == 1 })
+
+    #expect(settings.scheduledRefreshRejection == recorded)
 }
 ```
 
@@ -1252,7 +1406,7 @@ public final class ScheduledRefreshController {
     private let settings: AppSettings
     private let now: () -> Date
     private let calendar: () -> Calendar
-    private let refresh: @MainActor () async -> Void
+    private let refresh: @MainActor () async -> RefreshOutcome
     private var timer: Timer?
 
     /// - Parameters:
@@ -1265,11 +1419,17 @@ public final class ScheduledRefreshController {
     ///     because the service needs a `ModelContext` only the composition root has,
     ///     and because a spy is what makes "dispatched once, not twice" assertable
     ///     without a container, a connector or a wait.
+    ///
+    ///     **It returns its `RefreshOutcome`, which the launch path used to discard**
+    ///     (D-227). Nothing here acts on the counts; the one thing read is whether a
+    ///     connector refused the credential, because an unattended pass is the only
+    ///     thing that can discover a revoked token and the pane has no other way to
+    ///     learn of it.
     public init(
         settings: AppSettings = AppSettings(),
         now: @escaping () -> Date = Date.init,
         calendar: @escaping () -> Calendar = { .current },
-        refresh: @escaping @MainActor () async -> Void
+        refresh: @escaping @MainActor () async -> RefreshOutcome
     ) {
         self.settings = settings
         self.now = now
@@ -1391,11 +1551,38 @@ public final class ScheduledRefreshController {
     ///
     /// This runs unattended, so it must never surface a modal, a permission prompt or
     /// an auth dialog. It cannot: `SourceRefreshService`'s refresh methods do not
-    /// throw (D-167), the outcome is discarded here as it is on the launch path, and
-    /// an expired token reaches the user at the next "Prepare Stand-up" through
-    /// `SourceNotice` (D-193) and in the Integrations pane's own expiry warning.
+    /// throw (D-167), and nothing on this path can present anything.
+    ///
+    /// **One thing is kept from the outcome rather than discarded** (D-227): whether a
+    /// connector refused the credential. Everything else — the counts, the staleness, the
+    /// expiry warnings — reaches the user at the next "Prepare Stand-up" through
+    /// `SourceNotice` (D-193), which is the surface §5.2 chose for them.
     private func dispatch() {
-        Task { @MainActor in await refresh() }
+        Task { @MainActor in
+            let outcome = await refresh()
+            record(outcome)
+        }
+    }
+
+    /// Persist, or clear, what this pass learned about the credential (D-227).
+    ///
+    /// Three cases, and the third is the one that makes this correct:
+    ///
+    /// - A connector refused the credential → record it, with the time.
+    /// - A pass that reached a source and was not refused → clear any recorded rejection.
+    /// - **A pass that attempted nothing → leave the record alone.** Nothing due, nothing
+    ///   configured, every integration switched off: none of those is evidence about the
+    ///   token, and clearing on one would erase the warning on the very next tick, because
+    ///   a pass with no refs due is the normal case.
+    private func record(_ outcome: RefreshOutcome) {
+        if let rejection = CredentialRejection.from(outcome, at: now()) {
+            settings.scheduledRefreshRejection = rejection
+            Log.sources.error(
+                "unattended refresh: \(rejection.displayName, privacy: .public) refused the stored credential"
+            )
+        } else if CredentialRejection.isCleared(by: outcome) {
+            settings.scheduledRefreshRejection = nil
+        }
     }
 
     deinit {
@@ -1535,6 +1722,37 @@ func aStoredScheduleIsReadBack() throws {
     #expect(model.time.hour == 21)
     #expect(model.time.minute == 45)
 }
+
+/// D-227. Re-read rather than mirrored, because the controller writes it while the pane is
+/// closed — a value captured at launch would still say "nothing" after an 08:00 pass was
+/// refused.
+@Test("the pane sees a rejection recorded after the model was built")
+@MainActor
+func theModelReloadsARejection() throws {
+    let (model, settings) = try scratch()
+    #expect(model.credentialRejection == nil)
+    let rejection = CredentialRejection(
+        displayName: "Jira", at: Date(timeIntervalSince1970: 1_792_000_000))
+
+    settings.scheduledRefreshRejection = rejection
+    model.reload()
+
+    #expect(model.credentialRejection == rejection)
+}
+
+@Test("a cleared rejection disappears from the pane on the next appearance")
+@MainActor
+func aClearedRejectionDisappears() throws {
+    let (model, settings) = try scratch()
+    settings.scheduledRefreshRejection = CredentialRejection(displayName: "Jira", at: Date())
+    model.reload()
+    #expect(model.credentialRejection != nil)
+
+    settings.scheduledRefreshRejection = nil
+    model.reload()
+
+    #expect(model.credentialRejection == nil)
+}
 ```
 
 - [ ] **Step 2: Run them and confirm they fail**
@@ -1599,6 +1817,22 @@ public final class ScheduledRefreshSettingsModel {
         self.calendar = calendar
         self.isEnabled = settings.scheduledRefreshEnabled
         self.time = settings.scheduledRefreshTime
+    }
+
+    /// What an unattended pass last learned about the credential (D-227), or `nil`.
+    ///
+    /// **Re-read rather than mirrored**, which is the opposite of `isEnabled` and `time`
+    /// above, because this one is written by the controller rather than by this model: a
+    /// mirror taken at launch would still say "nothing" after an 08:00 pass was refused.
+    /// `reload()` is what the pane calls as it appears, which is the only moment the value
+    /// has to be right — the pane cannot be open at the instant a background pass runs and
+    /// then fail to redraw, because appearing is what triggers the read.
+    public private(set) var credentialRejection: CredentialRejection?
+
+    /// Re-read the rejection from the store. Called by the pane as it appears, beside the
+    /// `forgetEntry()` the credential half already does there.
+    public func reload() {
+        credentialRejection = settings.scheduledRefreshRejection
     }
 
     /// `time` as the `Date` a `DatePicker(displayedComponents: .hourAndMinute)` binds.
@@ -1684,29 +1918,63 @@ struct ScheduledRefreshSection: View {
     @Bindable var model: ScheduledRefreshSettingsModel
 
     var body: some View {
-        Toggle("Refresh in the background", isOn: $model.isEnabled)
+        // **A `Group`, so the whole section can carry one `.onAppear`.** The rows below are
+        // separate `Form` children and a modifier cannot attach to the implicit tuple; a
+        // `Group` is transparent in a `Form`, so each child is still its own row.
+        Group {
+            Toggle("Refresh in the background", isOn: $model.isEnabled)
 
-        DatePicker(
-            "At", selection: $model.pickerDate, displayedComponents: .hourAndMinute
-        )
-        .disabled(!model.isEnabled)
-        // The visible label is one word, which tells a screen-reader user nothing
-        // about what happens at that time. Nothing automated reaches VoiceOver, so
-        // this line and the manual pass are the only things holding it.
-        .accessibilityLabel("Scheduled refresh time")
+            DatePicker(
+                "At", selection: $model.pickerDate, displayedComponents: .hourAndMinute
+            )
+            .disabled(!model.isEnabled)
+            // The visible label is one word, which tells a screen-reader user nothing
+            // about what happens at that time. Nothing automated reaches VoiceOver, so
+            // this line and the manual pass are the only things holding it.
+            .accessibilityLabel("Scheduled refresh time")
 
-        // **Names the limitation rather than implying a guarantee.** The schedule
-        // needs the app to be running, and a Mac asleep until the afternoon simply
-        // refreshes on the next launch — "within a few hours" is
-        // `ScheduledRefreshDue.grace`, so if that changes this sentence is part of the
-        // change.
-        Text(
-            "Fetches ticket and page updates at this time, so your stand-up is ready "
-                + "without waiting. Skipped while your Mac is asleep; Steno catches up when "
-                + "it next wakes, within a few hours of the time you set."
-        )
-        .font(.callout)
-        .foregroundStyle(.secondary)
+            // D-227: the one thing an unattended pass can discover that no other surface can.
+            // `expiryWarning` above is derived from the date the user typed, so a *revoked*
+            // token shows nothing there — this is where the user finds out before a stand-up
+            // depends on it. A timestamped fact, so it stays true after the token is replaced
+            // and until a later pass clears it.
+            if let rejection = model.credentialRejection {
+                Label {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("A background refresh couldn't sign in to \(rejection.displayName).")
+                        Text(
+                            "Your token may have been revoked. Test the connection above, or paste a "
+                                + "new one."
+                        )
+                        .foregroundStyle(.secondary)
+                        Text(rejection.discoveredAt, format: .dateTime.weekday().hour().minute())
+                            .foregroundStyle(.secondary)
+                    }
+                } icon: {
+                    Image(systemName: "key.slash")
+                }
+                .font(.callout)
+            }
+
+            // **Names the limitation rather than implying a guarantee.** The schedule
+            // needs the app to be running, and a Mac asleep until the afternoon simply
+            // refreshes on the next launch — "within a few hours" is
+            // `ScheduledRefreshDue.grace`, so if that changes this sentence is part of the
+            // change.
+            Text(
+                "Fetches ticket and page updates at this time, so your stand-up is ready "
+                    + "without waiting. Skipped while your Mac is asleep; Steno catches up when "
+                    + "it next wakes, within a few hours of the time you set."
+            )
+            .font(.callout)
+            .foregroundStyle(.secondary)
+        }
+        // D-227: a background pass refused at 08:00 is recorded while this window is closed,
+        // so appearing is when the view has to go and look. Here rather than on the pane's
+        // own `onAppear`, which is where it started: `IntegrationsSettingsPane` is at
+        // SwiftLint's `file_length` limit, and the reload belongs with the view that reads
+        // the value anyway.
+        .onAppear { model.reload() }
     }
 }
 ```
@@ -1788,8 +2056,10 @@ Replace the `Self.startLaunchRefresh(...)` call with `scheduledRefresh = Self.st
         container: ModelContainer, registry: SourceRegistry, settings: AppSettings
     ) -> ScheduledRefreshController {
         let context = container.mainContext
+        // The outcome is returned rather than discarded, so the controller can record a
+        // credential a connector refused (D-227). Nothing else about it is read here.
         let controller = ScheduledRefreshController(settings: settings) {
-            _ = await SourceRefreshService(context: context, registry: registry).refreshDue()
+            await SourceRefreshService(context: context, registry: registry).refreshDue()
         }
         controller.start()
         return controller
@@ -1853,3 +2123,294 @@ git push -u origin feat/background-refresh
 ```
 
 Read `.github/pull_request_template.md` before writing the body — `gh pr create` bypasses it silently. State the two spec deviations from Step 5, the manual results from Step 7, and the mutation results. **Do not merge.**
+
+---
+
+## Task 7: What review added — the credential an unattended pass was refused
+
+**Added after the first review round.** Tasks 1–6 shipped, and Copilot found that the task file's
+own requirement was unmet: "an expired Atlassian token discovered here should set the warning state
+that M4-04 displays, not interrupt". The scheduled pass discarded its `RefreshOutcome`, and
+`IntegrationsSettingsModel.expiryWarning` is derived from the *user-entered expiry date* — D-192
+makes a blank date mean the warning cannot fire — so a **revoked** token left the pane silent while
+the only component that knew threw the evidence away. Recorded as D-227.
+
+**Files:**
+- Create: `StenoKit/Integrations/CredentialRejection.swift` — the value and the two rules
+- Create: `StenoTests/Integrations/CredentialRejectionTests.swift`
+- Modify: `StenoKit/Settings/AppSettings+ScheduledRefresh.swift` — a fourth key, `scheduledRefreshRejection`
+- Modify: `StenoKit/Integrations/ScheduledRefreshController.swift` — `refresh` returns `RefreshOutcome`; a `record(_:)` after each pass
+- Modify: `StenoKit/Features/Settings/ScheduledRefreshSettingsModel.swift` — `credentialRejection` and `reload()`
+- Modify: `Steno/Features/Settings/ScheduledRefreshSection.swift` — the warning row, and the `onAppear` that reloads it
+- Modify: `Steno/App/StenoApp.swift` — the closure returns the outcome instead of discarding it
+- Modify: `StenoTests/AI/AISecretsTests.swift` — `allKeys.count` 13 → 14
+
+**Interfaces:**
+- Consumes: `RefreshOutcome` and `RefreshOutcome.Failure` (M4-01), `SourceError` (M4-01).
+- Produces: `CredentialRejection(displayName:at:)`, `.discoveredAt`, `.from(_:at:) -> CredentialRejection?`, `.isCleared(by:) -> Bool`; `AppSettings.scheduledRefreshRejection`; `ScheduledRefreshSettingsModel.credentialRejection` and `.reload()`.
+
+- [ ] **Step 1: Write the failing tests for the rule**
+
+Create `StenoTests/Integrations/CredentialRejectionTests.swift`:
+
+```swift
+import Foundation
+import Testing
+
+@testable import StenoKit
+
+private let moment = Date(timeIntervalSince1970: 1_792_000_000)
+
+private func failure(_ error: SourceError, connector: String = "jira") -> RefreshOutcome.Failure {
+    RefreshOutcome.Failure(
+        connectorID: connector, displayName: connector == "jira" ? "Jira" : "Confluence",
+        error: error)
+}
+
+// MARK: - What counts as a rejection
+
+@Test("an expired credential is recorded, naming the connector")
+func anExpiredCredentialIsRecorded() throws {
+    let outcome = RefreshOutcome(attempted: 1, failures: [failure(.credentialExpired)])
+
+    let rejection = try #require(CredentialRejection.from(outcome, at: moment))
+
+    #expect(rejection.displayName == "Jira")
+    #expect(rejection.discoveredAt == moment)
+}
+
+@Test("a rejected credential is recorded")
+func aRejectedCredentialIsRecorded() throws {
+    let outcome = RefreshOutcome(attempted: 1, failures: [failure(.invalidCredential)])
+
+    #expect(try #require(CredentialRejection.from(outcome, at: moment)).displayName == "Jira")
+}
+
+/// **The list of errors that are *not* evidence about the token**, and the reason this is a
+/// table rather than one case: a warning that fires on an unreachable network is one the
+/// user learns to ignore, which is FR-5's reasoning applied to the credential.
+@Test("a failure that says nothing about the token records nothing")
+func anUnrelatedFailureRecordsNothing() {
+    for error in [
+        SourceError.network, .timedOut, .siteNotFound, .notConfigured, .notFound,
+        .invalidResponse, .rateLimited(retryAfter: nil), .unavailable(status: 503),
+    ] {
+        let outcome = RefreshOutcome(attempted: 1, failures: [failure(error)])
+
+        #expect(
+            CredentialRejection.from(outcome, at: moment) == nil,
+            "\(error) must not be read as a credential rejection")
+    }
+}
+
+/// Both Atlassian connectors share one credential (§5.3), so a pass that fails both has
+/// found one broken token. The first failure wins rather than two records being kept.
+@Test("two connectors sharing one credential record one rejection")
+func twoConnectorsRecordOneRejection() throws {
+    let outcome = RefreshOutcome(
+        attempted: 2,
+        failures: [
+            failure(.credentialExpired), failure(.invalidCredential, connector: "confluence"),
+        ])
+
+    #expect(try #require(CredentialRejection.from(outcome, at: moment)).displayName == "Jira")
+}
+
+// MARK: - What clears one
+
+@Test("a pass that reached a source and was not refused clears the record")
+func aSuccessfulPassClears() {
+    #expect(CredentialRejection.isCleared(by: RefreshOutcome(attempted: 3, cached: 3)))
+}
+
+/// **The case that makes this correct.** A pass with nothing due is the normal case — most
+/// ticks attempt nothing — so clearing on one would erase the warning within five minutes of
+/// recording it. D-163's rule in the form this needs: an empty failure list is not evidence
+/// of success.
+@Test("a pass that attempted nothing clears nothing")
+func anEmptyPassClearsNothing() {
+    #expect(CredentialRejection.isCleared(by: .idle) == false)
+    #expect(CredentialRejection.isCleared(by: RefreshOutcome(notConfigured: 2)) == false)
+    #expect(CredentialRejection.isCleared(by: RefreshOutcome(disabled: 2)) == false)
+    #expect(CredentialRejection.isCleared(by: RefreshOutcome(readFailed: true)) == false)
+}
+
+@Test("a pass still being refused does not clear the record")
+func aRefusedPassDoesNotClear() {
+    let outcome = RefreshOutcome(attempted: 1, failures: [failure(.credentialExpired)])
+
+    #expect(CredentialRejection.isCleared(by: outcome) == false)
+}
+
+/// A network failure neither records nor clears: the token is no more suspect than before,
+/// and no less. Both halves asserted together, because the pair is the behaviour.
+@Test("a network failure leaves an existing record exactly as it was")
+func aNetworkFailureLeavesItAlone() {
+    let outcome = RefreshOutcome(attempted: 1, failures: [failure(.network)])
+
+    #expect(CredentialRejection.from(outcome, at: moment) == nil)
+    #expect(CredentialRejection.isCleared(by: outcome) == false)
+}
+```
+
+**`a network failure leaves an existing record exactly as it was` is the test that matters.** The
+clearing rule was written twice before it was right, and that test is what failed the second
+version — see the step after next.
+
+- [ ] **Step 2: Run them and confirm they fail**
+
+```bash
+make test > /tmp/test.log 2>&1; echo "exit: $?"
+grep -E "error:|Cannot find" /tmp/test.log | head -3
+```
+
+Expected: BUILD FAILED, `cannot find 'CredentialRejection' in scope`.
+
+- [ ] **Step 3: Write the value and its two rules**
+
+Create `StenoKit/Integrations/CredentialRejection.swift`:
+
+```swift
+import Foundation
+
+/// A credential an **unattended** pass found broken, and when it found out (D-227).
+///
+/// **Why this exists at all.** M4-05's task file requires that "an expired Atlassian token
+/// discovered here should set the warning state that M4-04 displays, not interrupt", and
+/// before this type the scheduled pass discarded the only evidence it had.
+/// `IntegrationsSettingsModel.expiryWarning` is derived from the *user-entered expiry
+/// date* — by design, since D-192 made a blank date mean the warning cannot fire — so a
+/// token that was **revoked**, or that expired with no date recorded, left the pane
+/// showing nothing at all until the next "Prepare Stand-up". Raised by Copilot in review
+/// of PR #46, against a claim in this task's own spec that said no plumbing was needed.
+///
+/// **A timestamped fact, not a current state.** "The background refresh at 08:03 could not
+/// sign in" stays true however the credential is fixed afterwards, which is what keeps this
+/// from needing to be invalidated from four places — the credential save, the connection
+/// test, the toggle and a manual Prepare. A later pass that actually reaches the source
+/// clears it, and until then the sentence it produces is still a fact.
+///
+/// `Codable` here is not the hole it was on `TimeOfDay`: this type has no invariant beyond
+/// its fields, and it is genuinely serialized — it is stored as JSON in `UserDefaults`, the
+/// shape `AutoExportStatus` already uses.
+public struct CredentialRejection: Sendable, Equatable, Codable {
+    /// The connector's `displayName`, so the sentence names what to fix. A connector
+    /// constant, never response content — the property that keeps `SourceError`'s logging
+    /// rule intact.
+    public let displayName: String
+
+    /// When the unattended pass was rejected, on the app's clock.
+    public let discoveredAt: Date
+
+    public init(displayName: String, at discoveredAt: Date) {
+        self.displayName = displayName
+        self.discoveredAt = discoveredAt
+    }
+
+    /// The rejection in `outcome`, if a connector refused this pass's credential.
+    ///
+    /// **Only `.credentialExpired` and `.invalidCredential`.** A network failure, a
+    /// timeout, a mistyped site (`.siteNotFound`) and an unconfigured connector say nothing
+    /// about whether the stored token is still good, and a warning that fires on an
+    /// unreachable network is one the user learns to ignore — FR-5's reasoning, applied to
+    /// the credential.
+    ///
+    /// The first such failure wins. Both Atlassian connectors share one credential (§5.3),
+    /// so a pass that fails Jira and Confluence has found one broken token, not two.
+    public static func from(_ outcome: RefreshOutcome, at moment: Date) -> CredentialRejection? {
+        let rejected = outcome.failures.first { failure in
+            failure.error == .credentialExpired || failure.error == .invalidCredential
+        }
+        guard let rejected else { return nil }
+        return CredentialRejection(displayName: rejected.displayName, at: moment)
+    }
+
+    /// Whether `outcome` is evidence that a recorded rejection is over.
+    ///
+    /// **A fetch that succeeded, not merely a pass without a credential error.** `cached` is
+    /// the count of refs whose `cachedSummary` and `lastFetchedAt` were written, so it is
+    /// non-zero only if a connector actually authenticated and answered. Two weaker readings
+    /// were tried and are both wrong:
+    ///
+    /// - `attempted > 0 && no credential failure` clears on a pass whose every ref failed
+    ///   with `.network`. An unreachable source says nothing about whether the token is
+    ///   valid, so that would erase a true warning the first time the user's wifi dropped.
+    ///   Caught by `a network failure leaves an existing record exactly as it was`.
+    /// - "no credential failure" alone clears on a pass that attempted nothing, which is the
+    ///   *normal* case — most ticks have nothing due — so the warning would vanish within
+    ///   five minutes of being recorded. D-163's rule: an empty failure list is not evidence
+    ///   of success.
+    ///
+    /// A pass whose fetches succeeded but whose save was rolled back (D-172) leaves the
+    /// record standing for one more pass. That is the safe direction: the warning is stale by
+    /// a few hours rather than absent while a token is broken.
+    public static func isCleared(by outcome: RefreshOutcome) -> Bool {
+        outcome.cached > 0 && from(outcome, at: .distantPast) == nil
+    }
+}
+```
+
+**Three readings of "what clears a recorded rejection", two of them wrong:**
+
+| Rule | Why it fails |
+|---|---|
+| no credential failure in the outcome | Clears on a pass that attempted nothing — the normal case, since most ticks have nothing due — so the warning vanishes within five minutes of being recorded |
+| `attempted > 0` and no credential failure | Clears on a pass whose every ref failed with `.network`. An unreachable source says nothing about the token, so a dropped wifi connection erases a true warning |
+| **`cached > 0` and no credential failure** | `cached` counts refs whose cache was written, so it is non-zero only if a connector authenticated and answered |
+
+- [ ] **Step 4: Store it**
+
+Add the fourth key to `AppSettings+ScheduledRefresh.swift` and to `allKeys`, then bump
+`AISecretsTests`'s count to 14. Stored as JSON, like `autoExportStatus`; an unreadable value reads
+as `nil` rather than being overwritten.
+
+**`Codable` here is not the hole it was on `TimeOfDay`** (round 1's finding): this type has no
+invariant beyond its fields, and it is genuinely serialized. Say so where it is declared, or the
+next reader applies round 1's lesson to the wrong type.
+
+- [ ] **Step 5: Record it from the pass**
+
+`ScheduledRefreshController`'s `refresh` closure becomes `@MainActor () async -> RefreshOutcome`,
+and `dispatch()` awaits it and calls `record(_:)`. Add the D-227 cases to
+`ScheduledRefreshControllerTests` — the existing tests need `refresh: { .idle }` in place of
+`refresh: {}`.
+
+Then surface it: `credentialRejection` and `reload()` on the settings model, the warning row in
+`ScheduledRefreshSection`, and `.onAppear { model.reload() }` on that section's `Group`.
+
+**Re-read, not mirrored.** `isEnabled` and `time` are mirrors written by the pane; this one is
+written by the controller while the window is closed, so a value captured at launch would still
+say "nothing" after an 08:00 pass was refused.
+
+**The `onAppear` lives on the section, not the pane.** `IntegrationsSettingsPane` is at 398 lines
+of SwiftLint's 400, and the reload belongs with the view that reads the value. A `Group` wraps the
+section's rows so a single modifier can attach to all of them; `Group` is transparent in a `Form`.
+
+- [ ] **Step 6: Run everything**
+
+```bash
+make build > /tmp/build.log 2>&1; echo "exit: $?"; grep -c "❌" /tmp/build.log
+make test  > /tmp/test.log  2>&1; echo "exit: $?"; grep -c "recorded an issue" /tmp/test.log
+make lint  > /tmp/lint.log  2>&1; echo "exit: $?"; tail -1 /tmp/lint.log
+```
+
+- [ ] **Step 7: Mutate, to prove the tests can fail**
+
+| Edit | Must go red |
+|---|---|
+| `outcome.cached > 0` → `outcome.attempted > 0` | `a network failure leaves an existing record exactly as it was` |
+| drop the `.invalidCredential` arm | `a rejected credential is recorded` |
+| add `\|\| failure.error == .network` to that arm | `a failure that says nothing about the token records nothing` |
+| delete the `else if CredentialRejection.isCleared` branch | `a later pass that reaches the source clears the record` |
+| `else if CredentialRejection.isCleared(by: outcome)` → `else if true` | `a pass that attempted nothing leaves the record standing` |
+| `settings.scheduledRefreshRejection = rejection` → `_ = rejection` | `a refused credential is persisted by the pass that found it` |
+
+- [ ] **Step 8: Commit**
+
+```bash
+git add StenoKit Steno StenoTests docs
+git commit   # subject: "fix: record the credential a background pass was refused"
+```
+
+The body says what the spec got wrong, not just what the code now does: this task's own spec
+claimed no plumbing was needed, and the claim did not survive contact with D-192.

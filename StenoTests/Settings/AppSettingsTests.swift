@@ -278,3 +278,37 @@ func clearingTheLastRunRemovesIt() throws {
     #expect(settings.scheduledRefreshLastRun == nil)
     #expect(defaults.object(forKey: AppSettings.scheduledRefreshLastRunKey) == nil)
 }
+
+@Test("the unattended credential rejection round-trips")
+@MainActor
+func theRejectionRoundTrips() throws {
+    let (settings, _) = try scratch()
+    let rejection = CredentialRejection(
+        displayName: "Jira", at: Date(timeIntervalSince1970: 1_792_000_000))
+
+    settings.scheduledRefreshRejection = rejection
+
+    #expect(settings.scheduledRefreshRejection == rejection)
+}
+
+@Test("an unreadable stored rejection reads as none")
+@MainActor
+func anUnreadableRejectionReadsAsNone() throws {
+    let (settings, defaults) = try scratch()
+
+    defaults.set("not json", forKey: AppSettings.scheduledRefreshRejectionKey)
+
+    #expect(settings.scheduledRefreshRejection == nil)
+}
+
+@Test("clearing the rejection removes it")
+@MainActor
+func clearingTheRejectionRemovesIt() throws {
+    let (settings, defaults) = try scratch()
+    settings.scheduledRefreshRejection = CredentialRejection(displayName: "Jira", at: Date())
+
+    settings.scheduledRefreshRejection = nil
+
+    #expect(settings.scheduledRefreshRejection == nil)
+    #expect(defaults.object(forKey: AppSettings.scheduledRefreshRejectionKey) == nil)
+}

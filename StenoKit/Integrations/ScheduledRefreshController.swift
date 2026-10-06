@@ -35,7 +35,7 @@ public final class ScheduledRefreshController {
     private let settings: AppSettings
     private let now: () -> Date
     private let calendar: () -> Calendar
-    private let refresh: @MainActor () async -> Void
+    private let refresh: @MainActor () async -> RefreshOutcome
     private var timer: Timer?
 
     /// - Parameters:
@@ -48,11 +48,17 @@ public final class ScheduledRefreshController {
     ///     because the service needs a `ModelContext` only the composition root has,
     ///     and because a spy is what makes "dispatched once, not twice" assertable
     ///     without a container, a connector or a wait.
+    ///
+    ///     **It returns its `RefreshOutcome`, which the launch path used to discard**
+    ///     (D-227). Nothing here acts on the counts; the one thing read is whether a
+    ///     connector refused the credential, because an unattended pass is the only
+    ///     thing that can discover a revoked token and the pane has no other way to
+    ///     learn of it.
     public init(
         settings: AppSettings = AppSettings(),
         now: @escaping () -> Date = Date.init,
         calendar: @escaping () -> Calendar = { .current },
-        refresh: @escaping @MainActor () async -> Void
+        refresh: @escaping @MainActor () async -> RefreshOutcome
     ) {
         self.settings = settings
         self.now = now
@@ -174,11 +180,38 @@ public final class ScheduledRefreshController {
     ///
     /// This runs unattended, so it must never surface a modal, a permission prompt or
     /// an auth dialog. It cannot: `SourceRefreshService`'s refresh methods do not
-    /// throw (D-167), the outcome is discarded here as it is on the launch path, and
-    /// an expired token reaches the user at the next "Prepare Stand-up" through
-    /// `SourceNotice` (D-193) and in the Integrations pane's own expiry warning.
+    /// throw (D-167), and nothing on this path can present anything.
+    ///
+    /// **One thing is kept from the outcome rather than discarded** (D-227): whether a
+    /// connector refused the credential. Everything else — the counts, the staleness, the
+    /// expiry warnings — reaches the user at the next "Prepare Stand-up" through
+    /// `SourceNotice` (D-193), which is the surface §5.2 chose for them.
     private func dispatch() {
-        Task { @MainActor in await refresh() }
+        Task { @MainActor in
+            let outcome = await refresh()
+            record(outcome)
+        }
+    }
+
+    /// Persist, or clear, what this pass learned about the credential (D-227).
+    ///
+    /// Three cases, and the third is the one that makes this correct:
+    ///
+    /// - A connector refused the credential → record it, with the time.
+    /// - A pass that reached a source and was not refused → clear any recorded rejection.
+    /// - **A pass that attempted nothing → leave the record alone.** Nothing due, nothing
+    ///   configured, every integration switched off: none of those is evidence about the
+    ///   token, and clearing on one would erase the warning on the very next tick, because
+    ///   a pass with no refs due is the normal case.
+    private func record(_ outcome: RefreshOutcome) {
+        if let rejection = CredentialRejection.from(outcome, at: now()) {
+            settings.scheduledRefreshRejection = rejection
+            Log.sources.error(
+                "unattended refresh: \(rejection.displayName, privacy: .public) refused the stored credential"
+            )
+        } else if CredentialRejection.isCleared(by: outcome) {
+            settings.scheduledRefreshRejection = nil
+        }
     }
 
     deinit {

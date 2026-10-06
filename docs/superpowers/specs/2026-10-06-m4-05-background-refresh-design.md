@@ -312,15 +312,22 @@ so the manual pass below is the only verification they have.
 
 ### Silence, and where the user does see a problem
 
-The pass discards its `RefreshOutcome`, as the launch pass does today (D-176). This is the task's
-"failures are silent to the user but visible in logs", and it needs no new plumbing — traced
-rather than assumed:
+The pass is silent and nonmodal — the task's "failures are silent to the user but visible in
+logs" — but **one thing is kept from the `RefreshOutcome` rather than discarded, and this section
+was wrong about that until review** (D-227, Copilot on PR #46):
 
 - An expired or rejected token reaches the user at the next "Prepare Stand-up", through
-  `StandupDraftModel.sourceNotice` and `SourceNotice.message(for:)` (D-193).
+  `StandupDraftModel.sourceNotice` and `SourceNotice.message(for:)` (D-193). True as written.
 - The Integrations pane's own warning, `IntegrationsSettingsModel.expiryWarning`, derives from the
-  stored credential's recorded expiry, not from any refresh outcome — so it is already correct
-  when the pane opens, whether or not a background pass ran.
+  **user-entered expiry date**. This section originally concluded it is "already correct when the
+  pane opens, whether or not a background pass ran", which does not follow: D-192 makes a blank
+  date mean the warning cannot fire, so a *revoked* token — or one that expired with no date
+  recorded — leaves the pane showing nothing while the scheduled pass is the only thing that
+  knows. The task file requires that discovery to set the warning state M4-04 displays, so the
+  requirement was unmet.
+- A refusal is therefore recorded: `CredentialRejection` (the connector's name and the time) in
+  `AppSettings.scheduledRefreshRejection`, displayed by the Scheduled refresh section and cleared
+  by a later pass whose fetches succeeded. Nothing is presented; a value is written.
 
 No modal, no permission prompt, no auth dialog, and no banner: there is no UI surface on this
 path to raise one from. `SourceRefreshService`'s two refresh methods do not throw at all (D-167),

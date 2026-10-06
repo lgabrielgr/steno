@@ -60,9 +60,14 @@ public struct AppSettings: @unchecked Sendable {
         scheduledRefreshEnabledKey,
         scheduledRefreshTimeKey,
         scheduledRefreshLastRunKey,
+        scheduledRefreshRejectionKey,
     ]
 
-    private let defaults: UserDefaults
+    // `internal`, not `private`: `private` is file-scoped, and
+    // `AppSettings+ScheduledRefresh.swift` is the other half of this type — the same reason
+    // `IntegrationsSettingsModel.testStates` is internal. Nothing outside the module can
+    // reach it either way; every `public` member is an accessor.
+    let defaults: UserDefaults
 
     /// - Parameter defaults: injected so tests use a scratch suite rather than
     ///   the developer's own preferences (§9.4).
@@ -219,71 +224,6 @@ public struct AppSettings: @unchecked Sendable {
         disabledIntegrationIDs = ids
     }
 
-    // MARK: - §5.5, the scheduled background refresh
-
-    /// M4-05's three keys, namespaced for the reason auto-export's six are.
-    ///
-    /// `lastRun` is state rather than preference, and lives here anyway, beside
-    /// `autoExportStatus` which is also state — this type's doc comment above is
-    /// explicit that one place for every `UserDefaults` key is what makes §8's
-    /// audit possible.
-    public static let scheduledRefreshEnabledKey = "com.lgabrielgr.steno.scheduledRefresh.enabled"
-    public static let scheduledRefreshTimeKey = "com.lgabrielgr.steno.scheduledRefresh.time"
-    public static let scheduledRefreshLastRunKey = "com.lgabrielgr.steno.scheduledRefresh.lastRun"
-
-    /// Whether §5.5's scheduled pass runs at all.
-    ///
-    /// **Absent means `true`.** §5.5 states the schedule as policy rather than as an
-    /// option, so a fresh install schedules; the toggle exists because unattended
-    /// network activity deserves an off switch that is not "switch the integration
-    /// off entirely", which would also stop the launch and Prepare passes. `flag(_:)`
-    /// is what expresses that, for the reason it was written: `bool(forKey:)` answers
-    /// `false` for a key never written, and a schedule that silently never fires looks
-    /// exactly like one with nothing to fetch.
-    public var scheduledRefreshEnabled: Bool {
-        get { flag(Self.scheduledRefreshEnabledKey) }
-        nonmutating set { defaults.set(newValue, forKey: Self.scheduledRefreshEnabledKey) }
-    }
-
-    /// When the scheduled pass runs. 08:00 unless the user says otherwise (§5.5).
-    ///
-    /// Stored as minutes since midnight — see `TimeOfDay`, which exists so this is not
-    /// a `Date` whose date component is noise and whose meaning moves with the time
-    /// zone it was written in.
-    ///
-    /// **An unusable stored value reads as the default rather than trapping**, which
-    /// is `hotkeyChord`'s posture and for its reason: a hand-written `defaults write`
-    /// must not be able to break the app. `object(forKey:)` rather than
-    /// `integer(forKey:)`, because the latter answers `0` for an absent key and `0` is
-    /// a legitimate setting — midnight.
-    public var scheduledRefreshTime: TimeOfDay {
-        get {
-            guard let stored = defaults.object(forKey: Self.scheduledRefreshTimeKey) as? Int,
-                let time = TimeOfDay(minutesSinceMidnight: stored)
-            else { return .eightAM }
-            return time
-        }
-        nonmutating set {
-            defaults.set(newValue.minutesSinceMidnight, forKey: Self.scheduledRefreshTimeKey)
-        }
-    }
-
-    /// When a scheduled pass was last **dispatched** — not when one last succeeded
-    /// (D-223).
-    ///
-    /// `nil` until the first one runs, which is what makes the first launch after
-    /// install serve the day's occurrence if it is inside the grace window.
-    public var scheduledRefreshLastRun: Date? {
-        get { defaults.object(forKey: Self.scheduledRefreshLastRunKey) as? Date }
-        nonmutating set {
-            guard let newValue else {
-                defaults.removeObject(forKey: Self.scheduledRefreshLastRunKey)
-                return
-            }
-            defaults.set(newValue, forKey: Self.scheduledRefreshLastRunKey)
-        }
-    }
-
     // MARK: - §10.5, auto-export
 
     /// M2.5-05's keys. Namespaced under `autoExport.` rather than flattened:
@@ -320,7 +260,7 @@ public struct AppSettings: @unchecked Sendable {
     /// opt-*out* into an opt-in on every fresh install — silently, and in the
     /// one direction nobody would notice, because a backup that never runs
     /// looks exactly like a backup that has nothing to do.
-    private func flag(_ key: String) -> Bool {
+    func flag(_ key: String) -> Bool {
         defaults.object(forKey: key) as? Bool ?? true
     }
 

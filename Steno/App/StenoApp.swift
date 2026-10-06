@@ -267,8 +267,10 @@ struct StenoApp: App {
         container: ModelContainer, registry: SourceRegistry, settings: AppSettings
     ) -> ScheduledRefreshController {
         let context = container.mainContext
+        // The outcome is returned rather than discarded, so the controller can record a
+        // credential a connector refused (D-227). Nothing else about it is read here.
         let controller = ScheduledRefreshController(settings: settings) {
-            _ = await SourceRefreshService(context: context, registry: registry).refreshDue()
+            await SourceRefreshService(context: context, registry: registry).refreshDue()
         }
         controller.start()
         return controller

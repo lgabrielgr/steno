@@ -6725,3 +6725,64 @@ computed inside the service, which is what `SourceConnector.fetch`'s documentati
 catch-up pass needs to pass something else": a catch-up at 11:30 still asks the source about
 everything since the watermark, however long ago that was. **No connector-facing change ships in
 this task.**
+
+---
+
+### D-227 — An unattended pass records the credential it was refused
+
+**2026-10-06** · M4-05 · **Status:** accepted · **extends D-192, D-194, D-227's own task note**
+
+`ScheduledRefreshController`'s pass returns its `RefreshOutcome` instead of discarding it, and
+one thing is read from it: whether a connector refused the stored credential. A refusal is written
+to `AppSettings.scheduledRefreshRejection` as a `CredentialRejection` — the connector's display
+name and the time — which the Integrations pane shows.
+
+**This task's own spec claimed no plumbing was needed, and that claim was wrong.** It argued that
+an expired token already reaches the user two ways: `SourceNotice` at the next "Prepare Stand-up"
+(D-193), and the pane's own `expiryWarning`. The first is true. The second is not, and the
+difference is D-192: `expiryWarning` is derived from the **user-entered expiry date**, and a blank
+date deliberately means the warning cannot fire. So a token that was *revoked* — or that expired
+with no date recorded — left the pane showing nothing at all, while the only component that knew
+threw the evidence away. M4-05's task file is explicit that "an expired Atlassian token discovered
+here should set the warning state that M4-04 displays, not interrupt", so the requirement was
+unmet. Raised by Copilot in review of PR #46, in a collapsed "previously missed" section under a
+summary reading "Findings: None".
+
+**A timestamped fact, not a current state.** "The background refresh at 08:03 could not sign in"
+stays true however the credential is fixed afterwards, which is what keeps this from needing to be
+invalidated from four places — the credential save, the connection test, the toggle, a manual
+Prepare. The alternative, a boolean "the credential is bad", would have to be cleared by all four
+or else lie.
+
+**What clears it is a fetch that succeeded, not a pass without a credential error.** Two weaker
+readings were written and both were wrong, the second one caught by its own test:
+
+- *No credential failure* alone clears on a pass that attempted nothing — the normal case,
+  since most ticks have nothing due — so the warning would vanish within five minutes of being
+  recorded. D-163's rule again: an empty failure list is not evidence of success.
+- *Attempted something and was not refused* clears on a pass whose every ref failed with
+  `.network`. An unreachable source says nothing about whether the token is valid, so a dropped
+  wifi connection would erase a true warning. `a network failure leaves an existing record exactly
+  as it was` went red on exactly this, which is why the rule now reads `outcome.cached > 0` — the
+  count of refs whose cache was written, which is non-zero only if a connector authenticated and
+  answered.
+
+**Only `.credentialExpired` and `.invalidCredential` are read as a rejection.** A timeout, a
+mistyped site (`.siteNotFound`), an unconfigured connector and a 503 say nothing about the token,
+and a warning that fires on an unreachable network is one the user learns to ignore — FR-5's
+reasoning, applied to the credential. Both Atlassian connectors share one credential (§5.3), so
+the first failure wins: a pass that fails Jira and Confluence has found one broken token.
+
+**It is still silent and still nonmodal.** Nothing is presented; a value is written to
+`UserDefaults` and a line to `Log.sources`. The pane reads it when it appears, which is the only
+moment it has to be right — `ScheduledRefreshSettingsModel.reload()` is called from the section's
+`onAppear`, because a mirror captured at launch would still say "nothing" after an 08:00 pass was
+refused.
+
+Two files moved under SwiftLint's limits to make room: `AppSettings`'s §5.5 section is now
+`AppSettings+ScheduledRefresh.swift` (which required `defaults` and `flag(_:)` to become internal,
+with the reason recorded at the declaration), and the section's `onAppear` lives in
+`ScheduledRefreshSection.swift` rather than in the 398-line `IntegrationsSettingsPane.swift`.
+
+**Falsified by** `CredentialRejectionTests` and the D-227 cases in `ScheduledRefreshControllerTests`
+— six mutations, including the two wrong clearing rules above.

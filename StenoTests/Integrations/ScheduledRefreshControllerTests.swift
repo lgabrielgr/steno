@@ -69,7 +69,7 @@ private func controller(
     let calendar = try pacific()
     let moment = try instant(nowText, in: calendar)
     return ScheduledRefreshController(
-        settings: settings, now: { moment }, calendar: { calendar }, refresh: {})
+        settings: settings, now: { moment }, calendar: { calendar }, refresh: { .idle })
 }
 
 @Test("a tick inside the window dispatches and stamps")
@@ -117,7 +117,10 @@ func aFailedPassIsNotRetried() throws {
     let attempts = PassCounter()
     let subject = ScheduledRefreshController(
         settings: settings, now: { moment }, calendar: { calendar },
-        refresh: { attempts.count += 1 })
+        refresh: {
+            attempts.count += 1
+            return .idle
+        })
 
     #expect(subject.tick())
     #expect(subject.tick() == false)
@@ -161,7 +164,7 @@ func aLaunchInsideTheWindowServesIt() throws {
     let calendar = try pacific()
     let moment = try instant("2026-10-06 09:30:00", in: calendar)
     let subject = ScheduledRefreshController(
-        settings: settings, now: { moment }, calendar: { calendar }, refresh: {})
+        settings: settings, now: { moment }, calendar: { calendar }, refresh: { .idle })
 
     #expect(subject.runLaunchPass())
     #expect(settings.scheduledRefreshLastRun == moment)
@@ -183,7 +186,10 @@ func theLaunchPassIgnoresTheToggle() async throws {
     let passes = PassCounter()
     let subject = ScheduledRefreshController(
         settings: settings, now: { moment }, calendar: { calendar },
-        refresh: { passes.count += 1 })
+        refresh: {
+            passes.count += 1
+            return .idle
+        })
 
     // No occurrence is claimed — the schedule is off — and the pass runs anyway.
     #expect(subject.runLaunchPass() == false)
@@ -228,9 +234,79 @@ func aDispatchedPassReachesTheRefreshClosure() async throws {
     let passes = PassCounter()
     let subject = ScheduledRefreshController(
         settings: settings, now: { moment }, calendar: { calendar },
-        refresh: { passes.count += 1 })
+        refresh: {
+            passes.count += 1
+            return .idle
+        })
 
     #expect(subject.tick())
 
     #expect(await waitFor { passes.count == 1 }, "the pass never reached the service")
+}
+
+// MARK: - D-227: what an unattended pass records about the credential
+
+@Test("a refused credential is persisted by the pass that found it")
+@MainActor
+func aRefusedCredentialIsPersisted() async throws {
+    let settings = try scratchSettings()
+    let calendar = try pacific()
+    let moment = try instant("2026-10-06 08:03:00", in: calendar)
+    let subject = ScheduledRefreshController(
+        settings: settings, now: { moment }, calendar: { calendar },
+        refresh: {
+            RefreshOutcome(
+                attempted: 1,
+                failures: [
+                    RefreshOutcome.Failure(
+                        connectorID: "jira", displayName: "Jira", error: .credentialExpired)
+                ])
+        })
+
+    #expect(subject.tick())
+
+    #expect(await waitFor { settings.scheduledRefreshRejection != nil })
+    let rejection = try #require(settings.scheduledRefreshRejection)
+    #expect(rejection.displayName == "Jira")
+    #expect(rejection.discoveredAt == moment)
+}
+
+@Test("a later pass that reaches the source clears the record")
+@MainActor
+func aLaterPassClearsTheRecord() async throws {
+    let settings = try scratchSettings()
+    settings.scheduledRefreshRejection = CredentialRejection(displayName: "Jira", at: .distantPast)
+    let calendar = try pacific()
+    let moment = try instant("2026-10-06 08:03:00", in: calendar)
+    let subject = ScheduledRefreshController(
+        settings: settings, now: { moment }, calendar: { calendar },
+        refresh: { RefreshOutcome(attempted: 2, cached: 2) })
+
+    #expect(subject.tick())
+
+    #expect(await waitFor { settings.scheduledRefreshRejection == nil })
+}
+
+/// A pass with nothing due is the normal case, so clearing on one would erase the warning on
+/// the next tick after recording it.
+@Test("a pass that attempted nothing leaves the record standing")
+@MainActor
+func anEmptyPassLeavesTheRecord() async throws {
+    let settings = try scratchSettings()
+    let recorded = CredentialRejection(displayName: "Jira", at: .distantPast)
+    settings.scheduledRefreshRejection = recorded
+    let calendar = try pacific()
+    let moment = try instant("2026-10-06 08:03:00", in: calendar)
+    let passes = PassCounter()
+    let subject = ScheduledRefreshController(
+        settings: settings, now: { moment }, calendar: { calendar },
+        refresh: {
+            passes.count += 1
+            return .idle
+        })
+
+    #expect(subject.tick())
+    #expect(await waitFor { passes.count == 1 })
+
+    #expect(settings.scheduledRefreshRejection == recorded)
 }

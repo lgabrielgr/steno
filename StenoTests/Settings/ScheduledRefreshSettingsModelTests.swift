@@ -81,3 +81,34 @@ func aStoredScheduleIsReadBack() throws {
     #expect(model.time.hour == 21)
     #expect(model.time.minute == 45)
 }
+
+/// D-227. Re-read rather than mirrored, because the controller writes it while the pane is
+/// closed — a value captured at launch would still say "nothing" after an 08:00 pass was
+/// refused.
+@Test("the pane sees a rejection recorded after the model was built")
+@MainActor
+func theModelReloadsARejection() throws {
+    let (model, settings) = try scratch()
+    #expect(model.credentialRejection == nil)
+    let rejection = CredentialRejection(
+        displayName: "Jira", at: Date(timeIntervalSince1970: 1_792_000_000))
+
+    settings.scheduledRefreshRejection = rejection
+    model.reload()
+
+    #expect(model.credentialRejection == rejection)
+}
+
+@Test("a cleared rejection disappears from the pane on the next appearance")
+@MainActor
+func aClearedRejectionDisappears() throws {
+    let (model, settings) = try scratch()
+    settings.scheduledRefreshRejection = CredentialRejection(displayName: "Jira", at: Date())
+    model.reload()
+    #expect(model.credentialRejection != nil)
+
+    settings.scheduledRefreshRejection = nil
+    model.reload()
+
+    #expect(model.credentialRejection == nil)
+}
