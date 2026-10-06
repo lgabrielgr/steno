@@ -112,3 +112,52 @@ func aClearedRejectionDisappears() throws {
 
     #expect(model.credentialRejection == nil)
 }
+
+/// D-229. The pane can be open across 08:00, so the model has to hear about a rejection
+/// rather than wait to be asked — which is what the first version's doc comment claimed
+/// could not matter.
+@Test("an open pane hears a rejection recorded while it was showing")
+@MainActor
+func anOpenPaneHearsARejection() async throws {
+    let defaults = try #require(UserDefaults(suiteName: "steno.tests.\(UUID().uuidString)"))
+    let settings = AppSettings(defaults: defaults)
+    let center = NotificationCenter()
+    let model = ScheduledRefreshSettingsModel(settings: settings, center: center)
+    #expect(model.credentialRejection == nil)
+
+    // What the controller does: write, then announce.
+    settings.scheduledRefreshRejection = CredentialRejection(displayName: "Jira", at: Date())
+    center.post(name: .stenoScheduledRefreshDidChange, object: nil)
+
+    #expect(model.credentialRejection?.displayName == "Jira")
+}
+
+@Test("an open pane hears a recovery too")
+@MainActor
+func anOpenPaneHearsARecovery() async throws {
+    let defaults = try #require(UserDefaults(suiteName: "steno.tests.\(UUID().uuidString)"))
+    let settings = AppSettings(defaults: defaults)
+    settings.scheduledRefreshRejection = CredentialRejection(displayName: "Jira", at: Date())
+    let center = NotificationCenter()
+    let model = ScheduledRefreshSettingsModel(settings: settings, center: center)
+    #expect(model.credentialRejection != nil)
+
+    settings.scheduledRefreshRejection = nil
+    center.post(name: .stenoScheduledRefreshDidChange, object: nil)
+
+    #expect(model.credentialRejection == nil)
+}
+
+@Test("a stored rejection is there before any notification arrives")
+@MainActor
+func aStoredRejectionIsReadAtInit() throws {
+    let defaults = try #require(UserDefaults(suiteName: "steno.tests.\(UUID().uuidString)"))
+    let settings = AppSettings(defaults: defaults)
+    let recorded = CredentialRejection(
+        displayName: "Confluence", at: Date(timeIntervalSince1970: 1_792_000_000))
+    settings.scheduledRefreshRejection = recorded
+
+    let model = ScheduledRefreshSettingsModel(settings: settings, center: NotificationCenter())
+
+    #expect(model.credentialRejection == recorded)
+}

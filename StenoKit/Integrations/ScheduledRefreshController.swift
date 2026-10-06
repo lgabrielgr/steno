@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 
 /// §5.5's third refresh trigger: a pass at the user's configured time (D-221).
@@ -36,7 +37,17 @@ public final class ScheduledRefreshController {
     private let now: () -> Date
     private let calendar: () -> Calendar
     private let refresh: @MainActor () async -> RefreshOutcome
+
+    /// Where sleep and wake are posted. **Not `NotificationCenter.default`** — AppKit posts
+    /// workspace notifications on `NSWorkspace.shared.notificationCenter`, and an observer
+    /// registered on the default center is silently never called.
+    private let workspaceCenter: NotificationCenter
+
+    /// Where this type *posts* (D-229): the center the Settings model observes.
+    private let center: NotificationCenter
+
     private var timer: Timer?
+    private var wakeObservation: WriteObservation?
 
     /// - Parameters:
     ///   - settings: the same instance the Settings pane writes, so the toggle and
@@ -58,11 +69,15 @@ public final class ScheduledRefreshController {
         settings: AppSettings = AppSettings(),
         now: @escaping () -> Date = Date.init,
         calendar: @escaping () -> Calendar = { .current },
+        workspaceCenter: NotificationCenter = NSWorkspace.shared.notificationCenter,
+        center: NotificationCenter = .default,
         refresh: @escaping @MainActor () async -> RefreshOutcome
     ) {
         self.settings = settings
         self.now = now
         self.calendar = calendar
+        self.workspaceCenter = workspaceCenter
+        self.center = center
         self.refresh = refresh
     }
 
@@ -79,7 +94,25 @@ public final class ScheduledRefreshController {
         // one is modelled on.
         stop()
 
-        runLaunchPass()
+        runCatchUpPass()
+
+        // **A wake is a launch, for an app that never closed** (D-228). D-224 rejected this
+        // observation on the grounds that a sleep spanning the window is indistinguishable
+        // from the app having been closed, and that both end in the same catch-up. The second
+        // half was false: a closed app refreshes when it is launched, while an app left
+        // running across a long sleep refreshed nothing at all — the first resumed tick finds
+        // the occurrence past its grace window and returns. Raised by Copilot in review round
+        // 3 of PR #46.
+        //
+        // The same pass as launch, so a wake at 13:00 still warms a cache nothing else would
+        // touch until the user pressed Prepare, while the *occurrence* is claimed only if one
+        // is genuinely due — a long sleep does not resurrect a morning that has gone.
+        wakeObservation = WriteObservation(
+            workspaceCenter.addObserver(
+                forName: NSWorkspace.didWakeNotification, object: nil, queue: nil
+            ) { [weak self] _ in
+                MainActor.assumeIsolated { _ = self?.runCatchUpPass() }
+            }, center: workspaceCenter)
 
         let timer = Timer.scheduledTimer(
             withTimeInterval: interval, repeats: true
@@ -110,21 +143,29 @@ public final class ScheduledRefreshController {
     public func stop() {
         timer?.invalidate()
         timer = nil
+        wakeObservation = nil
     }
 
-    /// §5.5's launch behaviour and this task's, as **one pass** (D-224).
+    /// §5.5's launch behaviour and this task's, as **one pass** (D-224) — run at launch and
+    /// again on wake (D-228).
     ///
-    /// The launch pass runs either way; the schedule decides only whether this pass
-    /// also serves today's occurrence. Asking the rule *and* keeping a separate
-    /// unconditional launch pass would dispatch twice, where the second finds nothing
-    /// stale, fetches nothing, and leaves two triggers claiming the same moment in
-    /// the log.
+    /// The pass runs either way; the schedule decides only whether it also serves today's
+    /// occurrence. Asking the rule *and* keeping a separate unconditional pass would
+    /// dispatch twice, where the second finds nothing stale, fetches nothing, and leaves two
+    /// triggers claiming the same moment in the log.
+    ///
+    /// **Named for the catch-up rather than for launch**, since a wake runs it too: a Mac
+    /// that slept through the window gets its cache warmed on the same terms a relaunch
+    /// would have given it. Repeated wakes are harmless — `refreshDue()` fetches only refs
+    /// older than thirty minutes and `SourceRefreshGate` serializes passes (D-183), so a
+    /// burst costs one pass and no fetches.
+    ///
     /// - Returns: whether this pass also served a due occurrence.
     @discardableResult
-    func runLaunchPass() -> Bool {
+    func runCatchUpPass() -> Bool {
         let claimed = claimOccurrenceIfDue()
         if claimed {
-            Log.sources.info("scheduled refresh: the launch pass serves the due occurrence")
+            Log.sources.info("scheduled refresh: this catch-up pass serves the due occurrence")
         }
         dispatch()
         return claimed
@@ -204,6 +245,8 @@ public final class ScheduledRefreshController {
     ///   token, and clearing on one would erase the warning on the very next tick, because
     ///   a pass with no refs due is the normal case.
     private func record(_ outcome: RefreshOutcome) {
+        let before = settings.scheduledRefreshRejection
+
         if let rejection = CredentialRejection.from(outcome, at: now()) {
             settings.scheduledRefreshRejection = rejection
             Log.sources.error(
@@ -211,6 +254,15 @@ public final class ScheduledRefreshController {
             )
         } else if CredentialRejection.isCleared(by: outcome) {
             settings.scheduledRefreshRejection = nil
+        }
+
+        // **Only when it changed** (D-229). The Settings pane can be open while this runs, so
+        // a stored value nothing announces is a warning the user never sees — or, on
+        // recovery, one that stays on screen after it stopped being true. Posting
+        // unconditionally would redraw the pane on every tick for no reason, which is how a
+        // notification becomes something readers learn to ignore.
+        if settings.scheduledRefreshRejection != before {
+            center.post(name: .stenoScheduledRefreshDidChange, object: nil)
         }
     }
 

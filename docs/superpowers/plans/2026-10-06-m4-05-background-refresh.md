@@ -1025,7 +1025,7 @@ git commit   # subject: "feat: the rule that decides when a scheduled pass is ow
   - `ScheduledRefreshController.tickInterval: TimeInterval` (five minutes)
   - `init(settings: AppSettings = AppSettings(), now: @escaping () -> Date = Date.init, calendar: @escaping () -> Calendar = { .current }, refresh: @escaping @MainActor () async -> Void)`
   - `func start(interval: TimeInterval = tickInterval)`, `func stop()`
-  - internal: `@discardableResult func tick() -> Bool`, `@discardableResult func runLaunchPass() -> Bool`, `var armedTimer: Timer?`
+  - internal: `@discardableResult func tick() -> Bool`, `@discardableResult func runCatchUpPass() -> Bool` (named `runLaunchPass()` until Task 8 gave a wake the same pass), `var armedTimer: Timer?`
 
 **Read `AutoExportController` first** (`StenoKit/Portability/AutoExport/AutoExportController.swift`). This is deliberately the same shape: a timer, a `.common` run-loop mode, an idempotent `start()`, and every decision in a pure function elsewhere.
 
@@ -1034,6 +1034,7 @@ git commit   # subject: "feat: the rule that decides when a scheduled pass is ow
 Create `StenoTests/Integrations/ScheduledRefreshControllerTests.swift`:
 
 ```swift
+import AppKit
 import Foundation
 import Testing
 
@@ -1043,7 +1044,7 @@ import Testing
 /// from one.
 @MainActor
 private final class PassCounter {
-    var count = 0
+    var total = 0
 }
 
 /// Wait up to `limit` for `condition`, yielding between checks.
@@ -1094,7 +1095,7 @@ private func instant(_ text: String, in calendar: Calendar) throws -> Date {
 /// A controller whose clock stands still at `nowText` and whose pass does nothing.
 ///
 /// The pass is a no-op because every test here asserts the *decision*, which
-/// `tick()` and `runLaunchPass()` return synchronously. Observing the pass itself
+/// `tick()` and `runCatchUpPass()` return synchronously. Observing the pass itself
 /// through the closure would mean waiting on a `Task` that has not necessarily started
 /// when they return — `aDispatchedPassReachesTheRefreshClosure` below is the one test
 /// that waits for it, and it waits deterministically.
@@ -1154,7 +1155,7 @@ func aFailedPassIsNotRetried() throws {
     let subject = ScheduledRefreshController(
         settings: settings, now: { moment }, calendar: { calendar },
         refresh: {
-            attempts.count += 1
+            attempts.total += 1
             return .idle
         })
 
@@ -1164,7 +1165,7 @@ func aFailedPassIsNotRetried() throws {
     // The stamp survived the failure, which is the whole point: the next occurrence
     // still runs, this one does not run again.
     #expect(settings.scheduledRefreshLastRun == moment)
-    #expect(attempts.count <= 1)
+    #expect(attempts.total <= 1)
 }
 
 @Test("the toggle switches the schedule off entirely")
@@ -1189,7 +1190,7 @@ func theLaunchPassAlwaysRuns() throws {
     let settings = try scratchSettings()
     let early = try controller(settings: settings, at: "2026-10-06 06:00:00")
 
-    #expect(early.runLaunchPass() == false)
+    #expect(early.runCatchUpPass() == false)
     #expect(settings.scheduledRefreshLastRun == nil)
 }
 
@@ -1202,7 +1203,7 @@ func aLaunchInsideTheWindowServesIt() throws {
     let subject = ScheduledRefreshController(
         settings: settings, now: { moment }, calendar: { calendar }, refresh: { .idle })
 
-    #expect(subject.runLaunchPass())
+    #expect(subject.runCatchUpPass())
     #expect(settings.scheduledRefreshLastRun == moment)
     // And the tick that follows minutes later finds nothing owed.
     #expect(subject.tick() == false)
@@ -1223,13 +1224,13 @@ func theLaunchPassIgnoresTheToggle() async throws {
     let subject = ScheduledRefreshController(
         settings: settings, now: { moment }, calendar: { calendar },
         refresh: {
-            passes.count += 1
+            passes.total += 1
             return .idle
         })
 
     // No occurrence is claimed — the schedule is off — and the pass runs anyway.
-    #expect(subject.runLaunchPass() == false)
-    #expect(await waitFor { passes.count == 1 }, "the launch pass never reached the service")
+    #expect(subject.runCatchUpPass() == false)
+    #expect(await waitFor { passes.total == 1 }, "the launch pass never reached the service")
     #expect(settings.scheduledRefreshLastRun == nil)
 }
 
@@ -1271,80 +1272,13 @@ func aDispatchedPassReachesTheRefreshClosure() async throws {
     let subject = ScheduledRefreshController(
         settings: settings, now: { moment }, calendar: { calendar },
         refresh: {
-            passes.count += 1
+            passes.total += 1
             return .idle
         })
 
     #expect(subject.tick())
 
-    #expect(await waitFor { passes.count == 1 }, "the pass never reached the service")
-}
-
-// MARK: - D-227: what an unattended pass records about the credential
-
-@Test("a refused credential is persisted by the pass that found it")
-@MainActor
-func aRefusedCredentialIsPersisted() async throws {
-    let settings = try scratchSettings()
-    let calendar = try pacific()
-    let moment = try instant("2026-10-06 08:03:00", in: calendar)
-    let subject = ScheduledRefreshController(
-        settings: settings, now: { moment }, calendar: { calendar },
-        refresh: {
-            RefreshOutcome(
-                attempted: 1,
-                failures: [
-                    RefreshOutcome.Failure(
-                        connectorID: "jira", displayName: "Jira", error: .credentialExpired)
-                ])
-        })
-
-    #expect(subject.tick())
-
-    #expect(await waitFor { settings.scheduledRefreshRejection != nil })
-    let rejection = try #require(settings.scheduledRefreshRejection)
-    #expect(rejection.displayName == "Jira")
-    #expect(rejection.discoveredAt == moment)
-}
-
-@Test("a later pass that reaches the source clears the record")
-@MainActor
-func aLaterPassClearsTheRecord() async throws {
-    let settings = try scratchSettings()
-    settings.scheduledRefreshRejection = CredentialRejection(displayName: "Jira", at: .distantPast)
-    let calendar = try pacific()
-    let moment = try instant("2026-10-06 08:03:00", in: calendar)
-    let subject = ScheduledRefreshController(
-        settings: settings, now: { moment }, calendar: { calendar },
-        refresh: { RefreshOutcome(attempted: 2, cached: 2) })
-
-    #expect(subject.tick())
-
-    #expect(await waitFor { settings.scheduledRefreshRejection == nil })
-}
-
-/// A pass with nothing due is the normal case, so clearing on one would erase the warning on
-/// the next tick after recording it.
-@Test("a pass that attempted nothing leaves the record standing")
-@MainActor
-func anEmptyPassLeavesTheRecord() async throws {
-    let settings = try scratchSettings()
-    let recorded = CredentialRejection(displayName: "Jira", at: .distantPast)
-    settings.scheduledRefreshRejection = recorded
-    let calendar = try pacific()
-    let moment = try instant("2026-10-06 08:03:00", in: calendar)
-    let passes = PassCounter()
-    let subject = ScheduledRefreshController(
-        settings: settings, now: { moment }, calendar: { calendar },
-        refresh: {
-            passes.count += 1
-            return .idle
-        })
-
-    #expect(subject.tick())
-    #expect(await waitFor { passes.count == 1 })
-
-    #expect(settings.scheduledRefreshRejection == recorded)
+    #expect(await waitFor { passes.total == 1 }, "the pass never reached the service")
 }
 ```
 
@@ -1369,6 +1303,7 @@ Expected: BUILD FAILED, `cannot find 'ScheduledRefreshController' in scope`.
 Create `StenoKit/Integrations/ScheduledRefreshController.swift`:
 
 ```swift
+import AppKit
 import Foundation
 
 /// §5.5's third refresh trigger: a pass at the user's configured time (D-221).
@@ -1407,7 +1342,17 @@ public final class ScheduledRefreshController {
     private let now: () -> Date
     private let calendar: () -> Calendar
     private let refresh: @MainActor () async -> RefreshOutcome
+
+    /// Where sleep and wake are posted. **Not `NotificationCenter.default`** — AppKit posts
+    /// workspace notifications on `NSWorkspace.shared.notificationCenter`, and an observer
+    /// registered on the default center is silently never called.
+    private let workspaceCenter: NotificationCenter
+
+    /// Where this type *posts* (D-229): the center the Settings model observes.
+    private let center: NotificationCenter
+
     private var timer: Timer?
+    private var wakeObservation: WriteObservation?
 
     /// - Parameters:
     ///   - settings: the same instance the Settings pane writes, so the toggle and
@@ -1429,11 +1374,15 @@ public final class ScheduledRefreshController {
         settings: AppSettings = AppSettings(),
         now: @escaping () -> Date = Date.init,
         calendar: @escaping () -> Calendar = { .current },
+        workspaceCenter: NotificationCenter = NSWorkspace.shared.notificationCenter,
+        center: NotificationCenter = .default,
         refresh: @escaping @MainActor () async -> RefreshOutcome
     ) {
         self.settings = settings
         self.now = now
         self.calendar = calendar
+        self.workspaceCenter = workspaceCenter
+        self.center = center
         self.refresh = refresh
     }
 
@@ -1450,7 +1399,25 @@ public final class ScheduledRefreshController {
         // one is modelled on.
         stop()
 
-        runLaunchPass()
+        runCatchUpPass()
+
+        // **A wake is a launch, for an app that never closed** (D-228). D-224 rejected this
+        // observation on the grounds that a sleep spanning the window is indistinguishable
+        // from the app having been closed, and that both end in the same catch-up. The second
+        // half was false: a closed app refreshes when it is launched, while an app left
+        // running across a long sleep refreshed nothing at all — the first resumed tick finds
+        // the occurrence past its grace window and returns. Raised by Copilot in review round
+        // 3 of PR #46.
+        //
+        // The same pass as launch, so a wake at 13:00 still warms a cache nothing else would
+        // touch until the user pressed Prepare, while the *occurrence* is claimed only if one
+        // is genuinely due — a long sleep does not resurrect a morning that has gone.
+        wakeObservation = WriteObservation(
+            workspaceCenter.addObserver(
+                forName: NSWorkspace.didWakeNotification, object: nil, queue: nil
+            ) { [weak self] _ in
+                MainActor.assumeIsolated { _ = self?.runCatchUpPass() }
+            }, center: workspaceCenter)
 
         let timer = Timer.scheduledTimer(
             withTimeInterval: interval, repeats: true
@@ -1481,21 +1448,29 @@ public final class ScheduledRefreshController {
     public func stop() {
         timer?.invalidate()
         timer = nil
+        wakeObservation = nil
     }
 
-    /// §5.5's launch behaviour and this task's, as **one pass** (D-224).
+    /// §5.5's launch behaviour and this task's, as **one pass** (D-224) — run at launch and
+    /// again on wake (D-228).
     ///
-    /// The launch pass runs either way; the schedule decides only whether this pass
-    /// also serves today's occurrence. Asking the rule *and* keeping a separate
-    /// unconditional launch pass would dispatch twice, where the second finds nothing
-    /// stale, fetches nothing, and leaves two triggers claiming the same moment in
-    /// the log.
+    /// The pass runs either way; the schedule decides only whether it also serves today's
+    /// occurrence. Asking the rule *and* keeping a separate unconditional pass would
+    /// dispatch twice, where the second finds nothing stale, fetches nothing, and leaves two
+    /// triggers claiming the same moment in the log.
+    ///
+    /// **Named for the catch-up rather than for launch**, since a wake runs it too: a Mac
+    /// that slept through the window gets its cache warmed on the same terms a relaunch
+    /// would have given it. Repeated wakes are harmless — `refreshDue()` fetches only refs
+    /// older than thirty minutes and `SourceRefreshGate` serializes passes (D-183), so a
+    /// burst costs one pass and no fetches.
+    ///
     /// - Returns: whether this pass also served a due occurrence.
     @discardableResult
-    func runLaunchPass() -> Bool {
+    func runCatchUpPass() -> Bool {
         let claimed = claimOccurrenceIfDue()
         if claimed {
-            Log.sources.info("scheduled refresh: the launch pass serves the due occurrence")
+            Log.sources.info("scheduled refresh: this catch-up pass serves the due occurrence")
         }
         dispatch()
         return claimed
@@ -1575,6 +1550,8 @@ public final class ScheduledRefreshController {
     ///   token, and clearing on one would erase the warning on the very next tick, because
     ///   a pass with no refs due is the normal case.
     private func record(_ outcome: RefreshOutcome) {
+        let before = settings.scheduledRefreshRejection
+
         if let rejection = CredentialRejection.from(outcome, at: now()) {
             settings.scheduledRefreshRejection = rejection
             Log.sources.error(
@@ -1582,6 +1559,15 @@ public final class ScheduledRefreshController {
             )
         } else if CredentialRejection.isCleared(by: outcome) {
             settings.scheduledRefreshRejection = nil
+        }
+
+        // **Only when it changed** (D-229). The Settings pane can be open while this runs, so
+        // a stored value nothing announces is a warning the user never sees — or, on
+        // recovery, one that stays on screen after it stopped being true. Posting
+        // unconditionally would redraw the pane on every tick for no reason, which is how a
+        // notification becomes something readers learn to ignore.
+        if settings.scheduledRefreshRejection != before {
+            center.post(name: .stenoScheduledRefreshDidChange, object: nil)
         }
     }
 
@@ -1608,7 +1594,7 @@ grep -c "recorded an issue" /tmp/test.log   # must print 0
 | delete `settings.scheduledRefreshLastRun = moment` (keep `_ = moment` so it compiles) | `two ticks inside one occurrence dispatch one pass`, `a failed pass is not retried inside the same occurrence`, `a launch inside the window serves the occurrence as well` |
 | delete `guard settings.scheduledRefreshEnabled else { return false }` | `the toggle switches the schedule off entirely` |
 | delete the `stop()` at the top of `start(interval:)` | `start is idempotent and leaves one armed timer` |
-| `dispatch(); return claimed` → `if claimed { dispatch() }; return claimed` in `runLaunchPass()` | `the launch pass still runs with the schedule switched off` |
+| `dispatch(); return claimed` → `if claimed { dispatch() }; return claimed` in `runCatchUpPass()` | `the launch pass still runs with the schedule switched off` |
 
 - [ ] **Step 6: Commit**
 
@@ -1753,6 +1739,55 @@ func aClearedRejectionDisappears() throws {
 
     #expect(model.credentialRejection == nil)
 }
+
+/// D-229. The pane can be open across 08:00, so the model has to hear about a rejection
+/// rather than wait to be asked — which is what the first version's doc comment claimed
+/// could not matter.
+@Test("an open pane hears a rejection recorded while it was showing")
+@MainActor
+func anOpenPaneHearsARejection() async throws {
+    let defaults = try #require(UserDefaults(suiteName: "steno.tests.\(UUID().uuidString)"))
+    let settings = AppSettings(defaults: defaults)
+    let center = NotificationCenter()
+    let model = ScheduledRefreshSettingsModel(settings: settings, center: center)
+    #expect(model.credentialRejection == nil)
+
+    // What the controller does: write, then announce.
+    settings.scheduledRefreshRejection = CredentialRejection(displayName: "Jira", at: Date())
+    center.post(name: .stenoScheduledRefreshDidChange, object: nil)
+
+    #expect(model.credentialRejection?.displayName == "Jira")
+}
+
+@Test("an open pane hears a recovery too")
+@MainActor
+func anOpenPaneHearsARecovery() async throws {
+    let defaults = try #require(UserDefaults(suiteName: "steno.tests.\(UUID().uuidString)"))
+    let settings = AppSettings(defaults: defaults)
+    settings.scheduledRefreshRejection = CredentialRejection(displayName: "Jira", at: Date())
+    let center = NotificationCenter()
+    let model = ScheduledRefreshSettingsModel(settings: settings, center: center)
+    #expect(model.credentialRejection != nil)
+
+    settings.scheduledRefreshRejection = nil
+    center.post(name: .stenoScheduledRefreshDidChange, object: nil)
+
+    #expect(model.credentialRejection == nil)
+}
+
+@Test("a stored rejection is there before any notification arrives")
+@MainActor
+func aStoredRejectionIsReadAtInit() throws {
+    let defaults = try #require(UserDefaults(suiteName: "steno.tests.\(UUID().uuidString)"))
+    let settings = AppSettings(defaults: defaults)
+    let recorded = CredentialRejection(
+        displayName: "Confluence", at: Date(timeIntervalSince1970: 1_792_000_000))
+    settings.scheduledRefreshRejection = recorded
+
+    let model = ScheduledRefreshSettingsModel(settings: settings, center: NotificationCenter())
+
+    #expect(model.credentialRejection == recorded)
+}
 ```
 
 - [ ] **Step 2: Run them and confirm they fail**
@@ -1790,6 +1825,7 @@ import Foundation
 public final class ScheduledRefreshSettingsModel {
     private let settings: AppSettings
     private let calendar: () -> Calendar
+    private var rejectionObservation: WriteObservation?
 
     /// §5.5's schedule, on or off.
     public var isEnabled: Bool {
@@ -1809,28 +1845,47 @@ public final class ScheduledRefreshSettingsModel {
     ///     own preferences (§9.4).
     ///   - calendar: injected for `pickerDate`'s conversion, so a test can pin a time
     ///     zone instead of inheriting the machine's.
+    ///   - center: injected so a test can post `.stenoScheduledRefreshDidChange` without
+    ///     touching the process-wide center.
     public init(
         settings: AppSettings = AppSettings(),
-        calendar: @escaping () -> Calendar = { .current }
+        calendar: @escaping () -> Calendar = { .current },
+        center: NotificationCenter = .default
     ) {
         self.settings = settings
         self.calendar = calendar
         self.isEnabled = settings.scheduledRefreshEnabled
         self.time = settings.scheduledRefreshTime
+        self.credentialRejection = settings.scheduledRefreshRejection
+
+        // Registered last: `self` may only be captured once every stored property has a
+        // value — `SettingsModel`'s posture, for its reason.
+        rejectionObservation = WriteObservation(
+            center.addObserver(
+                forName: .stenoScheduledRefreshDidChange, object: nil, queue: nil
+            ) { [weak self] _ in
+                MainActor.assumeIsolated { self?.reload() }
+            }, center: center)
     }
 
     /// What an unattended pass last learned about the credential (D-227), or `nil`.
     ///
-    /// **Re-read rather than mirrored**, which is the opposite of `isEnabled` and `time`
-    /// above, because this one is written by the controller rather than by this model: a
-    /// mirror taken at launch would still say "nothing" after an 08:00 pass was refused.
-    /// `reload()` is what the pane calls as it appears, which is the only moment the value
-    /// has to be right — the pane cannot be open at the instant a background pass runs and
-    /// then fail to redraw, because appearing is what triggers the read.
+    /// **Kept current by a notification, not by the pane appearing** (D-229). The first
+    /// version read the store in `onAppear` and its comment claimed "the pane cannot be open
+    /// at the instant a background pass runs and then fail to redraw" — which is false: a
+    /// user can leave Settings open across 08:00, and then a refused pass wrote
+    /// `UserDefaults` while this property, the one SwiftUI observes, never changed. The same
+    /// is true of recovery: the row would stay on screen after it stopped being true. Raised
+    /// by Copilot in review round 3 of PR #46.
     public private(set) var credentialRejection: CredentialRejection?
 
-    /// Re-read the rejection from the store. Called by the pane as it appears, beside the
-    /// `forgetEntry()` the credential half already does there.
+    /// Re-read the rejection from the store.
+    ///
+    /// Called by the observation below, and directly by tests. The pane does not need to
+    /// call it: a model built at launch reads the stored value in `init`, and every later
+    /// change arrives as `.stenoScheduledRefreshDidChange`. Having the pane re-read on
+    /// appearance *as well* would be a second mechanism for one fact, which is how the two
+    /// come to disagree.
     public func reload() {
         credentialRejection = settings.scheduledRefreshRejection
     }
@@ -1918,63 +1973,52 @@ struct ScheduledRefreshSection: View {
     @Bindable var model: ScheduledRefreshSettingsModel
 
     var body: some View {
-        // **A `Group`, so the whole section can carry one `.onAppear`.** The rows below are
-        // separate `Form` children and a modifier cannot attach to the implicit tuple; a
-        // `Group` is transparent in a `Form`, so each child is still its own row.
-        Group {
-            Toggle("Refresh in the background", isOn: $model.isEnabled)
+        Toggle("Refresh in the background", isOn: $model.isEnabled)
 
-            DatePicker(
-                "At", selection: $model.pickerDate, displayedComponents: .hourAndMinute
-            )
-            .disabled(!model.isEnabled)
-            // The visible label is one word, which tells a screen-reader user nothing
-            // about what happens at that time. Nothing automated reaches VoiceOver, so
-            // this line and the manual pass are the only things holding it.
-            .accessibilityLabel("Scheduled refresh time")
+        DatePicker(
+            "At", selection: $model.pickerDate, displayedComponents: .hourAndMinute
+        )
+        .disabled(!model.isEnabled)
+        // The visible label is one word, which tells a screen-reader user nothing
+        // about what happens at that time. Nothing automated reaches VoiceOver, so
+        // this line and the manual pass are the only things holding it.
+        .accessibilityLabel("Scheduled refresh time")
 
-            // D-227: the one thing an unattended pass can discover that no other surface can.
-            // `expiryWarning` above is derived from the date the user typed, so a *revoked*
-            // token shows nothing there — this is where the user finds out before a stand-up
-            // depends on it. A timestamped fact, so it stays true after the token is replaced
-            // and until a later pass clears it.
-            if let rejection = model.credentialRejection {
-                Label {
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text("A background refresh couldn't sign in to \(rejection.displayName).")
-                        Text(
-                            "Your token may have been revoked. Test the connection above, or paste a "
-                                + "new one."
-                        )
+        // D-227: the one thing an unattended pass can discover that no other surface can.
+        // `expiryWarning` above is derived from the date the user typed, so a *revoked*
+        // token shows nothing there — this is where the user finds out before a stand-up
+        // depends on it. A timestamped fact, so it stays true after the token is replaced
+        // and until a later pass clears it.
+        if let rejection = model.credentialRejection {
+            Label {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("A background refresh couldn't sign in to \(rejection.displayName).")
+                    Text(
+                        "Your token may have been revoked. Test the connection above, or paste a "
+                            + "new one."
+                    )
+                    .foregroundStyle(.secondary)
+                    Text(rejection.discoveredAt, format: .dateTime.weekday().hour().minute())
                         .foregroundStyle(.secondary)
-                        Text(rejection.discoveredAt, format: .dateTime.weekday().hour().minute())
-                            .foregroundStyle(.secondary)
-                    }
-                } icon: {
-                    Image(systemName: "key.slash")
                 }
-                .font(.callout)
+            } icon: {
+                Image(systemName: "key.slash")
             }
-
-            // **Names the limitation rather than implying a guarantee.** The schedule
-            // needs the app to be running, and a Mac asleep until the afternoon simply
-            // refreshes on the next launch — "within a few hours" is
-            // `ScheduledRefreshDue.grace`, so if that changes this sentence is part of the
-            // change.
-            Text(
-                "Fetches ticket and page updates at this time, so your stand-up is ready "
-                    + "without waiting. Skipped while your Mac is asleep; Steno catches up when "
-                    + "it next wakes, within a few hours of the time you set."
-            )
             .font(.callout)
-            .foregroundStyle(.secondary)
         }
-        // D-227: a background pass refused at 08:00 is recorded while this window is closed,
-        // so appearing is when the view has to go and look. Here rather than on the pane's
-        // own `onAppear`, which is where it started: `IntegrationsSettingsPane` is at
-        // SwiftLint's `file_length` limit, and the reload belongs with the view that reads
-        // the value anyway.
-        .onAppear { model.reload() }
+
+        // **Names the limitation rather than implying a guarantee.** The schedule
+        // needs the app to be running, and a Mac asleep until the afternoon simply
+        // refreshes on the next launch — "within a few hours" is
+        // `ScheduledRefreshDue.grace`, so if that changes this sentence is part of the
+        // change.
+        Text(
+            "Fetches ticket and page updates at this time, so your stand-up is ready "
+                + "without waiting. Skipped while your Mac is asleep; Steno catches up when "
+                + "it next wakes, within a few hours of the time you set."
+        )
+        .font(.callout)
+        .foregroundStyle(.secondary)
     }
 }
 ```
@@ -2382,9 +2426,9 @@ Then surface it: `credentialRejection` and `reload()` on the settings model, the
 written by the controller while the window is closed, so a value captured at launch would still
 say "nothing" after an 08:00 pass was refused.
 
-**The `onAppear` lives on the section, not the pane.** `IntegrationsSettingsPane` is at 398 lines
-of SwiftLint's 400, and the reload belongs with the view that reads the value. A `Group` wraps the
-section's rows so a single modifier can attach to all of them; `Group` is transparent in a `Form`.
+**How the pane learns of it is Task 8's subject.** This task's first version read the store in
+`onAppear`, which is not enough and whose comment said otherwise; Task 8 replaces it with a
+notification. Write Task 8's version rather than this one if you are implementing in order.
 
 - [ ] **Step 6: Run everything**
 
@@ -2414,3 +2458,650 @@ git commit   # subject: "fix: record the credential a background pass was refuse
 
 The body says what the spec got wrong, not just what the code now does: this task's own spec
 claimed no plumbing was needed, and the claim did not survive contact with D-192.
+
+---
+
+## Task 8: What round 3 added — a wake catches up, and an open pane hears about it
+
+**Added after the third review round**, which found two defects of the same kind: a claim in a
+comment that was not true of the code around it.
+
+**Files:**
+- Modify: `StenoKit/Support/WriteNotifications.swift` — `.stenoScheduledRefreshDidChange`, and `WriteObservation` takes the center it registered on
+- Modify: `StenoKit/Integrations/ScheduledRefreshController.swift` — a wake observation, `runLaunchPass()` renamed to `runCatchUpPass()`, and a post when the record changes
+- Modify: `StenoKit/Features/Settings/ScheduledRefreshSettingsModel.swift` — observe the notification; `credentialRejection` read at `init`
+- Modify: `Steno/Features/Settings/ScheduledRefreshSection.swift` — drop the `Group` and its `onAppear`
+- Modify: `Steno/Features/Settings/IntegrationsSettingsPane.swift` — drop the `scheduleModel.reload()` call
+- Create: `StenoTests/Integrations/ScheduledRefreshRecordingTests.swift` — D-227, D-228 and D-229's cases, split out because the controller's own test file reached 400 lines
+
+**Interfaces:**
+- Consumes: `WriteObservation` (existing), `NSWorkspace.didWakeNotification`.
+- Produces: `Notification.Name.stenoScheduledRefreshDidChange`; `ScheduledRefreshController.init(…, workspaceCenter:center:refresh:)`; `runCatchUpPass()`.
+
+### Finding 1: a long sleep skips the catch-up
+
+D-224 said a wake observation was unnecessary because "a sleep spanning the window is
+indistinguishable from the app having been closed, and both end in the same catch-up". The second
+half is false, and the asymmetry is the defect:
+
+| | What refreshes it |
+|---|---|
+| App closed, Mac asleep through 08:00 | The launch pass, whenever the user next opens Steno — `start()` dispatches unconditionally |
+| **App running**, Mac asleep 02:00→13:00 | **Nothing.** Timers do not fire while asleep, and the first resumed tick finds the occurrence five hours past its grace window |
+
+- [ ] **Step 1: Write the failing tests**
+
+In `StenoTests/Integrations/ScheduledRefreshRecordingTests.swift` (see the file for the fixtures it
+carries — it needs its own, because the helpers in the controller's test file are `private`):
+
+```swift
+import AppKit
+import Foundation
+import Testing
+
+@testable import StenoKit
+
+/// What an unattended pass records, announces and catches up on — D-227, D-228, D-229.
+///
+/// **A second file because the first reached SwiftLint's 400-line limit**, and because this
+/// is a different subject: `ScheduledRefreshControllerTests` is about when a pass runs, and
+/// this is about what the pass leaves behind for a surface to read.
+
+@MainActor
+private final class PassCounter {
+    var total = 0
+}
+
+/// See `ScheduledRefreshControllerTests` for why this is a deadline rather than a
+/// continuation the code under test resumes: that version hangs under mutation instead of
+/// failing.
+@MainActor
+private func waitFor(
+    _ limit: Duration = .seconds(2), _ condition: @MainActor () -> Bool
+) async -> Bool {
+    let deadline = ContinuousClock.now + limit
+    while ContinuousClock.now < deadline {
+        if condition() { return true }
+        await Task.yield()
+    }
+    return condition()
+}
+
+@MainActor
+private func scratchSettings() throws -> AppSettings {
+    let defaults = try #require(UserDefaults(suiteName: "steno.tests.\(UUID().uuidString)"))
+    return AppSettings(defaults: defaults)
+}
+
+private func pacific() throws -> Calendar {
+    var calendar = Calendar(identifier: .gregorian)
+    calendar.timeZone = try #require(TimeZone(identifier: "America/Los_Angeles"))
+    return calendar
+}
+
+private func instant(_ text: String, in calendar: Calendar) throws -> Date {
+    let formatter = DateFormatter()
+    formatter.calendar = calendar
+    formatter.timeZone = calendar.timeZone
+    formatter.locale = Locale(identifier: "en_US_POSIX")
+    formatter.dateFormat = "yyyy-MM-dd HH:mm:ss"
+    return try #require(formatter.date(from: text))
+}
+
+// MARK: - D-227: what an unattended pass records about the credential
+
+@Test("a refused credential is persisted by the pass that found it")
+@MainActor
+func aRefusedCredentialIsPersisted() async throws {
+    let settings = try scratchSettings()
+    let calendar = try pacific()
+    let moment = try instant("2026-10-06 08:03:00", in: calendar)
+    let subject = ScheduledRefreshController(
+        settings: settings, now: { moment }, calendar: { calendar },
+        refresh: {
+            RefreshOutcome(
+                attempted: 1,
+                failures: [
+                    RefreshOutcome.Failure(
+                        connectorID: "jira", displayName: "Jira", error: .credentialExpired)
+                ])
+        })
+
+    #expect(subject.tick())
+
+    #expect(await waitFor { settings.scheduledRefreshRejection != nil })
+    let rejection = try #require(settings.scheduledRefreshRejection)
+    #expect(rejection.displayName == "Jira")
+    #expect(rejection.discoveredAt == moment)
+}
+
+@Test("a later pass that reaches the source clears the record")
+@MainActor
+func aLaterPassClearsTheRecord() async throws {
+    let settings = try scratchSettings()
+    settings.scheduledRefreshRejection = CredentialRejection(displayName: "Jira", at: .distantPast)
+    let calendar = try pacific()
+    let moment = try instant("2026-10-06 08:03:00", in: calendar)
+    let subject = ScheduledRefreshController(
+        settings: settings, now: { moment }, calendar: { calendar },
+        refresh: { RefreshOutcome(attempted: 2, cached: 2) })
+
+    #expect(subject.tick())
+
+    #expect(await waitFor { settings.scheduledRefreshRejection == nil })
+}
+
+/// A pass with nothing due is the normal case, so clearing on one would erase the warning on
+/// the next tick after recording it.
+@Test("a pass that attempted nothing leaves the record standing")
+@MainActor
+func anEmptyPassLeavesTheRecord() async throws {
+    let settings = try scratchSettings()
+    let recorded = CredentialRejection(displayName: "Jira", at: .distantPast)
+    settings.scheduledRefreshRejection = recorded
+    let calendar = try pacific()
+    let moment = try instant("2026-10-06 08:03:00", in: calendar)
+    let passes = PassCounter()
+    let subject = ScheduledRefreshController(
+        settings: settings, now: { moment }, calendar: { calendar },
+        refresh: {
+            passes.total += 1
+            return .idle
+        })
+
+    #expect(subject.tick())
+    #expect(await waitFor { passes.total == 1 })
+
+    #expect(settings.scheduledRefreshRejection == recorded)
+}
+
+// MARK: - D-228: a wake is a launch, for an app that never closed
+
+/// The gap D-224 argued did not exist. A Mac asleep from 02:00 to 13:00 with Steno still
+/// running gets no launch pass — the app never relaunched — and the first resumed tick finds
+/// the occurrence five hours past its grace window. Before the wake observation, nothing
+/// refreshed until the user pressed Prepare.
+@Test("a wake refreshes even when the occurrence is long past")
+@MainActor
+func aWakeRefreshesAfterTheWindow() async throws {
+    let settings = try scratchSettings()
+    let workspace = NotificationCenter()
+    let calendar = try pacific()
+    let afternoon = try instant("2026-10-06 13:00:00", in: calendar)
+    let passes = PassCounter()
+    let subject = ScheduledRefreshController(
+        settings: settings, now: { afternoon }, calendar: { calendar },
+        workspaceCenter: workspace, center: NotificationCenter(),
+        refresh: {
+            passes.total += 1
+            return .idle
+        })
+    subject.start(interval: 3600)
+    #expect(await waitFor { passes.total == 1 }, "the pass armed by start() never ran")
+
+    workspace.post(name: NSWorkspace.didWakeNotification, object: nil)
+
+    #expect(await waitFor { passes.total == 2 }, "a wake must run a catch-up pass")
+    // And it does not resurrect a morning that has gone: the occurrence stays unclaimed, so
+    // tomorrow's is unaffected and nothing fires again today.
+    #expect(settings.scheduledRefreshLastRun == nil)
+}
+
+@Test("a wake inside the window serves the occurrence")
+@MainActor
+func aWakeInsideTheWindowServesIt() async throws {
+    let settings = try scratchSettings()
+    let workspace = NotificationCenter()
+    let calendar = try pacific()
+    let morning = try instant("2026-10-06 09:00:00", in: calendar)
+    let passes = PassCounter()
+    let subject = ScheduledRefreshController(
+        settings: settings, now: { morning }, calendar: { calendar },
+        workspaceCenter: workspace, center: NotificationCenter(),
+        refresh: {
+            passes.total += 1
+            return .idle
+        })
+    // Stopped, so only the wake drives this test — `start()` would claim the occurrence
+    // itself and leave nothing for the wake to do.
+    settings.scheduledRefreshLastRun = nil
+
+    workspace.post(name: NSWorkspace.didWakeNotification, object: nil)
+
+    // No observation is armed until `start()`, so nothing happened.
+    #expect(passes.total == 0)
+    subject.start(interval: 3600)
+    #expect(await waitFor { passes.total == 1 })
+    #expect(settings.scheduledRefreshLastRun == morning)
+    subject.stop()
+}
+
+/// A burst of wakes must not become a burst of fetches. The stamp stops the occurrence being
+/// claimed twice; `refreshDue()`'s staleness rule and the gate are what stop the passes
+/// themselves from costing anything, which is why dispatching on every wake is safe.
+@Test("repeated wakes claim the occurrence once")
+@MainActor
+func repeatedWakesClaimOnce() async throws {
+    let settings = try scratchSettings()
+    let workspace = NotificationCenter()
+    let calendar = try pacific()
+    let morning = try instant("2026-10-06 09:00:00", in: calendar)
+    let passes = PassCounter()
+    let subject = ScheduledRefreshController(
+        settings: settings, now: { morning }, calendar: { calendar },
+        workspaceCenter: workspace, center: NotificationCenter(),
+        refresh: {
+            passes.total += 1
+            return .idle
+        })
+    subject.start(interval: 3600)
+    #expect(await waitFor { passes.total == 1 })
+
+    workspace.post(name: NSWorkspace.didWakeNotification, object: nil)
+    workspace.post(name: NSWorkspace.didWakeNotification, object: nil)
+
+    #expect(await waitFor { passes.total == 3 })
+    #expect(settings.scheduledRefreshLastRun == morning)
+    subject.stop()
+}
+
+@Test("stop disarms the wake observation")
+@MainActor
+func stopDisarmsTheWake() async throws {
+    let settings = try scratchSettings()
+    let workspace = NotificationCenter()
+    let calendar = try pacific()
+    let morning = try instant("2026-10-06 06:00:00", in: calendar)
+    let passes = PassCounter()
+    let subject = ScheduledRefreshController(
+        settings: settings, now: { morning }, calendar: { calendar },
+        workspaceCenter: workspace, center: NotificationCenter(),
+        refresh: {
+            passes.total += 1
+            return .idle
+        })
+    subject.start(interval: 3600)
+    #expect(await waitFor { passes.total == 1 })
+
+    subject.stop()
+    workspace.post(name: NSWorkspace.didWakeNotification, object: nil)
+
+    #expect(await waitFor(.milliseconds(300)) { passes.total > 1 } == false)
+}
+
+// MARK: - D-229: an open pane hears about a rejection
+
+@Test("recording a rejection announces it")
+@MainActor
+func recordingARejectionAnnouncesIt() async throws {
+    let settings = try scratchSettings()
+    let center = NotificationCenter()
+    let calendar = try pacific()
+    let moment = try instant("2026-10-06 08:03:00", in: calendar)
+    let announcements = PassCounter()
+    let observation = center.addObserver(
+        forName: .stenoScheduledRefreshDidChange, object: nil, queue: nil
+    ) { _ in
+        MainActor.assumeIsolated { announcements.total += 1 }
+    }
+    defer { center.removeObserver(observation) }
+    let subject = ScheduledRefreshController(
+        settings: settings, now: { moment }, calendar: { calendar },
+        workspaceCenter: NotificationCenter(), center: center,
+        refresh: {
+            RefreshOutcome(
+                attempted: 1,
+                failures: [
+                    RefreshOutcome.Failure(
+                        connectorID: "jira", displayName: "Jira", error: .credentialExpired)
+                ])
+        })
+
+    #expect(subject.tick())
+
+    #expect(await waitFor { announcements.total == 1 }, "an open pane would never redraw")
+}
+
+/// **Only when it changed.** A pass that records the same nothing it found last time must not
+/// redraw the pane: a notification that fires every five minutes is one readers learn to
+/// ignore, and this one is read by a surface that is usually not even open.
+@Test("a pass that changes nothing announces nothing")
+@MainActor
+func anUnchangedPassAnnouncesNothing() async throws {
+    let settings = try scratchSettings()
+    let center = NotificationCenter()
+    let calendar = try pacific()
+    let moment = try instant("2026-10-06 08:03:00", in: calendar)
+    let announcements = PassCounter()
+    let passes = PassCounter()
+    let observation = center.addObserver(
+        forName: .stenoScheduledRefreshDidChange, object: nil, queue: nil
+    ) { _ in
+        MainActor.assumeIsolated { announcements.total += 1 }
+    }
+    defer { center.removeObserver(observation) }
+    let subject = ScheduledRefreshController(
+        settings: settings, now: { moment }, calendar: { calendar },
+        workspaceCenter: NotificationCenter(), center: center,
+        refresh: {
+            passes.total += 1
+            return RefreshOutcome(attempted: 2, cached: 2)
+        })
+
+    #expect(subject.tick())
+
+    #expect(await waitFor { passes.total == 1 })
+    #expect(announcements.total == 0)
+}
+```
+
+- [ ] **Step 2: Run them and confirm they fail**
+
+```bash
+make test > /tmp/test.log 2>&1; echo "exit: $?"
+grep -c "recorded an issue" /tmp/test.log
+```
+
+Expected: red on the wake tests and the announcement tests; a compile failure first, because
+`workspaceCenter:` does not exist yet.
+
+- [ ] **Step 3: Add the notification and make `WriteObservation` center-aware**
+
+```swift
+    /// Posted after an unattended refresh records or clears a credential rejection
+    /// (D-227) — by `ScheduledRefreshController` and nowhere else.
+    ///
+    /// **Because the Settings window can be open while the pass runs.** D-227's first
+    /// version read the stored rejection in `onAppear`, and this file's own history says
+    /// why that is not enough: a surface that only reads on appearance shows nothing while
+    /// it is already on screen. The doc comment there claimed "the pane cannot be open at
+    /// the instant a background pass runs and then fail to redraw", which is simply false —
+    /// a user can leave Settings open across 08:00. Raised by Copilot in review round 3 of
+    /// PR #46, and the same class of defect as the M1-08 gap recorded above.
+    ///
+    /// **Separate from `.stenoCredentialsDidChange`, which the credential *stores* post.**
+    /// Nothing here writes a credential, and this notification's reader wants to redraw a
+    /// warning row, not drop a memoized secret — folding them together would make every
+    /// refused pass invalidate the credential memo and make that file's doc comment false.
+    public static let stenoScheduledRefreshDidChange = Notification.Name(
+        "com.lgabrielgr.steno.scheduledRefreshDidChange")
+}
+
+/// Holds a `NotificationCenter` token and removes it when its owner is
+/// deallocated.
+///
+/// **Why this is a separate object rather than a stored token plus a
+/// `deinit`.** In Swift 6 the `deinit` of a `@MainActor` class is nonisolated
+/// and may not reference isolated stored properties, so the obvious
+/// `deinit { NotificationCenter.default.removeObserver(token) }` inside
+/// `MainWindowModel` does not compile. Holding the token in a non-isolated
+/// object means ARC releases it along with the model and *this* `deinit`,
+/// which touches nothing isolated, does the removal.
+final class WriteObservation {
+    private let token: any NSObjectProtocol
+
+    /// The center the token came from, so it is removed from the one it was added to.
+    ///
+    /// **Defaulted, because every caller but one uses `.default`.** The exception is
+    /// `ScheduledRefreshController`, which observes sleep and wake — those are posted on
+    /// `NSWorkspace.shared.notificationCenter`, not on the default center, and removing a
+    /// token from the wrong center is a silent leak rather than an error.
+    private let center: NotificationCenter
+
+    init(_ token: any NSObjectProtocol, center: NotificationCenter = .default) {
+        self.token = token
+        self.center = center
+    }
+
+    deinit {
+        center.removeObserver(token)
+    }
+}
+```
+
+`WriteObservation` had `NotificationCenter.default` hard-coded in its `deinit`. Workspace
+notifications are posted on `NSWorkspace.shared.notificationCenter`, so a token added there and
+removed from the default center is a silent leak — the parameter is defaulted, so the six existing
+callers are untouched.
+
+- [ ] **Step 4: Observe the wake, and post when the record changes**
+
+The controller gains `workspaceCenter` (what it observes) and `center` (what it posts on), both
+injected so a test never touches a process-wide center:
+
+```swift
+    /// Run the launch pass, then arm the tick.
+    ///
+    /// Separate from `init` so building the controller cannot reach the network —
+    /// `StenoApp.init` builds it, and an initializer that opened a socket would put a
+    /// fetch on the launch path before anything had decided one was wanted.
+    public func start(interval: TimeInterval = ScheduledRefreshController.tickInterval) {
+        // **Idempotent, because the timer half is not self-correcting.** Reassigning
+        // `timer` does not stop the old one: a scheduled `Timer` is retained by the
+        // run loop, so a second `start()` would leave two live tickers firing
+        // forever. Found by Copilot in review of PR #32, against the controller this
+        // one is modelled on.
+        stop()
+
+        runCatchUpPass()
+
+        // **A wake is a launch, for an app that never closed** (D-228). D-224 rejected this
+        // observation on the grounds that a sleep spanning the window is indistinguishable
+        // from the app having been closed, and that both end in the same catch-up. The second
+        // half was false: a closed app refreshes when it is launched, while an app left
+        // running across a long sleep refreshed nothing at all — the first resumed tick finds
+        // the occurrence past its grace window and returns. Raised by Copilot in review round
+        // 3 of PR #46.
+        //
+        // The same pass as launch, so a wake at 13:00 still warms a cache nothing else would
+        // touch until the user pressed Prepare, while the *occurrence* is claimed only if one
+        // is genuinely due — a long sleep does not resurrect a morning that has gone.
+        wakeObservation = WriteObservation(
+            workspaceCenter.addObserver(
+                forName: NSWorkspace.didWakeNotification, object: nil, queue: nil
+            ) { [weak self] _ in
+                MainActor.assumeIsolated { _ = self?.runCatchUpPass() }
+            }, center: workspaceCenter)
+
+        let timer = Timer.scheduledTimer(
+            withTimeInterval: interval, repeats: true
+        ) { [weak self] _ in
+            MainActor.assumeIsolated { _ = self?.tick() }
+        }
+        timer.tolerance = Self.tickTolerance
+        // `.common`, so the tick still fires while a menu is tracking or a window is
+        // being resized — both put the run loop in a mode the default one does not
+        // cover, and a schedule that pauses because a menu is open is one nobody can
+        // reason about.
+        RunLoop.main.add(timer, forMode: .common)
+        self.timer = timer
+    }
+```
+
+and records as before, announcing only a change:
+
+```swift
+    /// Persist, or clear, what this pass learned about the credential (D-227).
+    ///
+    /// Three cases, and the third is the one that makes this correct:
+    ///
+    /// - A connector refused the credential → record it, with the time.
+    /// - A pass that reached a source and was not refused → clear any recorded rejection.
+    /// - **A pass that attempted nothing → leave the record alone.** Nothing due, nothing
+    ///   configured, every integration switched off: none of those is evidence about the
+    ///   token, and clearing on one would erase the warning on the very next tick, because
+    ///   a pass with no refs due is the normal case.
+    private func record(_ outcome: RefreshOutcome) {
+        let before = settings.scheduledRefreshRejection
+
+        if let rejection = CredentialRejection.from(outcome, at: now()) {
+            settings.scheduledRefreshRejection = rejection
+            Log.sources.error(
+                "unattended refresh: \(rejection.displayName, privacy: .public) refused the stored credential"
+            )
+        } else if CredentialRejection.isCleared(by: outcome) {
+            settings.scheduledRefreshRejection = nil
+        }
+
+        // **Only when it changed** (D-229). The Settings pane can be open while this runs, so
+        // a stored value nothing announces is a warning the user never sees — or, on
+        // recovery, one that stays on screen after it stopped being true. Posting
+        // unconditionally would redraw the pane on every tick for no reason, which is how a
+        // notification becomes something readers learn to ignore.
+        if settings.scheduledRefreshRejection != before {
+            center.post(name: .stenoScheduledRefreshDidChange, object: nil)
+        }
+    }
+```
+
+**The wake runs the catch-up pass, not a second scheduled trigger.** A wake at 09:30 claims the
+occurrence; a wake at 13:00 warms the cache and claims nothing, so D-222's grace window still
+decides what counts as serving the morning. Repeated wakes are safe because `refreshDue()` fetches
+only refs older than thirty minutes and the gate serializes passes — one pass, no fetches.
+
+- [ ] **Step 5: Let the model hear it**
+
+```swift
+import Foundation
+
+/// What the Integrations pane's "Scheduled refresh" section binds to (FR-6, §5.5).
+///
+/// **Its own model rather than two more properties on `IntegrationsSettingsModel`.**
+/// That type is about the Atlassian credential and the connectors over it, and it is
+/// already 387 lines — adding a second subject would push the file past SwiftLint's
+/// `file_length` limit, which `make lint --strict` reports as a failure. Splitting by
+/// subject is also what makes this testable in four short tests instead of inside a
+/// type that needs a Keychain double to build.
+///
+/// **Observable, mirroring `UserDefaults` rather than reading through to it.**
+/// `@Observable` tracks stored properties; a computed property over `UserDefaults`
+/// would change the setting and leave the control drawing its old value, because
+/// nothing SwiftUI observes would have changed. The mirror is written through on every
+/// set, so `ScheduledRefreshController` — which reads `AppSettings` per tick — sees the
+/// change on the next tick with no relaunch and no notification between them.
+///
+/// Every rule lives here rather than in the pane: the unhosted test bundle cannot
+/// reach the app target (D-010), so a rule only a view knows is a rule no test can
+/// hold.
+@Observable
+@MainActor
+public final class ScheduledRefreshSettingsModel {
+    private let settings: AppSettings
+    private let calendar: () -> Calendar
+    private var rejectionObservation: WriteObservation?
+
+    /// §5.5's schedule, on or off.
+    public var isEnabled: Bool {
+        didSet { settings.scheduledRefreshEnabled = isEnabled }
+    }
+
+    /// The configured time of day.
+    ///
+    /// Written through on set, like `isEnabled`. The pane does not bind to this
+    /// directly — `DatePicker` needs a `Date` — it binds to `pickerDate` below.
+    public var time: TimeOfDay {
+        didSet { settings.scheduledRefreshTime = time }
+    }
+
+    /// - Parameters:
+    ///   - settings: injected so tests use a scratch suite rather than the developer's
+    ///     own preferences (§9.4).
+    ///   - calendar: injected for `pickerDate`'s conversion, so a test can pin a time
+    ///     zone instead of inheriting the machine's.
+    ///   - center: injected so a test can post `.stenoScheduledRefreshDidChange` without
+    ///     touching the process-wide center.
+    public init(
+        settings: AppSettings = AppSettings(),
+        calendar: @escaping () -> Calendar = { .current },
+        center: NotificationCenter = .default
+    ) {
+        self.settings = settings
+        self.calendar = calendar
+        self.isEnabled = settings.scheduledRefreshEnabled
+        self.time = settings.scheduledRefreshTime
+        self.credentialRejection = settings.scheduledRefreshRejection
+
+        // Registered last: `self` may only be captured once every stored property has a
+        // value — `SettingsModel`'s posture, for its reason.
+        rejectionObservation = WriteObservation(
+            center.addObserver(
+                forName: .stenoScheduledRefreshDidChange, object: nil, queue: nil
+            ) { [weak self] _ in
+                MainActor.assumeIsolated { self?.reload() }
+            }, center: center)
+    }
+
+    /// What an unattended pass last learned about the credential (D-227), or `nil`.
+    ///
+    /// **Kept current by a notification, not by the pane appearing** (D-229). The first
+    /// version read the store in `onAppear` and its comment claimed "the pane cannot be open
+    /// at the instant a background pass runs and then fail to redraw" — which is false: a
+    /// user can leave Settings open across 08:00, and then a refused pass wrote
+    /// `UserDefaults` while this property, the one SwiftUI observes, never changed. The same
+    /// is true of recovery: the row would stay on screen after it stopped being true. Raised
+    /// by Copilot in review round 3 of PR #46.
+    public private(set) var credentialRejection: CredentialRejection?
+
+    /// Re-read the rejection from the store.
+    ///
+    /// Called by the observation below, and directly by tests. The pane does not need to
+    /// call it: a model built at launch reads the stored value in `init`, and every later
+    /// change arrives as `.stenoScheduledRefreshDidChange`. Having the pane re-read on
+    /// appearance *as well* would be a second mechanism for one fact, which is how the two
+    /// come to disagree.
+    public func reload() {
+        credentialRejection = settings.scheduledRefreshRejection
+    }
+
+    /// `time` as the `Date` a `DatePicker(displayedComponents: .hourAndMinute)` binds.
+    ///
+    /// **The date component is deliberately today's and deliberately ignored.** The
+    /// picker shows and edits hours and minutes only; the setter takes the hour and
+    /// minute off whatever instant the picker produces and throws the rest away, which
+    /// is what keeps the stored setting a time of day rather than an instant that
+    /// drifts with the time zone it was set in.
+    ///
+    /// A `nil` from `instant(on:calendar:)` is unreachable — see
+    /// `TimeOfDay.instant(on:calendar:)` — and falls back to the day's start, which
+    /// shows 00:00 in the control rather than refusing to draw it.
+    public var pickerDate: Date {
+        get {
+            let today = Date()
+            return time.instant(on: today, calendar: calendar())
+                ?? calendar().startOfDay(for: today)
+        }
+        set { time = TimeOfDay(of: newValue, calendar: calendar()) }
+    }
+}
+```
+
+**One mechanism, not two.** Remove the `onAppear` reload from the section and the
+`scheduleModel.reload()` from the pane: the model reads the store at `init` and hears every later
+change, so a second read on appearance is a second path to one fact. Removing it also takes out the
+`Group` wrapper, which existed only to carry that modifier.
+
+- [ ] **Step 6: Run everything, then mutate**
+
+| Edit | Must go red |
+|---|---|
+| delete the wake observation | `a wake refreshes even when the occurrence is long past`, `repeated wakes claim the occurrence once` |
+| observe `NotificationCenter.default` instead of `workspaceCenter` | the same two — the only way to catch a notification that is never delivered |
+| `stop()` no longer clears `wakeObservation` | `stop disarms the wake observation` |
+| post unconditionally instead of on change | `a pass that changes nothing announces nothing` |
+| never post | `recording a rejection announces it` |
+| the model never observes | `an open pane hears a rejection recorded while it was showing`, `an open pane hears a recovery too` |
+| the model starts with `nil` instead of the stored value | `a stored rejection is there before any notification arrives` |
+
+Seven mutations, seven caught.
+
+- [ ] **Step 7: Commit**
+
+```bash
+git add StenoKit Steno StenoTests docs
+git commit   # subject: "fix: a wake catches up, and an open pane hears about a rejection"
+```
+
+Record both as decisions — **D-228** correcting D-224, **D-229** correcting D-227 — and correct the
+spec in place. Both findings were a comment asserting something untrue of the code beside it, which
+is this repository's most-shipped defect; the decision records say so rather than only describing
+the fix.

@@ -24,6 +24,7 @@ import Foundation
 public final class ScheduledRefreshSettingsModel {
     private let settings: AppSettings
     private let calendar: () -> Calendar
+    private var rejectionObservation: WriteObservation?
 
     /// §5.5's schedule, on or off.
     public var isEnabled: Bool {
@@ -43,28 +44,47 @@ public final class ScheduledRefreshSettingsModel {
     ///     own preferences (§9.4).
     ///   - calendar: injected for `pickerDate`'s conversion, so a test can pin a time
     ///     zone instead of inheriting the machine's.
+    ///   - center: injected so a test can post `.stenoScheduledRefreshDidChange` without
+    ///     touching the process-wide center.
     public init(
         settings: AppSettings = AppSettings(),
-        calendar: @escaping () -> Calendar = { .current }
+        calendar: @escaping () -> Calendar = { .current },
+        center: NotificationCenter = .default
     ) {
         self.settings = settings
         self.calendar = calendar
         self.isEnabled = settings.scheduledRefreshEnabled
         self.time = settings.scheduledRefreshTime
+        self.credentialRejection = settings.scheduledRefreshRejection
+
+        // Registered last: `self` may only be captured once every stored property has a
+        // value — `SettingsModel`'s posture, for its reason.
+        rejectionObservation = WriteObservation(
+            center.addObserver(
+                forName: .stenoScheduledRefreshDidChange, object: nil, queue: nil
+            ) { [weak self] _ in
+                MainActor.assumeIsolated { self?.reload() }
+            }, center: center)
     }
 
     /// What an unattended pass last learned about the credential (D-227), or `nil`.
     ///
-    /// **Re-read rather than mirrored**, which is the opposite of `isEnabled` and `time`
-    /// above, because this one is written by the controller rather than by this model: a
-    /// mirror taken at launch would still say "nothing" after an 08:00 pass was refused.
-    /// `reload()` is what the pane calls as it appears, which is the only moment the value
-    /// has to be right — the pane cannot be open at the instant a background pass runs and
-    /// then fail to redraw, because appearing is what triggers the read.
+    /// **Kept current by a notification, not by the pane appearing** (D-229). The first
+    /// version read the store in `onAppear` and its comment claimed "the pane cannot be open
+    /// at the instant a background pass runs and then fail to redraw" — which is false: a
+    /// user can leave Settings open across 08:00, and then a refused pass wrote
+    /// `UserDefaults` while this property, the one SwiftUI observes, never changed. The same
+    /// is true of recovery: the row would stay on screen after it stopped being true. Raised
+    /// by Copilot in review round 3 of PR #46.
     public private(set) var credentialRejection: CredentialRejection?
 
-    /// Re-read the rejection from the store. Called by the pane as it appears, beside the
-    /// `forgetEntry()` the credential half already does there.
+    /// Re-read the rejection from the store.
+    ///
+    /// Called by the observation below, and directly by tests. The pane does not need to
+    /// call it: a model built at launch reads the stored value in `init`, and every later
+    /// change arrives as `.stenoScheduledRefreshDidChange`. Having the pane re-read on
+    /// appearance *as well* would be a second mechanism for one fact, which is how the two
+    /// come to disagree.
     public func reload() {
         credentialRejection = settings.scheduledRefreshRejection
     }

@@ -197,11 +197,15 @@ The controller is injected with `refresh: @MainActor () async -> Void` rather th
 and because a spy closure is what makes "dispatched once, not twice" assertable without a
 container or a connector.
 
-No `NSWorkspace.didWakeNotification` observation. A sleep spanning the window is
-indistinguishable from the app having been closed, and both end in the same catch-up; whether the
-run loop fires a missed tick immediately on wake or at the next five-minute boundary changes the
-latency by minutes, not the outcome. An observation would be a second path to test for a
-difference the user cannot perceive.
+**A wake observation, added after review** (D-228). This section first argued there should be
+none: "a sleep spanning the window is indistinguishable from the app having been closed, and both
+end in the same catch-up". The second half is false. A *closed* app refreshes when it is next
+launched, because `start()` dispatches a pass unconditionally; an app left **running** across a
+long sleep refreshes nothing — timers do not fire while the machine sleeps, and the first resumed
+tick finds the occurrence past its grace window and returns. A Mac asleep from 02:00 until 13:00
+sat on yesterday's caches until the user pressed Prepare. So `NSWorkspace.didWakeNotification`
+runs the same catch-up pass launch runs: a wake at 09:30 claims the occurrence, a wake at 13:00
+warms the cache and claims nothing.
 
 ## D-225 — `TimeOfDay`, three settings keys, and a toggle whose absence means on
 
@@ -328,6 +332,11 @@ was wrong about that until review** (D-227, Copilot on PR #46):
 - A refusal is therefore recorded: `CredentialRejection` (the connector's name and the time) in
   `AppSettings.scheduledRefreshRejection`, displayed by the Scheduled refresh section and cleared
   by a later pass whose fetches succeeded. Nothing is presented; a value is written.
+- **And announced** (D-229). The first version of that recording read the store in `onAppear`,
+  with a comment claiming the pane could not be open when a pass ran and then fail to redraw —
+  false, since a user can leave Settings open across 08:00. The controller now posts
+  `.stenoScheduledRefreshDidChange` when the stored value changes, and the model observes it, so
+  an open pane shows both the rejection and the recovery.
 
 No modal, no permission prompt, no auth dialog, and no banner: there is no UI surface on this
 path to raise one from. `SourceRefreshService`'s two refresh methods do not throw at all (D-167),

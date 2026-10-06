@@ -6659,7 +6659,8 @@ latency by minutes, not the outcome, and an observation would be a second path t
 difference the user cannot perceive.
 
 **The toggle does not reach the launch pass**, which is a distinction worth stating because the code
-makes it in one line: `runLaunchPass()` dispatches before consulting enablement for anything but
+makes it in one line: `runCatchUpPass()` — `runLaunchPass()` until D-228 gave a wake the same
+pass — dispatches before consulting enablement for anything but
 the stamp. §5.5's launch rule is fixed; FR-6's setting is about the unattended pass at a time of
 day. `the launch pass still runs with the schedule switched off` is what holds it.
 
@@ -6786,3 +6787,82 @@ with the reason recorded at the declaration), and the section's `onAppear` lives
 
 **Falsified by** `CredentialRejectionTests` and the D-227 cases in `ScheduledRefreshControllerTests`
 — six mutations, including the two wrong clearing rules above.
+
+---
+
+### D-228 — A wake is a launch, for an app that never closed
+
+**2026-10-06** · M4-05 · **Status:** accepted · **corrects D-224**
+
+`ScheduledRefreshController` observes `NSWorkspace.didWakeNotification` and runs the same
+catch-up pass `start()` runs at launch.
+
+**D-224 rejected this observation, and its reason was wrong.** It argued that "a sleep spanning
+the window is indistinguishable from the app having been closed, and both end in the same
+catch-up". The first half is true; the second is false, and the asymmetry is the whole finding: a
+*closed* app refreshes when it is next launched, because `start()` dispatches a pass
+unconditionally. An app left **running** across a long sleep refreshes nothing at all — timers do
+not fire while the machine sleeps, and the first resumed tick finds the occurrence past its
+four-hour grace window and returns. A Mac asleep from 02:00 until 13:00 therefore sat on caches
+from the previous day until the user pressed "Prepare Stand-up". Raised by Copilot in review round
+3 of PR #46, against this task's own acceptance criterion that a miss be handled "by catch-up
+rather than a skipped day".
+
+**It is the catch-up pass, not a second scheduled trigger.** A wake at 09:30 claims the
+occurrence, because one is genuinely due. A wake at 13:00 warms the cache — the thing nothing else
+would do — and claims nothing, so D-222's grace window still decides what counts as serving the
+morning, and the day is not resurrected after it has gone. The method is named `runCatchUpPass()`
+rather than `runLaunchPass()` now that two triggers share it.
+
+**Repeated wakes are harmless, which is what makes dispatching on every one safe.**
+`refreshDue()` fetches only refs older than thirty minutes (D-169) and `SourceRefreshGate`
+serializes passes (D-183), so a burst of wake notifications costs one pass and no fetches. The
+stamp (D-223) independently stops the occurrence being claimed twice.
+
+**It observes `NSWorkspace.shared.notificationCenter`, not `NotificationCenter.default`**, because
+that is where AppKit posts workspace notifications; an observer on the default center is silently
+never called. That also made `WriteObservation` take the center it registered on — it had
+`NotificationCenter.default` hard-coded in its `deinit`, which would have removed the token from
+the wrong center and leaked the observation.
+
+**Falsified by** `a wake refreshes even when the occurrence is long past`, and by `W2` in the
+mutation sweep: moving the observation to the default center turns that test red, which is the
+only way to catch a notification that is never delivered.
+
+---
+
+### D-229 — An open Settings pane hears about a rejection
+
+**2026-10-06** · M4-05 · **Status:** accepted · **corrects D-227**
+
+`ScheduledRefreshController` posts `.stenoScheduledRefreshDidChange` when it records or clears a
+credential rejection, and `ScheduledRefreshSettingsModel` observes it.
+
+**D-227's first version read the store in `onAppear` and said so in a comment that was false.** It
+claimed "the pane cannot be open at the instant a background pass runs and then fail to redraw,
+because appearing is what triggers the read". A user can leave the Settings window open across
+08:00, and then the controller wrote `UserDefaults` while the `@Observable` property the view
+reads never changed — so the warning this task exists to surface was invisible on the one surface
+that was already on screen. The same holds in reverse: after the token is fixed, a row that stays
+up is a row that lies. Raised by Copilot in review round 3 of PR #46; the comment is exactly the
+class of defect this log records as the top recurring one on M1-03.
+
+**One mechanism, not two.** The `onAppear` reload was removed rather than kept alongside the
+observation: the model reads the stored value in `init` and hears every later change, so a second
+read on appearance would be a second path to the same fact — and two paths to one fact is how they
+come to disagree. Removing it also took the `Group` wrapper out of
+`ScheduledRefreshSection`, which existed only to carry that modifier.
+
+**The notification fires only when the stored value changed.** A pass that records the same
+nothing it found last time announces nothing; posting on every tick would redraw a pane for no
+reason and turn this into a notification readers learn to ignore — `WriteNotifications`'
+own argument against folding its names together.
+
+**A new name rather than `.stenoCredentialsDidChange`.** That one is posted by the credential
+*stores* and its reader drops a memoized secret (D-198). Nothing here writes a credential, and a
+reader of this wants to redraw a warning row; posting it would have made that file's doc comment
+false and invalidated the memo on every refused pass.
+
+**Falsified by** `an open pane hears a rejection recorded while it was showing`, `an open pane
+hears a recovery too`, and `a pass that changes nothing announces nothing` — the last of which is
+what stops the fix becoming a notification storm.
