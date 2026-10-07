@@ -135,8 +135,19 @@ public final class ScheduledRefreshController {
 
         let timer = Timer.scheduledTimer(
             withTimeInterval: interval, repeats: true
-        ) { [weak self] _ in
-            MainActor.assumeIsolated { _ = self?.tick() }
+        ) { [weak self] timer in
+            // **The timer invalidates itself once its owner is gone** (D-232). A scheduled
+            // `Timer` is retained by the run loop while this closure holds `self` weakly, so a
+            // controller dropped without `stop()` left the timer firing every interval forever
+            // to find `nil` — and "fires forever to do nothing" is spin, which M4-05's fourth
+            // acceptance criterion forbids. The `deinit` below used to describe that as
+            // harmless, which is how a defect becomes a documented decision. Raised by Copilot
+            // in review round 5 of PR #46.
+            guard let self else {
+                timer.invalidate()
+                return
+            }
+            MainActor.assumeIsolated { _ = self.tick() }
         }
         timer.tolerance = Self.tickTolerance
         // `.common`, so the tick still fires while a menu is tracking or a window is
@@ -319,9 +330,13 @@ public final class ScheduledRefreshController {
     }
 
     deinit {
-        // `timer` is `@MainActor` state and `deinit` is not, so the invalidation
-        // cannot happen here — the Swift 6 constraint `AutoExportController` records.
-        // The timer's block captures `self` weakly, so an armed timer does not retain
-        // this object; it ticks a `nil` and does nothing until `stop()`.
+        // `timer` is `@MainActor` state and `deinit` is not, so the invalidation cannot happen
+        // here — the Swift 6 constraint `AutoExportController` records.
+        //
+        // **What makes that acceptable is the guard in the tick block, not this comment.**
+        // This used to say an abandoned timer "ticks a `nil` and does nothing until `stop()`",
+        // which described an unbounded series of wakeups as though naming it settled it. The
+        // block now invalidates the timer on the first fire after this object is gone, so an
+        // abandoned controller costs one tick rather than one per interval forever (D-232).
     }
 }

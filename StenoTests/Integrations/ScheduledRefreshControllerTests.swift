@@ -244,3 +244,31 @@ func aDispatchedPassReachesTheRefreshClosure() async throws {
 
     #expect(await waitFor { passes.total == 1 }, "the pass never reached the service")
 }
+
+/// **An abandoned controller must not leave a timer firing forever** (D-232). The run loop
+/// retains a scheduled `Timer` while the tick block holds its owner weakly, so a controller
+/// dropped without `stop()` used to wake every interval to find `nil` — unbounded, and "fires
+/// forever to do nothing" is the spin M4-05's fourth acceptance criterion forbids. The `deinit`
+/// comment described that as harmless, which is how a defect becomes a documented decision.
+///
+/// The `Timer` is held here, not the controller: that is the only way to watch what happens to
+/// it after its owner is gone.
+@Test("a dropped controller's timer invalidates itself on the next tick")
+@MainActor
+func anAbandonedTimerInvalidatesItself() async throws {
+    let settings = try scratchSettings()
+    settings.scheduledRefreshEnabled = false
+    let calendar = try pacific()
+    let moment = try instant("2026-10-06 06:00:00", in: calendar)
+    var subject: ScheduledRefreshController? = ScheduledRefreshController(
+        settings: settings, now: { moment }, calendar: { calendar }, refresh: { .idle })
+    subject?.start(interval: 0.05)
+    let timer = try #require(subject?.armedTimer)
+    #expect(timer.isValid)
+
+    subject = nil
+
+    #expect(
+        await waitFor { !timer.isValid },
+        "the timer outlived its controller and is still firing")
+}

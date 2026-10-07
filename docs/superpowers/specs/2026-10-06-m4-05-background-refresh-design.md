@@ -309,14 +309,18 @@ when integrations fetch, not how capture behaves.
 - **"Refresh integrations in the background"** — the toggle.
 - **"At [ 08:00 ]"** — `DatePicker(displayedComponents: .hourAndMinute)`, disabled when the
   toggle is off.
-- One explanatory line, in the register the rest of the pane uses: *"Fetches ticket and page
-  updates at this time so your stand-up is ready without waiting. Skipped if your Mac is asleep;
-  Steno catches up when it next wakes, within a few hours of the time you set."*
+- One explanatory line, in the register the rest of the pane uses. **Now on its third version**
+  (D-233): it began as *"Skipped if your Mac is asleep; Steno catches up when it next wakes,
+  within a few hours of the time you set"*, which D-228 and D-230 made wrong twice over — a
+  *closed* Steno cannot notice a wake, and a wake refreshes whether or not the occurrence is still
+  inside its window. It now reads: *"Fetches ticket and page updates at this time, so your
+  stand-up is ready without waiting. Steno has to be running: while it is, waking your Mac
+  refreshes too. If Steno is closed at that time, it refreshes the next time you open it."*
 
-That sentence is the user-facing statement of D-222, so if D-222's grace changes the sentence is
-part of the change. It names the limitation rather than implying a guarantee the mechanism cannot
-make — the app has to be running, and a Mac asleep until the afternoon simply refreshes on the
-next launch.
+The sentence states the one property of an in-process scheduler a user can act on — it needs its
+process — and deliberately says nothing about the grace window, which is bookkeeping they cannot
+see. Three of this task's review findings were sentences left behind by a change, so the comment
+above this one in the source names what each clause depends on.
 
 Both controls get explicit accessibility labels. Nothing in an automated check reaches VoiceOver,
 so the manual pass below is the only verification they have.

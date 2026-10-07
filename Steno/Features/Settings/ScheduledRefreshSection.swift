@@ -46,15 +46,23 @@ struct ScheduledRefreshSection: View {
             .font(.callout)
         }
 
-        // **Names the limitation rather than implying a guarantee.** The schedule
-        // needs the app to be running, and a Mac asleep until the afternoon simply
-        // refreshes on the next launch — "within a few hours" is
-        // `ScheduledRefreshDue.grace`, so if that changes this sentence is part of the
-        // change.
+        // **Names the limitation rather than implying a guarantee**, and this is the third
+        // version of that sentence — the first two described behaviour the code had moved
+        // past (Copilot, review round 5). It said "Steno catches up when it next wakes,
+        // within a few hours of the time you set", which was wrong twice over: a *closed*
+        // Steno cannot catch up on a wake, because there is no process to notice one; and
+        // since D-228 a wake refreshes whether or not the occurrence is still inside its
+        // four-hour window, so "within a few hours" limited something that is not limited.
+        //
+        // What it must convey is the one property of an in-process scheduler the user can
+        // act on: Steno has to be running. The grace window is deliberately *not* mentioned
+        // — it decides whether a pass counts as serving the morning, which is bookkeeping,
+        // not something the user can see or do anything about.
         Text(
             "Fetches ticket and page updates at this time, so your stand-up is ready "
-                + "without waiting. Skipped while your Mac is asleep; Steno catches up when "
-                + "it next wakes, within a few hours of the time you set."
+                + "without waiting. Steno has to be running: while it is, waking your Mac "
+                + "refreshes too. If Steno is closed at that time, it refreshes the next "
+                + "time you open it."
         )
         .font(.callout)
         .foregroundStyle(.secondary)

@@ -1280,6 +1280,34 @@ func aDispatchedPassReachesTheRefreshClosure() async throws {
 
     #expect(await waitFor { passes.total == 1 }, "the pass never reached the service")
 }
+
+/// **An abandoned controller must not leave a timer firing forever** (D-232). The run loop
+/// retains a scheduled `Timer` while the tick block holds its owner weakly, so a controller
+/// dropped without `stop()` used to wake every interval to find `nil` — unbounded, and "fires
+/// forever to do nothing" is the spin M4-05's fourth acceptance criterion forbids. The `deinit`
+/// comment described that as harmless, which is how a defect becomes a documented decision.
+///
+/// The `Timer` is held here, not the controller: that is the only way to watch what happens to
+/// it after its owner is gone.
+@Test("a dropped controller's timer invalidates itself on the next tick")
+@MainActor
+func anAbandonedTimerInvalidatesItself() async throws {
+    let settings = try scratchSettings()
+    settings.scheduledRefreshEnabled = false
+    let calendar = try pacific()
+    let moment = try instant("2026-10-06 06:00:00", in: calendar)
+    var subject: ScheduledRefreshController? = ScheduledRefreshController(
+        settings: settings, now: { moment }, calendar: { calendar }, refresh: { .idle })
+    subject?.start(interval: 0.05)
+    let timer = try #require(subject?.armedTimer)
+    #expect(timer.isValid)
+
+    subject = nil
+
+    #expect(
+        await waitFor { !timer.isValid },
+        "the timer outlived its controller and is still firing")
+}
 ```
 
 Three things about the shape of these tests:
@@ -1440,8 +1468,19 @@ public final class ScheduledRefreshController {
 
         let timer = Timer.scheduledTimer(
             withTimeInterval: interval, repeats: true
-        ) { [weak self] _ in
-            MainActor.assumeIsolated { _ = self?.tick() }
+        ) { [weak self] timer in
+            // **The timer invalidates itself once its owner is gone** (D-232). A scheduled
+            // `Timer` is retained by the run loop while this closure holds `self` weakly, so a
+            // controller dropped without `stop()` left the timer firing every interval forever
+            // to find `nil` — and "fires forever to do nothing" is spin, which M4-05's fourth
+            // acceptance criterion forbids. The `deinit` below used to describe that as
+            // harmless, which is how a defect becomes a documented decision. Raised by Copilot
+            // in review round 5 of PR #46.
+            guard let self else {
+                timer.invalidate()
+                return
+            }
+            MainActor.assumeIsolated { _ = self.tick() }
         }
         timer.tolerance = Self.tickTolerance
         // `.common`, so the tick still fires while a menu is tracking or a window is
@@ -1492,7 +1531,7 @@ public final class ScheduledRefreshController {
         // is exactly that — while a launch is the user opening the app, where §5.5's
         // thirty-minute rule applies regardless of this setting. D-228 dispatched on every
         // wake without consulting it, which made the switch fail to switch the thing off.
-        if !settings.scheduledRefreshEnabled {
+        if trigger == .wake, !settings.scheduledRefreshEnabled {
             Log.sources.debug("scheduled refresh: wake catch-up skipped, the schedule is off")
             return false
         }
@@ -1624,10 +1663,14 @@ public final class ScheduledRefreshController {
     }
 
     deinit {
-        // `timer` is `@MainActor` state and `deinit` is not, so the invalidation
-        // cannot happen here — the Swift 6 constraint `AutoExportController` records.
-        // The timer's block captures `self` weakly, so an armed timer does not retain
-        // this object; it ticks a `nil` and does nothing until `stop()`.
+        // `timer` is `@MainActor` state and `deinit` is not, so the invalidation cannot happen
+        // here — the Swift 6 constraint `AutoExportController` records.
+        //
+        // **What makes that acceptable is the guard in the tick block, not this comment.**
+        // This used to say an abandoned timer "ticks a `nil` and does nothing until `stop()`",
+        // which described an unbounded series of wakeups as though naming it settled it. The
+        // block now invalidates the timer on the first fire after this object is gone, so an
+        // abandoned controller costs one tick rather than one per interval forever (D-232).
     }
 }
 ```
@@ -2059,15 +2102,23 @@ struct ScheduledRefreshSection: View {
             .font(.callout)
         }
 
-        // **Names the limitation rather than implying a guarantee.** The schedule
-        // needs the app to be running, and a Mac asleep until the afternoon simply
-        // refreshes on the next launch — "within a few hours" is
-        // `ScheduledRefreshDue.grace`, so if that changes this sentence is part of the
-        // change.
+        // **Names the limitation rather than implying a guarantee**, and this is the third
+        // version of that sentence — the first two described behaviour the code had moved
+        // past (Copilot, review round 5). It said "Steno catches up when it next wakes,
+        // within a few hours of the time you set", which was wrong twice over: a *closed*
+        // Steno cannot catch up on a wake, because there is no process to notice one; and
+        // since D-228 a wake refreshes whether or not the occurrence is still inside its
+        // four-hour window, so "within a few hours" limited something that is not limited.
+        //
+        // What it must convey is the one property of an in-process scheduler the user can
+        // act on: Steno has to be running. The grace window is deliberately *not* mentioned
+        // — it decides whether a pass counts as serving the morning, which is bookkeeping,
+        // not something the user can see or do anything about.
         Text(
             "Fetches ticket and page updates at this time, so your stand-up is ready "
-                + "without waiting. Skipped while your Mac is asleep; Steno catches up when "
-                + "it next wakes, within a few hours of the time you set."
+                + "without waiting. Steno has to be running: while it is, waking your Mac "
+                + "refreshes too. If Steno is closed at that time, it refreshes the next "
+                + "time you open it."
         )
         .font(.callout)
         .foregroundStyle(.secondary)
@@ -3000,8 +3051,19 @@ injected so a test never touches a process-wide center:
 
         let timer = Timer.scheduledTimer(
             withTimeInterval: interval, repeats: true
-        ) { [weak self] _ in
-            MainActor.assumeIsolated { _ = self?.tick() }
+        ) { [weak self] timer in
+            // **The timer invalidates itself once its owner is gone** (D-232). A scheduled
+            // `Timer` is retained by the run loop while this closure holds `self` weakly, so a
+            // controller dropped without `stop()` left the timer firing every interval forever
+            // to find `nil` — and "fires forever to do nothing" is spin, which M4-05's fourth
+            // acceptance criterion forbids. The `deinit` below used to describe that as
+            // harmless, which is how a defect becomes a documented decision. Raised by Copilot
+            // in review round 5 of PR #46.
+            guard let self else {
+                timer.invalidate()
+                return
+            }
+            MainActor.assumeIsolated { _ = self.tick() }
         }
         timer.tolerance = Self.tickTolerance
         // `.common`, so the tick still fires while a menu is tracking or a window is
@@ -3386,3 +3448,138 @@ git commit   # subject: "fix: coalesce outstanding passes, and let the switch st
 
 Record as **D-230** and **D-231**, and correct D-223's and D-228's claims in place — both were
 sentences that stayed true-looking after the change that invalidated them.
+
+---
+
+## Task 10: What round 5 added — a timer that cleans up after itself, and the sentence's third version
+
+**Added after the fifth review round.** Both findings were comments: one that documented a defect
+as though naming it settled it, and one that described behaviour two rounds out of date.
+
+**Files:**
+- Modify: `StenoKit/Integrations/ScheduledRefreshController.swift` — the tick block invalidates its own `Timer` when its owner is gone; the `deinit` comment is corrected
+- Modify: `Steno/Features/Settings/ScheduledRefreshSection.swift` — the explanatory sentence
+- Modify: `StenoTests/Integrations/ScheduledRefreshControllerTests.swift` — the abandoned-timer test
+
+### Finding 1: an abandoned timer fires forever
+
+The run loop retains a scheduled `Timer`; the tick block holds `self` weakly. A controller dropped
+without `stop()` therefore left the timer waking every interval to find `nil` — and the `deinit`
+said so: *"it ticks a `nil` and does nothing until `stop()`"*. "Fires forever to do nothing" is the
+spin this task's fourth acceptance criterion forbids.
+
+- [ ] **Step 1: Write the failing test**
+
+```swift
+/// **An abandoned controller must not leave a timer firing forever** (D-232). The run loop
+/// retains a scheduled `Timer` while the tick block holds its owner weakly, so a controller
+/// dropped without `stop()` used to wake every interval to find `nil` — unbounded, and "fires
+/// forever to do nothing" is the spin M4-05's fourth acceptance criterion forbids. The `deinit`
+/// comment described that as harmless, which is how a defect becomes a documented decision.
+///
+/// The `Timer` is held here, not the controller: that is the only way to watch what happens to
+/// it after its owner is gone.
+@Test("a dropped controller's timer invalidates itself on the next tick")
+@MainActor
+func anAbandonedTimerInvalidatesItself() async throws {
+    let settings = try scratchSettings()
+    settings.scheduledRefreshEnabled = false
+    let calendar = try pacific()
+    let moment = try instant("2026-10-06 06:00:00", in: calendar)
+    var subject: ScheduledRefreshController? = ScheduledRefreshController(
+        settings: settings, now: { moment }, calendar: { calendar }, refresh: { .idle })
+    subject?.start(interval: 0.05)
+    let timer = try #require(subject?.armedTimer)
+    #expect(timer.isValid)
+
+    subject = nil
+
+    #expect(
+        await waitFor { !timer.isValid },
+        "the timer outlived its controller and is still firing")
+}
+```
+
+**It holds the `Timer`, not the controller.** That is the only vantage point from which the
+abandoned case is observable at all — drop the controller and nothing else can see what became of
+its timer.
+
+- [ ] **Step 2: Invalidate from inside the block**
+
+```swift
+        ) { [weak self] timer in
+            guard let self else {
+                timer.invalidate()
+                return
+            }
+            MainActor.assumeIsolated { _ = self.tick() }
+        }
+```
+
+The cost of an abandoned controller becomes one tick rather than one per interval forever. Correct
+the `deinit` comment in the same change: it is what made this look settled.
+
+**This never happens in the running app**, where `StenoApp` holds the controller for the life of
+the process — which is why it survived five rounds, and why it is still worth fixing: the only code
+that abandons a controller is the test suite, and a bundle accumulating live timers is how a suite
+starts behaving differently depending on what ran before it.
+
+**`AutoExportController` has the same hole. Do not fix it here** — it is §10.5's file and this task
+is §5.5's. Raise it for a follow-up that owns that file.
+
+### Finding 2: the sentence was two rounds out of date
+
+- [ ] **Step 3: Rewrite it**
+
+```swift
+        // **Names the limitation rather than implying a guarantee**, and this is the third
+        // version of that sentence — the first two described behaviour the code had moved
+        // past (Copilot, review round 5). It said "Steno catches up when it next wakes,
+        // within a few hours of the time you set", which was wrong twice over: a *closed*
+        // Steno cannot catch up on a wake, because there is no process to notice one; and
+        // since D-228 a wake refreshes whether or not the occurrence is still inside its
+        // four-hour window, so "within a few hours" limited something that is not limited.
+        //
+        // What it must convey is the one property of an in-process scheduler the user can
+        // act on: Steno has to be running. The grace window is deliberately *not* mentioned
+        // — it decides whether a pass counts as serving the morning, which is bookkeeping,
+        // not something the user can see or do anything about.
+        Text(
+            "Fetches ticket and page updates at this time, so your stand-up is ready "
+                + "without waiting. Steno has to be running: while it is, waking your Mac "
+                + "refreshes too. If Steno is closed at that time, it refreshes the next "
+                + "time you open it."
+        )
+        .font(.callout)
+        .foregroundStyle(.secondary)
+    }
+}
+```
+
+It had said *"Skipped while your Mac is asleep; Steno catches up when it next wakes, within a few
+hours of the time you set"*, which was wrong twice over after Tasks 8 and 9: a **closed** Steno
+cannot catch up on a wake, because there is no process to notice one, and a wake now refreshes
+whether or not the occurrence is still inside its four-hour window.
+
+The new sentence says the one thing a user can act on — an in-process scheduler needs its process —
+and says nothing about the grace window, which is bookkeeping they cannot see. A sentence that
+explains the stamp will be wrong again the next time the stamp changes.
+
+- [ ] **Step 4: Run everything, then mutate**
+
+| Edit | Must go red |
+|---|---|
+| leave the abandoned timer armed (`self?.tick()` with no guard) | `a dropped controller's timer invalidates itself on the next tick` |
+| invalidate even while the owner is alive | the same test |
+
+Nothing automated holds the sentence: the app target has no tests (D-010), so it is checked by
+reading it against `runCatchUpPass` and by the manual pass.
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add StenoKit Steno StenoTests docs
+git commit   # subject: "fix: an abandoned timer invalidates itself, and the pane's sentence catches up"
+```
+
+Record as **D-232** and **D-233**.

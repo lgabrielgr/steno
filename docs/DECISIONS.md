@@ -6926,3 +6926,70 @@ pass.
 **Falsified by** `a wake does nothing while the schedule is switched off`, and by the mutation
 that makes the *launch* pass obey the toggle too, which turns `the launch pass still runs with the
 schedule switched off` red.
+
+---
+
+### D-232 — An abandoned timer invalidates itself
+
+**2026-10-07** · M4-05 · **Status:** accepted · **extends D-121**
+
+The tick block takes the `Timer` it was called with and invalidates it when its owner has been
+deallocated.
+
+**A comment described this as harmless, and that is how a defect becomes a decision.** A scheduled
+`Timer` is retained by the run loop while the block holds `self` weakly, so a controller dropped
+without `stop()` left the timer firing every interval forever to find `nil`. The `deinit` said so
+in as many words — "it ticks a `nil` and does nothing until `stop()`" — which names an unbounded
+series of wakeups as though naming it settled it. "Fires forever to do nothing" is spin, and
+M4-05's fourth acceptance criterion is that this feature does not spin the machine. Raised by
+Copilot in review round 5 of PR #46.
+
+**It costs one tick instead of one per interval.** The first fire after the owner is gone
+invalidates the timer and returns, so the run loop drops it.
+
+**This never happens in the running app**, where `StenoApp` holds the controller for the life of
+the process — which is exactly why it survived review until now, and why the fix is worth having:
+the only code that abandons a controller is the test suite, and a test bundle accumulating live
+timers is how a suite starts to behave differently depending on what ran before it.
+
+**`AutoExportController` has the same hole and is deliberately not fixed here.** It is §10.5's
+file, this task is §5.5's, and widening the diff into another milestone to fix a sibling is how a
+reviewable PR stops being one. It is called out in PR #46's thread instead, for a follow-up that
+owns that file.
+
+**Falsified by** `a dropped controller's timer invalidates itself on the next tick`, which holds
+the `Timer` rather than the controller — the only vantage point from which the abandoned case is
+observable — and by the mutation that invalidates while the owner is still alive, which that same
+test catches.
+
+---
+
+### D-233 — The pane's sentence, third version
+
+**2026-10-07** · M4-05 · **Status:** accepted · **corrects D-222's user-facing wording**
+
+The Scheduled refresh section says: *"Fetches ticket and page updates at this time, so your
+stand-up is ready without waiting. Steno has to be running: while it is, waking your Mac refreshes
+too. If Steno is closed at that time, it refreshes the next time you open it."*
+
+**The first two versions described behaviour the code had moved past.** The sentence began as
+"Skipped while your Mac is asleep; Steno catches up when it next wakes, within a few hours of the
+time you set", and was wrong twice over by the time D-228 and D-230 landed:
+
+- A **closed** Steno cannot catch up on a wake, because there is no process to notice one. The
+  sentence implied the Mac waking was enough, which is the one thing a user might plan around.
+- "Within a few hours" limited something that is not limited: since D-228 a wake refreshes whether
+  or not the occurrence is still inside its four-hour window. The window decides whether a pass
+  counts as *serving the morning*, not whether a refresh happens.
+
+Raised by Copilot in review round 5 of PR #46 — the third finding in this task that was a sentence
+left behind by a change, after the `expiryWarning` claim (D-227) and the burst rationale (D-230).
+
+**The grace window is deliberately not mentioned.** It is bookkeeping the user cannot see and
+cannot act on; what they can act on is that an in-process scheduler needs its process. A sentence
+that explains the stamp is a sentence that will be wrong again the next time the stamp changes.
+
+**Nothing automated holds this**, which is the honest statement of its risk: the app target has no
+tests (D-010), so this copy is checked by reading it against `runCatchUpPass` and by the manual
+pass. The comment above it in `ScheduledRefreshSection` names what each clause depends on, so the
+next change to either has somewhere to look.
