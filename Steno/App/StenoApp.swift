@@ -74,6 +74,20 @@ struct StenoApp: App {
     /// would take both with it, and the backup would quietly stop happening.
     private let autoExport: AutoExportController?
 
+    /// §5.5's scheduled refresh (M4-05). Held for the whole process for
+    /// `autoExport`'s reason: it owns a timer, and a controller that went out of
+    /// scope would take the schedule with it.
+    ///
+    /// `nil` when the store failed to open — there is nowhere to cache a fetch, so
+    /// there is nothing to schedule. The pane's controls still work and still
+    /// persist, which is §13's rule that degradation ships with the feature.
+    private let scheduledRefresh: ScheduledRefreshController?
+
+    /// FR-6's control over that schedule. Outside the `store` switch, like the
+    /// Integrations model it sits beside: the setting lives in `UserDefaults` and is
+    /// editable in a build whose store will not open.
+    private let scheduleSettingsModel: ScheduledRefreshSettingsModel
+
     /// Exists to keep the app alive when the last window closes, which is what
     /// makes "the icon is present without the main window open" true.
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
@@ -98,6 +112,7 @@ struct StenoApp: App {
             credentials: KeychainCredentialStore())
 
         sourceRegistry = Self.makeSourceRegistry(settings: appSettings)
+        scheduleSettingsModel = ScheduledRefreshSettingsModel(settings: appSettings)
 
         let path = (try? StenoStore.defaultURL.path) ?? "<could not resolve Application Support>"
         storePath = path
@@ -149,8 +164,10 @@ struct StenoApp: App {
                 registry: sourceRegistry, settings: appSettings,
                 purge: SourceCachePurge(context: container.mainContext))
 
-            Self.startLaunchRefresh(container: container, registry: sourceRegistry)
+            scheduledRefresh = Self.startScheduledRefresh(
+                container: container, registry: sourceRegistry, settings: appSettings)
         } else {
+            scheduledRefresh = nil
             quickCapture = nil
             menuBar = nil
             // No store means nothing to export. The pane still opens and says
@@ -225,12 +242,17 @@ struct StenoApp: App {
         }
     }
 
-    /// §5.5's launch pass: refs on non-done tasks not fetched in the last 30
-    /// minutes.
+    /// §5.5's launch pass and §5.5's scheduled pass, as one controller (M4-05).
     ///
-    /// Fire-and-forget, silent, logs only (D-176) — it warms the cache so the
-    /// morning view is instant, and a visible indicator would invite the user to
+    /// Both are fire-and-forget, silent, logs only (D-176) — they warm the cache so
+    /// the morning view is instant, and a visible indicator would invite the user to
     /// wait for something designed not to be waited on.
+    ///
+    /// **One pass at launch, not two** (D-224). `start()` dispatches the launch pass
+    /// unconditionally; the schedule decides only whether that pass also serves
+    /// today's occurrence. The alternative — an unconditional launch pass plus a
+    /// due-check pass — dispatches twice, where the second finds nothing stale and
+    /// fetches nothing.
     ///
     /// **Here rather than in `MainWindowModel.init`** (D-179). The CLI bundle
     /// builds a store too, and `steno export` must not open network connections.
@@ -238,18 +260,20 @@ struct StenoApp: App {
     /// model reads that context, so a pass writing into a sibling would depend on
     /// cross-context visibility.
     ///
-    /// M4-05 replaces this single call with its scheduled equivalent.
-    ///
     /// `static`, so `init` can call it before `self` exists — and its own function
-    /// rather than six lines inline, because `init` is at SwiftLint's
+    /// rather than nine lines inline, because `init` is at SwiftLint's
     /// `function_body_length` limit.
-    private static func startLaunchRefresh(
-        container: ModelContainer, registry: SourceRegistry
-    ) {
+    private static func startScheduledRefresh(
+        container: ModelContainer, registry: SourceRegistry, settings: AppSettings
+    ) -> ScheduledRefreshController {
         let context = container.mainContext
-        Task { @MainActor in
-            _ = await SourceRefreshService(context: context, registry: registry).refreshDue()
+        // The outcome is returned rather than discarded, so the controller can record a
+        // credential a connector refused (D-227). Nothing else about it is read here.
+        let controller = ScheduledRefreshController(settings: settings) {
+            await SourceRefreshService(context: context, registry: registry).refreshDue()
         }
+        controller.start()
+        return controller
     }
 
     var body: some Scene {
@@ -286,7 +310,8 @@ struct StenoApp: App {
         Settings {
             SettingsView(
                 model: settingsModel, dataModel: dataSettingsModel, aiModel: aiSettingsModel,
-                integrationsModel: integrationsSettingsModel)
+                integrationsModel: integrationsSettingsModel,
+                scheduleModel: scheduleSettingsModel)
         }
     }
 }

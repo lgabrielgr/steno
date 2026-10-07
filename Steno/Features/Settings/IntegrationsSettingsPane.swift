@@ -12,6 +12,10 @@ import SwiftUI
 struct IntegrationsSettingsPane: View {
     @Bindable var model: IntegrationsSettingsModel
 
+    /// §5.5's schedule, as its own model — see `ScheduledRefreshSettingsModel` for why
+    /// it is not two more properties on `model`.
+    @Bindable var scheduleModel: ScheduledRefreshSettingsModel
+
     var body: some View {
         Form {
             Section("Atlassian account") {
@@ -85,6 +89,13 @@ struct IntegrationsSettingsPane: View {
                 ForEach(model.rows) { row in
                     integrationRow(row)
                 }
+            }
+
+            // §5.5's scheduled pass. Here rather than in the Capture pane — FR-6
+            // permits either — because what it governs is when integrations fetch,
+            // not how capture behaves.
+            Section("Scheduled refresh") {
+                ScheduledRefreshSection(model: scheduleModel)
             }
 
             Section("Cached data") {

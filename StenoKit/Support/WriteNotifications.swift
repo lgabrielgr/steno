@@ -60,6 +60,24 @@ extension Notification.Name {
     /// a reader of this wants to forget a cached secret, not refetch a task list.
     public static let stenoCredentialsDidChange = Notification.Name(
         "com.lgabrielgr.steno.credentialsDidChange")
+
+    /// Posted after an unattended refresh records or clears a credential rejection
+    /// (D-227) — by `ScheduledRefreshController` and nowhere else.
+    ///
+    /// **Because the Settings window can be open while the pass runs.** D-227's first
+    /// version read the stored rejection in `onAppear`, and this file's own history says
+    /// why that is not enough: a surface that only reads on appearance shows nothing while
+    /// it is already on screen. The doc comment there claimed "the pane cannot be open at
+    /// the instant a background pass runs and then fail to redraw", which is simply false —
+    /// a user can leave Settings open across 08:00. Raised by Copilot in review round 3 of
+    /// PR #46, and the same class of defect as the M1-08 gap recorded above.
+    ///
+    /// **Separate from `.stenoCredentialsDidChange`, which the credential *stores* post.**
+    /// Nothing here writes a credential, and this notification's reader wants to redraw a
+    /// warning row, not drop a memoized secret — folding them together would make every
+    /// refused pass invalidate the credential memo and make that file's doc comment false.
+    public static let stenoScheduledRefreshDidChange = Notification.Name(
+        "com.lgabrielgr.steno.scheduledRefreshDidChange")
 }
 
 /// Holds a `NotificationCenter` token and removes it when its owner is
@@ -75,11 +93,20 @@ extension Notification.Name {
 final class WriteObservation {
     private let token: any NSObjectProtocol
 
-    init(_ token: any NSObjectProtocol) {
+    /// The center the token came from, so it is removed from the one it was added to.
+    ///
+    /// **Defaulted, because every caller but one uses `.default`.** The exception is
+    /// `ScheduledRefreshController`, which observes sleep and wake — those are posted on
+    /// `NSWorkspace.shared.notificationCenter`, not on the default center, and removing a
+    /// token from the wrong center is a silent leak rather than an error.
+    private let center: NotificationCenter
+
+    init(_ token: any NSObjectProtocol, center: NotificationCenter = .default) {
         self.token = token
+        self.center = center
     }
 
     deinit {
-        NotificationCenter.default.removeObserver(token)
+        center.removeObserver(token)
     }
 }

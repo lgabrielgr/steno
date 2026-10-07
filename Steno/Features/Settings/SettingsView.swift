@@ -14,6 +14,10 @@ struct SettingsView: View {
     let dataModel: DataSettingsModel
     let aiModel: AISettingsModel
     let integrationsModel: IntegrationsSettingsModel
+
+    /// §5.5's schedule. A second model for the Integrations tab rather than two more
+    /// properties on `integrationsModel` — see `ScheduledRefreshSettingsModel`.
+    let scheduleModel: ScheduledRefreshSettingsModel
     @State private var selection: SettingsPane = .capture
 
     var body: some View {
@@ -39,7 +43,7 @@ struct SettingsView: View {
         case .aiProvider:
             AISettingsPane(model: aiModel)
         case .integrations:
-            IntegrationsSettingsPane(model: integrationsModel)
+            IntegrationsSettingsPane(model: integrationsModel, scheduleModel: scheduleModel)
         }
     }
 }

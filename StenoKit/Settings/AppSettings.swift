@@ -57,9 +57,17 @@ public struct AppSettings: @unchecked Sendable {
         autoExportOnboardedKey,
         aiSelectedModelIDKey,
         integrationsDisabledKey,
+        scheduledRefreshEnabledKey,
+        scheduledRefreshTimeKey,
+        scheduledRefreshLastRunKey,
+        scheduledRefreshRejectionKey,
     ]
 
-    private let defaults: UserDefaults
+    // `internal`, not `private`: `private` is file-scoped, and
+    // `AppSettings+ScheduledRefresh.swift` is the other half of this type — the same reason
+    // `IntegrationsSettingsModel.testStates` is internal. Nothing outside the module can
+    // reach it either way; every `public` member is an accessor.
+    let defaults: UserDefaults
 
     /// - Parameter defaults: injected so tests use a scratch suite rather than
     ///   the developer's own preferences (§9.4).
@@ -252,7 +260,7 @@ public struct AppSettings: @unchecked Sendable {
     /// opt-*out* into an opt-in on every fresh install — silently, and in the
     /// one direction nobody would notice, because a backup that never runs
     /// looks exactly like a backup that has nothing to do.
-    private func flag(_ key: String) -> Bool {
+    func flag(_ key: String) -> Bool {
         defaults.object(forKey: key) as? Bool ?? true
     }
 
