@@ -78,6 +78,38 @@ import Testing
         await host.shutdownAll()
     }
 
+    @Test("a server asked for after shutdownAll is already closed")
+    func serverAfterShutdown() async throws {
+        let ledger = MCPStub.ledger()
+        let host = MCPHost(ledger: ledger, configuration: MCPStub.fast)
+        await host.shutdownAll()
+
+        // A refresh pass still running at quit, asking for the first time.
+        let server = await host.server(for: try MCPStub.definition())
+        #expect(await thrown { try await server.ping() } as? MCPError == .stopped)
+        #expect(ledger.entries.isEmpty)
+    }
+
+    @Test("two callers replacing the same server at once get one server")
+    func concurrentReplacement() async throws {
+        let ledger = MCPStub.ledger()
+        let host = MCPHost(ledger: ledger, configuration: MCPStub.fast)
+        // Ignores EOF, so closing it takes a grace: both callers suspend there.
+        let old = await host.server(for: try MCPStub.definition("ignore-eof"))
+        try await bounded { try await old.ping() }
+
+        let changed = try MCPStub.definition()
+        async let first = host.server(for: changed)
+        async let second = host.server(for: changed)
+        let (one, two) = await (first, second)
+        // Two would mean one of them is in nothing `shutdownAll` stops.
+        #expect(one === two)
+
+        try await bounded { try await one.ping() }
+        try await bounded { await host.shutdownAll() }
+        #expect(ledger.entries.isEmpty)
+    }
+
     @Test("the launch reap finishes before any server is handed out")
     func reapsBeforeServing() async throws {
         let previous = MCPStub.ledger(owner: MCPStub.deadOwner)

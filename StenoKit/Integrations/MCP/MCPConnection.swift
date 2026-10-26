@@ -102,9 +102,14 @@ actor MCPConnection {
                     await self?.resolve(id, with: .failure(MCPError.timedOut))
                 }
                 pending[id] = Pending(continuation: continuation, timer: timer)
+                // A refused write closes the connection, not just this request:
+                // a server whose stdin is gone can never be asked anything
+                // again, and it may still be running — so the exit watcher
+                // would never notice, and the server would sit `.ready`,
+                // failing every request without counting a single failure.
                 process.write(line) { [weak self] accepted in
                     guard !accepted else { return }
-                    Task { await self?.resolve(id, with: .failure(MCPError.crashed)) }
+                    Task { await self?.close(.crashed) }
                 }
             }
         } onCancel: {
@@ -130,15 +135,19 @@ actor MCPConnection {
 
     private func consume() async {
         var framer = JSONRPCFramer(limit: maximumMessageLength)
-        for await chunk in process.standardOutput {
+        var discarding = false
+        // After an oversized message, keep reading and throw it away rather
+        // than returning: the reader thread buffers whatever is not consumed,
+        // so a server writing without end would grow that buffer for as long
+        // as its teardown takes — the very exhaustion the cap exists to stop.
+        for await chunk in process.standardOutput where !discarding {
             for output in framer.append(chunk) {
-                switch output {
-                case .line(let line):
-                    handle(line)
-                case .oversized:
+                guard case .line(let line) = output else {
                     close(.protocolViolation(.oversizedMessage))
-                    return
+                    discarding = true
+                    break
                 }
+                handle(line)
             }
         }
         standardOutputEnded = true

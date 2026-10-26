@@ -110,6 +110,11 @@ final class SpawnedProcess: @unchecked Sendable {
         }
     }
 
+    /// Whether stdin has been closed, after any write or close already queued.
+    var isStandardInputClosed: Bool {
+        writer.sync { stdinClosed }
+    }
+
     /// Stop the whole group: close stdin, wait, `SIGTERM`, wait, `SIGKILL`.
     ///
     /// Each wait ends as soon as the group is empty. **The group, not the
@@ -130,7 +135,12 @@ final class SpawnedProcess: @unchecked Sendable {
 
     /// `SIGKILL` the group now — for a leader that already crashed, whose
     /// remaining members have no reason to be asked politely.
+    ///
+    /// Closes stdin too: no message is coming, and it is the only descriptor
+    /// a reader thread does not close for us at EOF, so skipping it here would
+    /// leak one per crash for the life of the app.
     func killGroup(timeout: Duration) async -> Bool {
+        closeStandardInput()
         ProcessGroup.signal(pid, SIGKILL)
         return await ProcessGroup.waitUntilEmpty(pid, timeout: timeout)
     }

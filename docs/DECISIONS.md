@@ -7036,7 +7036,12 @@ Stopping is judged by the *group* emptying, not the leader exiting, for the same
 **Alternatives:** `Foundation.Process` (no group); `/bin/sh -c 'exec …'` with job control (adds
 shell quoting to the one place the app runs a command the user supplied).
 
-**Falsified by** `stopEndsTheWholeGroup`, `inheritsOnlyStandardDescriptors` and `noSigpipe`.
+The crash path, `killGroup`, closes stdin too. It is the one descriptor no reader thread closes
+at EOF, so without that a server that crashes leaks one per crash for the life of the app (review of
+PR #47).
+
+**Falsified by** `stopEndsTheWholeGroup`, `inheritsOnlyStandardDescriptors`, `noSigpipe` and
+`killGroupClosesStandardInput`.
 
 ### D-236 — A ledger of spawned groups, reaped at launch only when its owner is dead
 **2026-10-09** · M5-01 · **Status:** accepted
@@ -7077,8 +7082,15 @@ owner was reaped ~500 ms after launch, and the `mcp` log category said so.
 failure. Concurrent first requests share one start. **A timeout ends the process**, not only the
 request. A failed start, a crash and a timeout each count as a failure; three inside 60 s and the
 server is `.failed`, throwing `.failedRepeatedly` until `restart()`. `stop()` during a start cancels
-it rather than awaiting it. **A server `MCPHost` lets go of is closed**, at quit or when a changed
-definition replaces it: every later request throws `.stopped` and nothing is spawned.
+it, so it waits for the start's own teardown but never for the startup deadline. **A server
+`MCPHost` lets go of is closed**, at quit or when a changed definition replaces it: every later
+request throws `.stopped` and nothing is spawned. After `shutdownAll` the host hands out only closed
+servers.
+
+**Every await is a window, so nothing is overwritten after one** (review of PR #47). `restart()`
+leaves `.failed` only if the state is still `.failed` once its stop returns, because a request in
+that window may have started a process that would otherwise be orphaned. `server(for:)` re-reads its
+map after closing a replaced server, because a concurrent caller may have installed one meanwhile.
 
 **Why:** callers come in bursts (launch, Prepare, the scheduled pass) with idle time between, so
 nothing should run or restart without a caller. A server that missed a deadline is wedged or too
@@ -7095,7 +7107,8 @@ asking); spawn per pass (an `npx` cold start, measured ~1 s warm, eats the refre
 download).
 
 **Falsified by** `crashThenRestart`, `failsRepeatedly`, `failuresExpire`, `hangOnCall`,
-`stopDuringStart`, `oneStartForConcurrentRequests`, `heldServerAfterShutdown` and `serverIdentity`.
+`stopDuringStart`, `oneStartForConcurrentRequests`, `heldServerAfterShutdown`, `serverIdentity`,
+`restartKeepsAConcurrentStart`, `concurrentReplacement` and `serverAfterShutdown`.
 
 ### D-238 — Requests wait on continuations; writes block on a queue of their own; stderr is drained
 **2026-10-09** · M5-01 · **Status:** accepted
@@ -7113,11 +7126,20 @@ blocks in its own write. The ring is kept for M5-02's connection test and never 
 The connection closes on a leader's exit only once stdout has ended, or 250 ms later: a server that
 replies and exits has the reply still in the pipe when its exit is reaped.
 
+**A timeout reaches the caller at its deadline.** The teardown it triggers, up to three graces, runs
+detached, and `stop()` awaits it instead, so `stop()` still means nothing is running. **A refused
+write closes the connection**, which counts a failure and kills the group: a server can close stdin
+and keep running, and the exit watcher would never see it. **After an oversized line, stdout is
+drained and discarded** rather than left to the reader thread's unbounded buffer. All three were
+found reviewing PR #47.
+
 **The design said `O_NONBLOCK`; the build uses a blocking write on its own queue.** The property is
 the same — a write never blocks a caller past its deadline — without a writability loop.
 
-**Falsified by** `blockedWrite`, `drainsStderr`, `replyBeforeExit`, `cancellation` and
-`hangOnInitialize`.
+**Falsified by** `blockedWrite`, `drainsStderr`, `replyBeforeExit`, `cancellation`,
+`hangOnInitialize`, `timeoutDoesNotWaitForTeardown` and `deadStdinDropsServer`. Nothing falsifies
+the drain: the bug it fixes is memory growth over a teardown's few seconds, which no test here can
+measure without flaking.
 
 ### D-239 — The child's environment is an allowlist, with the command's own directory on `PATH`
 **2026-10-09** · M5-01 · **Status:** accepted

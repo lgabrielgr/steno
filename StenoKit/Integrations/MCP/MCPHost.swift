@@ -16,6 +16,9 @@ public actor MCPHost {
     private let configuration: MCPServer.Configuration
     private let reap: Task<ProcessLedger.Report, Never>
     private var servers: [String: MCPServer] = [:]
+    /// Set by `shutdownAll`. A refresh pass still running at quit may ask for
+    /// a server after it, and must not get one that can spawn a process.
+    private var isShutDown = false
 
     public init() {
         // A home directory Application Support cannot be resolved under is
@@ -53,14 +56,24 @@ public actor MCPHost {
     /// A changed definition under the same id replaces the old server, which
     /// is closed first: its process was started from a command that no longer
     /// describes it, and a caller still holding it must not start another.
+    ///
+    /// After `shutdownAll`, every server handed out is already closed.
     public func server(for definition: MCPServerDefinition) async -> MCPServer {
         await reapCompleted()
-        if let existing = servers[definition.id] {
+        // A loop, because closing suspends: another caller can install a
+        // server under this id meanwhile, and installing over it unchecked
+        // would leave that one running with nothing tracking it.
+        while let existing = servers[definition.id] {
             if existing.definition == definition { return existing }
+            servers[definition.id] = nil
             await existing.close()
         }
         let server = MCPServer(
             definition: definition, configuration: configuration, ledger: ledger)
+        if isShutDown {
+            await server.close()
+            return server
+        }
         servers[definition.id] = server
         return server
     }
@@ -73,6 +86,7 @@ public actor MCPHost {
     /// removed only on a confirmed stop, so the next launch reaps anything it
     /// did not finish.
     public func shutdownAll(budget: Duration = .seconds(3)) async {
+        isShutDown = true
         let running = Array(servers.values)
         servers.removeAll()
         guard !running.isEmpty else { return }

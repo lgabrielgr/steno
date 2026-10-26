@@ -20,6 +20,7 @@ import Foundation
 //   spawn-grandchild   start `/bin/sleep 600` in this process group at launch
 //   paginate-forever   every `tools/list` page has a `nextCursor`
 //   stop-reading-stdin after answering a `ping`, never read stdin again
+//   close-stdin        on a `ping`, close stdin, answer, and keep running
 //
 // Tools: echo, fail (isError), crash (exit 1), hang, grandchild (its pid),
 // big (a 64 KB reply), ask-client (sends `sampling/createMessage` to the client
@@ -167,8 +168,11 @@ while let message = nextMessage() {
                 "serverInfo": ["name": "stub", "version": "1"],
             ])
     case "ping":
+        // Closed before the reply, so a client that has the reply knows
+        // stdin is already gone.
+        if modes.contains("close-stdin") { close(0) }
         reply(id ?? 0, [:])
-        if modes.contains("stop-reading-stdin") { hangForever() }
+        if modes.contains("stop-reading-stdin") || modes.contains("close-stdin") { hangForever() }
     case "tools/list":
         listTools(id ?? 0, cursor: params["cursor"] as? String)
     case "tools/call":

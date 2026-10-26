@@ -30,6 +30,13 @@ import Testing
         #expect(!ProcessGroup.hasMembers(process.pid))
     }
 
+    @Test("killing the group closes stdin, so a crash leaks no descriptor")
+    func killGroupClosesStandardInput() async throws {
+        let process = try SpawnedProcess.spawn(try MCPStub.launch("ignore-eof"))
+        #expect(try await bounded { await process.killGroup(timeout: .seconds(2)) })
+        #expect(process.isStandardInputClosed)
+    }
+
     @Test("a missing executable is commandNotFound, not a crash")
     func spawnFailure() {
         let launch = ChildLaunch(

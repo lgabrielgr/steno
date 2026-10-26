@@ -30,6 +30,8 @@ enum MCPSelftest {
         let ledger = ProcessLedger(
             fileURL: FileManager.default.temporaryDirectory.appendingPathComponent(
                 "steno-mcp-selftest-\(UUID().uuidString).json"))
+        // Scratch: no later run reads it, so it goes whatever the outcome.
+        defer { try? FileManager.default.removeItem(at: ledger.fileURL) }
         let host = MCPHost(ledger: ledger, configuration: MCPServer.Configuration())
         let server = await host.server(
             for: MCPServerDefinition(id: "selftest", command: command, arguments: arguments))

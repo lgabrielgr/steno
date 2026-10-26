@@ -127,6 +127,69 @@ import Testing
         #expect(ContinuousClock.now - started < .seconds(5))
         #expect(await server.status == .idle)
         #expect(await eventually { !processExists(leader) })
+        // The teardown runs after the caller has its error (D-238).
+        #expect(await eventually { ledger.entries.isEmpty })
+    }
+
+    @Test("a timeout reaches the caller at its deadline, not after the teardown")
+    func timeoutDoesNotWaitForTeardown() async throws {
+        let ledger = MCPStub.ledger()
+        var configuration = MCPStub.fast
+        // Stopping this server takes about two graces: EOF and SIGTERM are
+        // both ignored, so only the SIGKILL ends it.
+        configuration.terminateGrace = .seconds(1)
+        let server = MCPStub.server(
+            try MCPStub.definition("ignore-eof", "ignore-term"), ledger: ledger,
+            configuration: configuration)
+        try await bounded { try await server.ping() }
+
+        let started = ContinuousClock.now
+        let error = await thrown {
+            _ = try await server.callTool("hang", timeout: .milliseconds(300))
+        }
+        #expect(error as? MCPError == .timedOut)
+        #expect(ContinuousClock.now - started < .seconds(1))
+
+        // The teardown still happens, and `stop()` waits for it.
+        #expect(try await bounded { await server.stop() })
+        #expect(ledger.entries.isEmpty)
+    }
+
+    @Test("a server that closes its stdin but keeps running is taken down")
+    func deadStdinDropsServer() async throws {
+        let ledger = MCPStub.ledger()
+        let server = MCPStub.server(try MCPStub.definition("close-stdin"), ledger: ledger)
+        try await bounded { try await server.ping() }
+        let leader = try #require(ledger.entries.first?.leader.pid)
+
+        let error = await thrown { _ = try await server.callTool("echo") }
+        #expect(error as? MCPError == .crashed)
+        // Not `.ready`, failing every later request without counting any.
+        #expect(await eventually { await server.status == .idle })
+        #expect(await eventually { !processExists(leader) })
+        #expect(await eventually { ledger.entries.isEmpty })
+    }
+
+    @Test("restart does not orphan a server started while it was stopping")
+    func restartKeepsAConcurrentStart() async throws {
+        let ledger = MCPStub.ledger()
+        var configuration = MCPStub.fast
+        // A stop of about two seconds: a window for a request to start a
+        // new process while `restart()` is suspended in it.
+        configuration.terminateGrace = .seconds(1)
+        let server = MCPStub.server(
+            try MCPStub.definition("ignore-eof", "ignore-term"), ledger: ledger,
+            configuration: configuration)
+        try await bounded { try await server.ping() }
+
+        let restart = Task { await server.restart() }
+        #expect(await eventually { await server.status == .idle })
+        try await bounded { try await server.ping() }
+        await restart.value
+
+        // The process the ping started is still the server's, and stoppable.
+        #expect(await server.status == .ready)
+        #expect(try await bounded { await server.stop() })
         #expect(ledger.entries.isEmpty)
     }
 
@@ -146,7 +209,8 @@ import Testing
         #expect(error as? MCPError == .timedOut)
         // Killing the group is what releases the blocked writer.
         #expect(await eventually { !processExists(leader) })
-        #expect(ledger.entries.isEmpty)
+        // The teardown runs after the caller has its error (D-238).
+        #expect(await eventually { ledger.entries.isEmpty })
     }
 
     @Test("an unsupported protocol version is refused, and the process is ended")

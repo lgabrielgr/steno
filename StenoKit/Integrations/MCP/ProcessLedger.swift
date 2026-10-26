@@ -128,6 +128,13 @@ final class ProcessLedger: @unchecked Sendable {
     }
 
     private func write(_ entries: [Entry]) {
+        // An empty ledger is no file, and `read()` treats the two alike. A
+        // file of `[]` would outlive every scratch ledger, one per test and
+        // per `mcp-selftest` run.
+        guard !entries.isEmpty else {
+            try? FileManager.default.removeItem(at: fileURL)
+            return
+        }
         do {
             try FileManager.default.createDirectory(
                 at: fileURL.deletingLastPathComponent(), withIntermediateDirectories: true)

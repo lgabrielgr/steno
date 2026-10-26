@@ -50,6 +50,10 @@ public actor MCPServer {
     /// and without this its next request would spawn a process the host no
     /// longer tracks: at quit, a leak; after a replacement, the old command.
     private var isClosed = false
+    /// Teardowns started after a timeout and not waited for, so the caller
+    /// gets its error at the deadline. `stop()` still owes its caller these:
+    /// it reports success only once nothing this server started is running.
+    private var teardowns: [UUID: Task<Bool, Never>] = [:]
 
     private enum State {
         case idle
@@ -92,43 +96,6 @@ public actor MCPServer {
         stderr.text
     }
 
-    // MARK: - Requests
-
-    public func ping() async throws {
-        _ = try await perform("ping", params: nil, timeout: configuration.pingTimeout)
-    }
-
-    public func listTools() async throws -> [MCPTool] {
-        try await paginate("tools/list", key: "tools", MCPTool.init)
-    }
-
-    public func listResources() async throws -> [MCPResource] {
-        try await paginate("resources/list", key: "resources", MCPResource.init)
-    }
-
-    public func callTool(
-        _ name: String, arguments: [String: JSONValue] = [:], timeout: Duration? = nil
-    ) async throws -> MCPToolResult {
-        let result = try await perform(
-            "tools/call",
-            params: .object(["name": .string(name), "arguments": .object(arguments)]),
-            timeout: timeout ?? configuration.requestTimeout)
-        guard let toolResult = MCPToolResult(result) else {
-            throw MCPError.protocolViolation(.malformedResult)
-        }
-        return toolResult
-    }
-
-    public func readResource(_ uri: String) async throws -> [MCPResourceContents] {
-        let result = try await perform(
-            "resources/read", params: .object(["uri": .string(uri)]),
-            timeout: configuration.requestTimeout)
-        guard let contents = result["contents"]?.arrayValue else {
-            throw MCPError.protocolViolation(.malformedResult)
-        }
-        return contents.compactMap(MCPResourceContents.init)
-    }
-
     // MARK: - Lifecycle
 
     /// Stop the process group, if one is running.
@@ -136,23 +103,13 @@ public actor MCPServer {
     /// - Returns: `true` once nothing this server started is still running.
     @discardableResult
     public func stop() async -> Bool {
-        switch state {
-        case .idle, .failed:
-            return true
-        case .starting(let task):
-            // Cancelled, not awaited: a start can take the whole startup
-            // deadline, which is longer than app quit's budget. A cancelled
-            // `launch()` tears its own process down; one that finished first
-            // hands back a connection that is ours to stop, because the
-            // starter sees the state change and leaves it alone.
-            state = .idle
-            task.cancel()
-            guard let connection = try? await task.value else { return true }
-            return await shutdown(connection, crashed: false)
-        case .ready(let connection):
-            state = .idle
-            return await shutdown(connection, crashed: false)
+        var stopped = await stopCurrent()
+        let earlier = teardowns
+        teardowns.removeAll()
+        for teardown in earlier.values where await !teardown.value {
+            stopped = false
         }
+        return stopped
     }
 
     /// Stop, forget past failures, and let the next request start fresh —
@@ -160,7 +117,10 @@ public actor MCPServer {
     public func restart() async {
         await stop()
         failures.removeAll()
-        state = .idle
+        // Only out of `.failed`. `stop()` suspends while it tears down, and a
+        // request in that window starts a new process; overwriting its
+        // `.starting` or `.ready` would orphan that process with nobody to stop it.
+        if case .failed = state { state = .idle }
     }
 
     /// Stop, and refuse every later request with `.stopped`.
@@ -170,6 +130,28 @@ public actor MCPServer {
     }
 
     // MARK: - Internals
+
+    private func stopCurrent() async -> Bool {
+        switch state {
+        case .idle, .failed:
+            return true
+        case .starting(let task):
+            // Cancelled rather than left to run: a start can take the whole
+            // startup deadline, which is longer than app quit's budget.
+            // Cancelling ends the handshake at once; what is still awaited is
+            // `launch()` tearing down its own process, which takes the same
+            // escalation as any stop. One that finished first hands back a
+            // connection that is ours to stop, because the starter sees the
+            // state change and leaves it alone.
+            state = .idle
+            task.cancel()
+            guard let connection = try? await task.value else { return true }
+            return await shutdown(connection, crashed: false)
+        case .ready(let connection):
+            state = .idle
+            return await shutdown(connection, crashed: false)
+        }
+    }
 
     private func perform(_ method: String, params: JSONValue?, timeout: Duration) async throws
         -> JSONValue
@@ -182,28 +164,9 @@ public actor MCPServer {
             return result
         } catch let error as MCPError {
             log(method, since: started, outcome: "\(error)")
-            if error == .timedOut { await drop(connection, countsAsFailure: true) }
+            if error == .timedOut { drop(connection) }
             throw error
         }
-    }
-
-    private func paginate<Item>(
-        _ method: String, key: String, _ make: (JSONValue) -> Item?
-    ) async throws -> [Item] {
-        var items: [Item] = []
-        var cursor: String?
-        for _ in 0..<MCPProtocol.maximumPages {
-            let params: JSONValue? = cursor.map { .object(["cursor": .string($0)]) }
-            let result = try await perform(
-                method, params: params, timeout: configuration.requestTimeout)
-            guard let page = result[key]?.arrayValue else {
-                throw MCPError.protocolViolation(.malformedResult)
-            }
-            items += page.compactMap(make)
-            guard let next = result["nextCursor"]?.stringValue else { return items }
-            cursor = next
-        }
-        throw MCPError.protocolViolation(.paginationRunaway)
     }
 
     /// The running connection, starting one if there is none.
@@ -296,11 +259,21 @@ public actor MCPServer {
     }
 
     /// Take a connection out of service after a timeout.
-    private func drop(_ connection: MCPConnection, countsAsFailure: Bool) async {
+    ///
+    /// **The teardown is not awaited.** It escalates through up to three
+    /// graces, and awaiting it here would hand the caller its `.timedOut` that
+    /// much past its deadline (D-238). `stop()` awaits it instead.
+    private func drop(_ connection: MCPConnection) {
         guard case .ready(let current) = state, current === connection else { return }
         state = .idle
-        if countsAsFailure { recordFailure() }
-        _ = await shutdown(connection, crashed: false)
+        recordFailure()
+        let id = UUID()
+        // Inherits this actor, so it cannot start before the entry exists.
+        teardowns[id] = Task {
+            let gone = await shutdown(connection, crashed: false)
+            teardowns[id] = nil
+            return gone
+        }
     }
 
     private func shutdown(_ connection: MCPConnection, crashed: Bool) async -> Bool {
@@ -337,5 +310,63 @@ public actor MCPServer {
         Log.mcp.info(
             "\(self.definition.id, privacy: .public) \(method, privacy: .public) \(outcome, privacy: .public) in \(elapsed.formatted(.units(allowed: [.milliseconds])), privacy: .public)"
         )
+    }
+}
+
+// MARK: - Requests
+
+extension MCPServer {
+    public func ping() async throws {
+        _ = try await perform("ping", params: nil, timeout: configuration.pingTimeout)
+    }
+
+    public func listTools() async throws -> [MCPTool] {
+        try await paginate("tools/list", key: "tools", MCPTool.init)
+    }
+
+    public func listResources() async throws -> [MCPResource] {
+        try await paginate("resources/list", key: "resources", MCPResource.init)
+    }
+
+    public func callTool(
+        _ name: String, arguments: [String: JSONValue] = [:], timeout: Duration? = nil
+    ) async throws -> MCPToolResult {
+        let result = try await perform(
+            "tools/call",
+            params: .object(["name": .string(name), "arguments": .object(arguments)]),
+            timeout: timeout ?? configuration.requestTimeout)
+        guard let toolResult = MCPToolResult(result) else {
+            throw MCPError.protocolViolation(.malformedResult)
+        }
+        return toolResult
+    }
+
+    public func readResource(_ uri: String) async throws -> [MCPResourceContents] {
+        let result = try await perform(
+            "resources/read", params: .object(["uri": .string(uri)]),
+            timeout: configuration.requestTimeout)
+        guard let contents = result["contents"]?.arrayValue else {
+            throw MCPError.protocolViolation(.malformedResult)
+        }
+        return contents.compactMap(MCPResourceContents.init)
+    }
+
+    private func paginate<Item>(
+        _ method: String, key: String, _ make: (JSONValue) -> Item?
+    ) async throws -> [Item] {
+        var items: [Item] = []
+        var cursor: String?
+        for _ in 0..<MCPProtocol.maximumPages {
+            let params: JSONValue? = cursor.map { .object(["cursor": .string($0)]) }
+            let result = try await perform(
+                method, params: params, timeout: configuration.requestTimeout)
+            guard let page = result[key]?.arrayValue else {
+                throw MCPError.protocolViolation(.malformedResult)
+            }
+            items += page.compactMap(make)
+            guard let next = result["nextCursor"]?.stringValue else { return items }
+            cursor = next
+        }
+        throw MCPError.protocolViolation(.paginationRunaway)
     }
 }

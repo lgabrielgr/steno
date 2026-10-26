@@ -92,6 +92,17 @@ import Testing
         #expect(await eventually { !ProcessGroup.hasMembers(process.pid) })
     }
 
+    @Test("a ledger whose last entry goes leaves no file behind")
+    func emptyLedgerLeavesNoFile() {
+        let ledger = MCPStub.ledger()
+        // An identity is all the ledger stores; nothing is spawned or signalled.
+        ledger.record(MCPStub.deadOwner)
+        #expect(FileManager.default.fileExists(atPath: ledger.fileURL.path))
+        ledger.remove(MCPStub.deadOwner)
+        #expect(!FileManager.default.fileExists(atPath: ledger.fileURL.path))
+        #expect(ledger.entries.isEmpty)
+    }
+
     @Test("an entry for a group that is already gone is dropped")
     func alreadyGone() async throws {
         let previous = MCPStub.ledger(owner: MCPStub.deadOwner)
