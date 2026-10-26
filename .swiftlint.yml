@@ -45,3 +45,22 @@ opt_in_rules:
   - explicit_init
   - first_where
   - force_unwrapping
+
+# M5-01's fourth acceptance criterion as a check rather than a promise (D-242):
+# MCP is stdio only in v1 (REQUIREMENTS.md §5.1, §5.4). A network transport in
+# the MCP directory fails `make lint`, so adding one has to be a visible edit to
+# this file — which is where §5.4's "add HTTP/SSE only if a required server
+# offers no local option" decision belongs.
+#
+# `match_kinds` restricts the match to code: a doc comment explaining why there
+# is no URLSession here must not trip the rule that enforces it.
+custom_rules:
+  mcp_stdio_only:
+    name: "MCP is stdio only"
+    included: "StenoKit/Integrations/MCP/"
+    regex: "\\b(URLSession|URLRequest|NWConnection|NWListener|EventSource)\\b"
+    match_kinds:
+      - identifier
+      - typeidentifier
+    message: "MCP is stdio only in v1 (REQUIREMENTS.md §5.1, §5.4, D-242)"
+    severity: error
