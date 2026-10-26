@@ -78,10 +78,20 @@ targets:
     platform: macOS
     sources:
       - path: StenoTests
+        # Its own target below. Kept under StenoTests/ so the lint and format
+        # directory lists, and the Makefile's SOURCES, cover it without a
+        # fourth top-level directory to keep in sync.
+        excludes:
+          - "MCPStubServer/**"
     dependencies:
       - target: StenoKit
         embed: true
         codeSign: true
+      # Build order only: the tests spawn it from the products directory
+      # beside this bundle, so it is neither linked nor copied (D-241).
+      - target: MCPStubServer
+        embed: false
+        link: false
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.lgabrielgr.steno.tests
@@ -89,6 +99,19 @@ targets:
         LD_RUNPATH_SEARCH_PATHS:
           - $(inherited)
           - "@loader_path/../Frameworks"
+
+  # M5-01's test double: a real MCP server process that misbehaves on request
+  # (D-241). A Swift tool rather than a script — /usr/bin/python3 on a clean
+  # Mac is a shim that prompts to install developer tools, and JSON in sh is
+  # fragile.
+  MCPStubServer:
+    type: tool
+    platform: macOS
+    sources:
+      - path: StenoTests/MCPStubServer
+    settings:
+      base:
+        PRODUCT_NAME: MCPStubServer
 
 # Declared explicitly, not left to Xcode's autocreate: `xcodebuild -scheme`
 # needs a *shared* scheme on disk, and an autocreated one lands in xcuserdata/,

@@ -116,6 +116,8 @@ public struct CLIRunner {
             misroutedSelftest("jira-selftest")
         case .confluenceSelftest:
             misroutedSelftest("confluence-selftest")
+        case .mcpSelftest:
+            misroutedSelftest("mcp-selftest")
         }
     }
 

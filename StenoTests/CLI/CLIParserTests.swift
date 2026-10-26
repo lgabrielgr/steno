@@ -178,6 +178,10 @@ import Testing
                 ["confluence-selftest", "--page", "12345"],
                 CLICommand.confluenceSelftest(pageID: "12345")
             ),
+            (
+                ["mcp-selftest", "--", "/bin/npx", "-y", "@scope/server"],
+                CLICommand.mcpSelftest(command: "/bin/npx", arguments: ["-y", "@scope/server"])
+            ),
         ])
     func selftestParses(_ arguments: [String], _ expected: CLICommand) throws {
         #expect(try parse(arguments) == expected)
@@ -195,6 +199,16 @@ import Testing
     func selftestTakesNoFlags(_ arguments: [String]) throws {
         let error = try #require(throws: CLIUsageError.self) { try parse(arguments) }
         #expect(error.message.contains("unexpected argument"))
+    }
+
+    /// Without `--`, `npx`'s own `-y` would be indistinguishable from a flag of
+    /// ours; without a command there is nothing to run.
+    @Test(
+        "mcp-selftest needs -- and a command",
+        arguments: [["mcp-selftest"], ["mcp-selftest", "npx"], ["mcp-selftest", "--"]])
+    func mcpSelftestNeedsSeparator(_ arguments: [String]) throws {
+        let error = try #require(throws: CLIUsageError.self) { try parse(arguments) }
+        #expect(error.message.contains("mcp-selftest -- COMMAND"))
     }
 
     /// **Both harnesses are hidden.** They are verification tools, not

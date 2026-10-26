@@ -19,7 +19,7 @@ XCCONFIG := Local.xcconfig
 TOOLS    := xcodegen xcbeautify swiftlint
 
 .DEFAULT_GOAL := help
-.PHONY: help bootstrap preflight clean generate build run release test lint format export import atlassian-login verify-jira verify-confluence verify-integrations
+.PHONY: help bootstrap preflight clean generate build run release test lint format export import atlassian-login verify-jira verify-confluence verify-integrations verify-mcp
 
 help: ## Show this help
 	@echo "Steno — make targets:"
@@ -310,6 +310,23 @@ verify-confluence: build ## Fetch one real page with the stored credential (sign
 # change to IntegrationsSettingsModel, AtlassianErrors or SourceError.
 verify-integrations: build ## Test the stored Atlassian credential end to end (signed build; FR-6, D-220)
 	@"$(BIN)" integrations-selftest
+
+# M5-01's MCP client against a real server, outside `make test` (spec, D-234).
+#
+# `make test` denies outbound networking (§9.4) and so only ever meets the stub.
+# This runs a real server — through `npx`, the shape §5.4 depends on — and checks
+# the two things a stub cannot: that a real server agrees to the protocol version
+# this client asks for, and that stopping it leaves no process in its group,
+# `node` grandchild included. It never prints the server's stderr (§8).
+#
+# SERVER is exported, not interpolated, for FILE's reason above; it is
+# word-split on purpose, into the command and its arguments. Pass an absolute
+# command path — the app's PATH is not your shell's (D-239).
+export SERVER
+
+verify-mcp: build ## Run a real MCP server through the client (SERVER="cmd args"; M5-01)
+	@test -n "$$SERVER" || { echo 'usage: make verify-mcp SERVER="$$(which npx) -y @modelcontextprotocol/server-everything"'; exit 2; }
+	@"$(BIN)" mcp-selftest -- $$SERVER
 
 # The swiftlint check lives here rather than in `preflight`, which gates
 # build/run/release — none of which should start requiring a linter.

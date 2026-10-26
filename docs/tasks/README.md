@@ -101,7 +101,7 @@ something better than paper. **M2 is the true MVP; M6 is the finish line.**
 ### M5 — MCP
 > Exit: GitHub and Calendar working via off-the-shelf servers.
 
-- [ ] [M5-01](M5-01-mcp-stdio-client.md) — JSON-RPC over pipes to a subprocess, stdio only
+- [x] [M5-01](M5-01-mcp-stdio-client.md) — JSON-RPC over pipes to a subprocess, stdio only
 - [ ] [M5-02](M5-02-mcp-server-management.md) — add, configure, enable, and test servers
 - [ ] [M5-03](M5-03-mcp-source-adapter.md) — MCP resources as `SourceRef`s; tools exposed to the AI layer
 

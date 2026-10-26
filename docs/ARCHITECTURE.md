@@ -103,6 +103,8 @@ a broad refactor.
 | Views never *query* the store | No `@Query`, no `@Environment(\.modelContext)`; `.modelContainer` not attached to the scene | View models (M0-05) | §14, ARCH §2 rule 2 |
 | Views never *mutate* the store | Domain mutators unreachable from `Steno/` | Domain mutators are `internal` (M1-05), except `Project.lastStandupAt`, a plain property whose own merge rule requires it | §3.2, §10.1, D-033 |
 | Surfaces see each other's writes | Writes through a writing service post `.stenoDidWrite` | `CaptureService` and `StatusService` post; `MainWindowModel`'s own project writes do not (M1-03, M1-05) | D-019, D-035 |
+| An MCP server never outlives the app | Each server leads its own process group; stop kills the group, quit is bounded, and a crashed run's groups are reaped at next launch | `SpawnedProcess.terminate`, `MCPHost.shutdownAll`, `ProcessLedger.reapOrphans` (M5-01, D-235–D-237) | §5.4 |
+| MCP is stdio only | No network transport type under `Integrations/MCP/` | SwiftLint `mcp_stdio_only` (M5-01, D-242) | §5.1, §5.4 |
 | A status change never happens without its event | `StatusService` is the only route; the model mutators are `internal` | `StatusService.setStatus` (M1-05) | §3.3, D-033 |
 
 Where a row says "asserted in tests", that is deliberate: these are the invariants whose
@@ -166,7 +168,10 @@ StenoKit/         framework — everything testable
   AI/             AIProvider, AnthropicProvider          (M3)
   Integrations/   SourceConnector, SourceRegistry, RefreshPolicy,
                   SourceRefreshService (+Write), SourceNotice, ExternalUpdate
-                  (exists, M4-01); Jira, Confluence (M4-02/03); MCP (M5)
+                  (exists, M4-01); Jira, Confluence (M4-02/03);
+                  MCP/ — stdio client: SpawnedProcess, ProcessLedger,
+                  MCPConnection, MCPServer, MCPHost (exists, M5-01);
+                  server management and source adapter (M5-02/03)
   Features/       view models, by feature — MainWindow (M0-05), Capture (M1-02),
                   MenuBar (M1-04), Settings (M1-08)
 Steno/            application — views, windows, and @main, nothing else
@@ -175,6 +180,7 @@ Steno/            application — views, windows, and @main, nothing else
                   MenuBar (M1-04), Settings (M1-08)
   Steno.entitlements                                     (exists)
 StenoTests/       unhosted unit-test bundle; headless, network denied  (exists, M0-02)
+  MCPStubServer/  a misbehaving MCP server, its own tool target (M5-01, D-241)
 Scripts/
   test-sandbox.sb sandbox profile used by `make test` (§9.4)  (exists, M0-02)
 .swiftlint.yml    SwiftLint contract — semantics and naming (D-013)   (exists, M0-02)
