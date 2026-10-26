@@ -4,6 +4,22 @@
 **Requirements:** §5.1, §5.4, §8, §9.4, §13, D1, D-012, D-146, D-162, D-165, D-177 ·
 **Branch:** `feat/mcp-stdio-client`
 
+## Amended during the build
+
+Building the code before writing the plan changed eight things below. Where this document and
+`DECISIONS.md` disagree, the decision record is current.
+
+| Was | Now | Why |
+|---|---|---|
+| `PATH` = Homebrew prefixes + system | The command's own directory is prepended too | Measured: nvm's `npx` is a `#!/usr/bin/env node` script and fails without its directory (D-239) |
+| Ledger entry `{pgid, leaderStartTime}` | `{owner, leader}`; reaped only if the owner is dead | `mcp-selftest` beside a running app would reap the app's live servers (D-236) |
+| Ledger beside the store | `Application Support/com.lgabrielgr.steno/` | The store directory is Replace's unit of deletion (D-236) |
+| Non-blocking write (`O_NONBLOCK`) | Blocking write on a per-process serial queue | Same property, no writability loop (D-238) |
+| Timeout fails the request | Timeout also ends the process; counts toward the cap | A wedged server's blocked write is released only by the kill (D-237) |
+| `.crashLoop` after 3 crashes | `.failedRepeatedly` after 3 failures of any kind; new `.stopped` case | A server that hangs every time is the same problem (D-237) |
+| Notifications logged by method name | Dropped silently | The method name is server-supplied text (§8) |
+| A replaced or shut-down server is stopped | It is *closed*: later requests throw `.stopped` | A caller still holding it would respawn a process the host no longer tracks (D-237) |
+
 ## What this builds
 
 A generic MCP client that spawns a local server as a subprocess and speaks JSON-RPC over its

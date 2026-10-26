@@ -6993,3 +6993,183 @@ that explains the stamp is a sentence that will be wrong again the next time the
 tests (D-010), so this copy is checked by reading it against `runCatchUpPass` and by the manual
 pass. The comment above it in `ScheduledRefreshSection` names what each clause depends on, so the
 next change to either has somewhere to look.
+
+### D-234 — The MCP protocol layer is hand-written; no SDK, no package dependency
+**2026-10-09** · M5-01 · **Status:** accepted
+
+Steno speaks MCP through its own ~300 lines — `JSONValue`, `JSONRPCMessage`, `JSONRPCFramer`,
+`MCPConnection` — rather than the official Swift SDK. Results are passed through as `JSONValue`,
+not modelled: a tool's content blocks and a resource's body are M5-03's to interpret.
+
+**Why:** the surface M5 needs is six methods (`initialize`, `ping`, `tools/list`, `tools/call`,
+`resources/list`, `resources/read`). The SDK's stdio transport takes file descriptors and leaves
+the process to the caller — so the part the task names as the real risk, lifecycle, would be ours
+either way. Taking the SDK would also make it the repo's first package dependency and put HTTP
+transport code in the binary, against the task's fourth criterion. Passing results through means
+a spec revision that adds a content kind (2025-06-18 added `resource_link`) cannot break decoding.
+
+**The version list is measured.** Against `@modelcontextprotocol/server-everything` 2.0.0 on
+2026-10-09, a server echoes any version it supports and answers an unknown one with its latest
+(`2025-11-25`). The client asks for `2025-11-25` and accepts it and the three earlier versions,
+whose `initialize`/`ping`/`tools`/`resources` shapes are the same for everything this layer reads.
+`make verify-mcp` re-checks it against a live server.
+
+**Alternatives:** the official SDK (above); typed content blocks (fails on every new kind).
+
+### D-235 — Servers are spawned with `posix_spawn` into a process group of their own
+**2026-10-09** · M5-01 · **Status:** accepted
+
+`SpawnedProcess` uses `posix_spawn` with `POSIX_SPAWN_SETPGROUP` (group 0: the child leads a new
+group), `POSIX_SPAWN_CLOEXEC_DEFAULT` (only fds 0–2 cross), and reset signal dispositions. Stopping
+is `terminate(grace:)`: close stdin → wait → `SIGTERM` the **group** → wait → `SIGKILL` the group,
+each wait ending once the group is empty.
+
+**Why:** `npx` runs a server as a `node` child; killing `npx` alone leaves `node` running, which is
+the leak this task exists to prevent on exactly the servers M5-03 needs. `Foundation.Process` has
+no public control over the group. Close-on-exec by default keeps a server from holding another
+server's pipe — which would hide that server's EOF — or any other descriptor the app has open.
+Stopping is judged by the *group* emptying, not the leader exiting, for the same `npx` reason.
+
+`F_SETNOSIGPIPE` is set on the stdin write end. A write to a server that has exited otherwise raises
+`SIGPIPE`, whose default action terminates the writer — the app.
+
+**Alternatives:** `Foundation.Process` (no group); `/bin/sh -c 'exec …'` with job control (adds
+shell quoting to the one place the app runs a command the user supplied).
+
+**Falsified by** `stopEndsTheWholeGroup`, `inheritsOnlyStandardDescriptors` and `noSigpipe`.
+
+### D-236 — A ledger of spawned groups, reaped at launch only when its owner is dead
+**2026-10-09** · M5-01 · **Status:** accepted
+
+`ProcessLedger` records `{owner, leader}` — each a pid plus start time from `proc_pidinfo` — for
+every spawned server, and removes it once the group is confirmed empty. `MCPHost` reaps at launch,
+before it hands out any server. An entry is reaped only if its owner is not alive; then:
+
+| Leader | Verdict |
+|---|---|
+| Alive, same start time | Ours: `SIGTERM` the group, then `SIGKILL` |
+| Alive, different start time | pid reused by a stranger — never signalled |
+| Dead, group members alive | Ours: POSIX does not reuse a group id while the group exists |
+| Dead, no members | Already gone |
+
+The file is `~/Library/Application Support/com.lgabrielgr.steno/mcp-processes.json`.
+
+**Why:** a crash, a force quit or `kill -9` runs no cleanup, and nothing obliges a server to exit on
+stdin EOF. The start time is what makes a pid an identity. The **owner** check was found while
+writing the live probe: without it, `steno mcp-selftest` run while the app is open would reap the
+app's live servers, which look exactly like orphans. The ledger is **not** in
+`StenoStore.storeDirectory`, the unit of deletion — §10.1's Replace removes that directory, and with
+it the entries for servers still running.
+
+**Residual risk, stated rather than fixed:** a crash between `posix_spawn` returning and the ledger
+write leaks that one server. The window is microseconds.
+
+**Verified in the real app**, not only the suite: an orphaned `sleep` group planted under a dead
+owner was reaped ~500 ms after launch, and the `mcp` log category said so.
+
+**Falsified by** `reapsOrphan`, `liveOwnerIsNotReaped`, `reusedPidIsSpared`,
+`deadLeaderLiveMembers` and `reapsBeforeServing`.
+
+### D-237 — Lazy start; a timeout ends the process; three failures and it stays down
+**2026-10-09** · M5-01 · **Status:** accepted
+
+`MCPServer` starts on its first request and keeps the process until `stop()`, app quit, or a
+failure. Concurrent first requests share one start. **A timeout ends the process**, not only the
+request. A failed start, a crash and a timeout each count as a failure; three inside 60 s and the
+server is `.failed`, throwing `.failedRepeatedly` until `restart()`. `stop()` during a start cancels
+it rather than awaiting it. **A server `MCPHost` lets go of is closed**, at quit or when a changed
+definition replaces it: every later request throws `.stopped` and nothing is spawned.
+
+**Why:** callers come in bursts (launch, Prepare, the scheduled pass) with idle time between, so
+nothing should run or restart without a caller. A server that missed a deadline is wedged or too
+slow for a refresh pass; a wedged one may have stopped reading stdin, leaving a write blocked that
+only killing the group releases (D-238). A server that hangs every time is the same problem as one
+that crashes every time, so timeouts count — which is why the error is not named `crashLoop`, as the
+design first had it. Cancelling a start matters at quit: the startup deadline (20 s) is longer than
+quit's whole budget (3 s). Closing was found while listing inputs no test exercised: a refresh pass
+still running at quit holds an `MCPServer` reference, and its next request would have spawned a
+process after `shutdownAll` — a leak at quit, and the *old* command after a replacement.
+
+**Alternatives:** eager start with auto-restart (costs memory all day, restarts with nobody
+asking); spawn per pass (an `npx` cold start, measured ~1 s warm, eats the refresh deadline: measured at ~1 s with the package already cached, longer on a first
+download).
+
+**Falsified by** `crashThenRestart`, `failsRepeatedly`, `failuresExpire`, `hangOnCall`,
+`stopDuringStart`, `oneStartForConcurrentRequests`, `heldServerAfterShutdown` and `serverIdentity`.
+
+### D-238 — Requests wait on continuations; writes block on a queue of their own; stderr is drained
+**2026-10-09** · M5-01 · **Status:** accepted
+
+A reader thread per pipe feeds `MCPConnection`, which resolves requests by id; a deadline resolves
+the same continuation from the other side. Writes block on a per-process serial queue — never on the
+caller. stderr is drained continuously into a 64 KB in-memory ring that is never logged.
+
+**Why:** `withDeadline` cannot return while its operation ignores cancellation (D-146), and a
+blocking read ignores it. With continuations every wait honours cancellation by construction. A
+wedged server's full stdin pipe blocks only the writer queue; the request times out and the group
+kill releases the write with `EPIPE`. An undrained stderr is a second hang path: a chatty server
+blocks in its own write. The ring is kept for M5-02's connection test and never logged (§8).
+
+The connection closes on a leader's exit only once stdout has ended, or 250 ms later: a server that
+replies and exits has the reply still in the pipe when its exit is reaped.
+
+**The design said `O_NONBLOCK`; the build uses a blocking write on its own queue.** The property is
+the same — a write never blocks a caller past its deadline — without a writability loop.
+
+**Falsified by** `blockedWrite`, `drainsStderr`, `replyBeforeExit`, `cancellation` and
+`hangOnInitialize`.
+
+### D-239 — The child's environment is an allowlist, with the command's own directory on `PATH`
+**2026-10-09** · M5-01 · **Status:** accepted
+
+A server gets `HOME`, `USER`, `LOGNAME`, `LANG`, `TMPDIR` from the app, and
+`PATH=/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin` — **with the command's own
+directory prepended when the command is a path** — then the definition's `environment` on top. A
+bare command is resolved against that `PATH`, not the app's.
+
+**Why:** a Finder-launched app has `PATH=/usr/bin:/bin:/usr/sbin:/sbin`, so `npx` is not found. The
+design proposed adding the Homebrew prefixes and stopping there; **measured on the user's machine,
+that fails**: `npx` lives under `~/.nvm/…/bin`, and it is a `#!/usr/bin/env node` script, so with
+`PATH=/usr/bin:/bin` an absolute `npx` dies with `env: node: No such file or directory`. Putting the
+command's directory first fixes nvm, Volta and asdf at once — the directory of the path *as given*,
+since nvm's `npx` resolves into `lib/node_modules`, where there is no `node`. The app's environment
+is never passed through: under `xctest` it once carried `OS_ACTIVITY_DT_MODE` into a subprocess test.
+
+**Falsified by** `environmentIsMinimal`, `commandDirectoryLeadsPath`, `bareNameUsesChildPath` and
+`definitionOverridesPath`.
+
+### D-240 — `MCPError` carries no server text; a tool's `isError` is a result
+**2026-10-09** · M5-01 · **Status:** accepted
+
+No `MCPError` case holds a `String`. A JSON-RPC error keeps its code and drops its message. A
+`tools/call` result with `isError: true` is returned as `MCPToolResult.isError`, not thrown. Calls
+may also throw `CancellationError` when the caller is cancelled.
+
+**Why:** D-165's rule, extended: server text can contain whatever a tool returned, so a typed error
+is always safe to log. `isError` is the tool's verdict over a transport that worked, which is how
+MCP itself separates the two.
+
+**Falsified by** `serverErrorKeepsOnlyTheCode` and `toolsAndResources`.
+
+### D-241 — The test double is a real subprocess: `MCPStubServer`
+**2026-10-09** · M5-01 · **Status:** accepted
+
+A Swift command-line tool target, sources under `StenoTests/MCPStubServer/` (excluded from the test
+bundle), built before `StenoTests` and spawned from the products directory. `--mode` selects
+misbehaviour; the tool called selects per-request behaviour.
+
+**Why:** what M5-01 must get right is process behaviour — pipes, groups, signals, exit — and an
+in-process double could not fail on any of it. Swift rather than Python because `/usr/bin/python3`
+on a clean Mac is a shim that prompts to install developer tools. Under `StenoTests/` so the lint and
+format directory lists and the Makefile's `SOURCES` already cover it.
+
+### D-242 — "No HTTP or SSE transport" is a lint rule
+**2026-10-09** · M5-01 · **Status:** accepted
+
+`.swiftlint.yml`'s `mcp_stdio_only` rejects `URLSession`, `URLRequest`, `NWConnection`,
+`NWListener` and `EventSource` as identifiers under `StenoKit/Integrations/MCP/`.
+
+**Why:** the task's fourth criterion is otherwise true only until someone adds a transport.
+`match_kinds` limits it to code, so a comment explaining the rule does not trip it. Verified both
+ways: `let probeSession = URLSession.shared` in an MCP file fails `make lint`; a doc comment naming
+`URLSession` passes.
