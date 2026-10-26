@@ -38,6 +38,8 @@ public enum CLIParser {
             return try parseJiraSelftest(Array(rest.dropFirst()))
         case "confluence-selftest":
             return try parseConfluenceSelftest(Array(rest.dropFirst()))
+        case "mcp-selftest":
+            return try parseMCPSelftest(Array(rest.dropFirst()))
         default:
             throw CLIUsageError(
                 "steno: unknown subcommand \"\(subcommand)\".\n\n\(CLIUsage.text)")
@@ -145,6 +147,19 @@ public enum CLIParser {
             throw CLIUsageError("steno confluence-selftest: --page is required.")
         }
         return .confluenceSelftest(pageID: pageID)
+    }
+
+    /// `steno mcp-selftest -- /path/to/npx -y @modelcontextprotocol/server-everything`.
+    ///
+    /// **The `--` is required**, so every later word is unambiguously the
+    /// server's: `-y` is `npx`'s flag, and a parser that tried to read it would
+    /// reject the most common server command there is.
+    private static func parseMCPSelftest(_ flags: [String]) throws -> CLICommand {
+        guard flags.first == "--", flags.count >= 2, !flags[1].isEmpty else {
+            throw CLIUsageError(
+                "steno mcp-selftest: usage: steno mcp-selftest -- COMMAND [ARGS...]")
+        }
+        return .mcpSelftest(command: flags[1], arguments: Array(flags.dropFirst(2)))
     }
 
     /// The argument after `flag`, advancing past it.

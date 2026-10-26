@@ -69,6 +69,16 @@ public enum CLICommand: Equatable, Sendable {
     /// for `jiraSelftest`'s reason: there is no sensible "any page", and guessing one
     /// would spend a request on somebody else's document. See `ConfluenceSelftest`.
     case confluenceSelftest(pageID: String)
+
+    /// `steno mcp-selftest -- COMMAND [ARGS…]` — hidden, and absent from
+    /// `CLIUsage.text`.
+    ///
+    /// **Carries no store**, for `keychainSelftest`'s reason: running an MCP
+    /// server has nothing to do with the event log. Everything after `--` is the
+    /// server's command line, passed through untouched — an `npx` invocation
+    /// carries its own flags, which this parser must not try to read. See
+    /// `MCPSelftest`.
+    case mcpSelftest(command: String, arguments: [String])
 }
 
 /// A command line this build cannot act on.

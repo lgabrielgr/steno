@@ -74,45 +74,10 @@ public enum CLIEntry {
             return CLIRunner.ExitCode.usage
         }
 
-        // Before the store is opened, and before the instance check: the
-        // Keychain harness reads no event log, and creating the user's store as
-        // a side effect of verifying a credential would be a surprise nobody
-        // asked for. See `KeychainSelftest`.
-        if case .keychainSelftest = command {
-            return KeychainSelftest.run(store: KeychainCredentialStore())
-        }
-
-        // Before the store for the same reason, and with the same shape: this
-        // one reads the stored credential and asks the provider for its model
-        // list (D-161). `runSynchronously` blocks this thread while the call
-        // runs on the cooperative pool — see `ModelsSelftest`.
-        if case .modelsSelftest = command {
-            return ModelsSelftest.runSynchronously(
-                provider: AnthropicProvider(credentials: KeychainCredentialStore()))
-        }
-
-        // Before the store, with the same shape and for the same reason: a
-        // credential has nothing to do with the event log. See `AtlassianLogin`.
-        if case .atlassianLogin = command {
-            return AtlassianLogin.run(store: AtlassianKeychainStore())
-        }
-
-        // Before the store, for the same reason: FR-6's pane reads a credential and
-        // asks two APIs whether it works, and neither touches the event log (D-220).
-        if case .integrationsSelftest = command {
-            return IntegrationsSelftest.runSynchronously(credentials: AtlassianKeychainStore())
-        }
-
-        // Before the store, and the network twin of the two above: it reads the
-        // stored credential and makes four GETs against one ticket (D-197).
-        if case .jiraSelftest(let issueKey) = command {
-            return JiraSelftest.runSynchronously(
-                issueKey: issueKey, credentials: AtlassianKeychainStore())
-        }
-        if case .confluenceSelftest(let pageID) = command {
-            return ConfluenceSelftest.runSynchronously(
-                pageID: pageID, credentials: AtlassianKeychainStore())
-        }
+        // Before the store is opened, and before the instance check: no harness
+        // reads the event log, and creating the user's store as a side effect of
+        // verifying a credential would be a surprise nobody asked for.
+        if let code = runStoreless(command) { return code }
 
         // **Before the store is opened, not after.** `StenoStore.live` creates
         // the store directory and, on a fresh path, the store itself — so a
@@ -141,6 +106,44 @@ public enum CLIEntry {
         }
 
         return makeRunner(container).run(command)
+    }
+
+    /// The hidden harnesses, none of which opens the store: `nil` for every
+    /// command that needs one.
+    ///
+    /// **A switch rather than seven `if case` arms in `run`**, which pushed that
+    /// function past SwiftLint's complexity limit when M5-01 added the seventh.
+    /// The reasons each one runs before the store are on its own type.
+    ///
+    /// `runSynchronously` blocks this thread while the work runs on the
+    /// cooperative pool — see `CLISync`.
+    private static func runStoreless(_ command: CLICommand) -> Int32? {
+        switch command {
+        case .keychainSelftest:
+            return KeychainSelftest.run(store: KeychainCredentialStore())
+        case .modelsSelftest:
+            // D-161: one GET against the stored key.
+            return ModelsSelftest.runSynchronously(
+                provider: AnthropicProvider(credentials: KeychainCredentialStore()))
+        case .atlassianLogin:
+            return AtlassianLogin.run(store: AtlassianKeychainStore())
+        case .integrationsSelftest:
+            // FR-6's pane against two live APIs (D-220).
+            return IntegrationsSelftest.runSynchronously(credentials: AtlassianKeychainStore())
+        case .jiraSelftest(let issueKey):
+            // Four GETs against one ticket (D-197).
+            return JiraSelftest.runSynchronously(
+                issueKey: issueKey, credentials: AtlassianKeychainStore())
+        case .confluenceSelftest(let pageID):
+            return ConfluenceSelftest.runSynchronously(
+                pageID: pageID, credentials: AtlassianKeychainStore())
+        case .mcpSelftest(let serverCommand, let serverArguments):
+            // A real MCP server, end to end (M5-01).
+            return MCPSelftest.runSynchronously(
+                command: serverCommand, arguments: serverArguments)
+        case .export, .importFile:
+            return nil
+        }
     }
 
     /// `STENO_STORE_PATH` as a URL, or `nil` for `StenoStore.defaultURL`.
