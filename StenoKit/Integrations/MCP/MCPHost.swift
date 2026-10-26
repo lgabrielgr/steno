@@ -54,7 +54,7 @@ public actor MCPHost {
     /// is closed first: its process was started from a command that no longer
     /// describes it, and a caller still holding it must not start another.
     public func server(for definition: MCPServerDefinition) async -> MCPServer {
-        await reap.value
+        await reapCompleted()
         if let existing = servers[definition.id] {
             if existing.definition == definition { return existing }
             await existing.close()
