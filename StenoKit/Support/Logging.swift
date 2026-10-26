@@ -66,6 +66,20 @@ public enum Log {
     /// this stays true by construction rather than by care at each call site.
     public static let sources = Logger(subsystem: subsystem, category: "sources")
 
+    /// The MCP client (§5.4, M5-01).
+    ///
+    /// Its own category because a server's lifecycle — spawned, crashed,
+    /// reaped — is what this task exists to get right, and the place to see it:
+    ///
+    ///     /usr/bin/log show --last 1h --info --predicate \
+    ///       'subsystem == "com.lgabrielgr.steno" AND category == "mcp"'
+    ///
+    /// **Server ids, method names, latency and `MCPError` cases only** (§8).
+    /// Never params, results, or the server's stderr: a server's output is
+    /// external content, and its stderr is where a token in its environment is
+    /// most likely to be echoed (D-238).
+    public static let mcp = Logger(subsystem: subsystem, category: "mcp")
+
     /// Intervals around the capture path.
     ///
     /// §1.1 makes capture latency a P0 functional requirement and §13 requires
